@@ -8,7 +8,7 @@ The goal is to provide a faster, clearer and more flexible interface than the sc
 
 This is a personal project. The initial design should not be distorted by requirements for commercial deployment, arbitrary instruments, hostile multi-user environments or hypothetical future hardware.
 
-Implementation conventions and design practices are documented in `development-practices.md`.
+Project-level implementation principles are documented in `development-practices.md`. TypeScript-specific conventions are documented separately in `typescript-practices.md`.
 
 ## Target hardware
 
@@ -50,11 +50,38 @@ HTTP is only needed to serve the frontend and simple infrastructure endpoints su
 
 Frontend details are documented in `frontend.md`.
 
+## Server structure
+
+The server uses explicit layers with one path to the instrument:
+
+```text
+WebSocketGateway
+   |
+   v
+ScopeController
+   |
+   v
+Dho804Driver
+   |
+   v
+ScpiScheduler
+   |
+   v
+ScpiTransport
+   |
+   v
+DHO804
+```
+
+Polling and waveform services use the same driver/scheduler path. Nothing writes directly to the scope socket outside the SCPI transport/scheduler boundary.
+
+Detailed module ownership and lifecycle are documented in `server-architecture.md`.
+
 ## Scope connection
 
 The server maintains one persistent TCP connection to the DHO804.
 
-All SCPI operations pass through a dedicated scheduler/transport layer. Application code must not write directly to the scope socket.
+All SCPI operations pass through the dedicated scheduler/transport layer.
 
 Reasons:
 
@@ -65,6 +92,8 @@ Reasons:
 - polling must not interfere with interaction
 
 The scheduler is documented separately in `scpi-scheduler.md`.
+
+Connection handling should remain simple. If socket or SCPI framing integrity is lost, fail visibly and recreate the connection rather than trying to salvage an uncertain stream or replay stale work.
 
 ## Browser connection
 
@@ -82,9 +111,11 @@ The WebSocket carries:
 
 Use JSON for control/state/lifecycle messages and binary WebSocket frames for waveform samples.
 
+Fixed protocol values and discriminants use numeric TypeScript enums rather than repeated string values. Object field names remain descriptive.
+
 WebSocket compression should be disabled initially. This runs on a local network, so responsiveness and low latency matter more than reducing bandwidth.
 
-The server sends complete authoritative `ScopeState` snapshots rather than optional-field-heavy partial patches.
+The server sends complete authoritative `ScopeState` snapshots rather than partial patches.
 
 The protocol is documented in `websocket-protocol.md`.
 
@@ -255,61 +286,12 @@ Initial functionality:
 
 More of the DHO804 command set can be added incrementally after the interaction model performs well.
 
-## TypeScript design rules
-
-Prefer explicit, strong types.
-
-A property must not be optional merely because making it optional is convenient.
-
-If a value must exist for an object to be valid, require it in the type.
-
-Avoid this:
-
-```ts
-interface ScopeState {
-  channels?: ChannelState[];
-  trigger?: TriggerState;
-}
-```
-
-Prefer this:
-
-```ts
-interface ScopeState {
-  channels: ChannelState[];
-  trigger: TriggerState;
-}
-```
-
-Use optional properties only when absence has genuine domain meaning.
-
-Where state legitimately has multiple forms, prefer discriminated unions rather than bags of optional fields.
-
-For fixed domain/protocol values, use numeric TypeScript enums rather than string enums.
-
-```ts
-export enum ScopeConnectionState {
-  Disconnected = 0,
-  Connecting = 1,
-  Connected = 2,
-}
-
-type ScopeConnection =
-  | { state: ScopeConnectionState.Disconnected; reason: string }
-  | { state: ScopeConnectionState.Connecting }
-  | {
-      state: ScopeConnectionState.Connected;
-      identity: ScopeIdentity;
-      scope: ScopeState;
-    };
-```
-
-Do not use `undefined`, nullable values or optional members as substitutes for modelling actual states.
-
 ## Architecture documents
 
 - `architecture.md` - overall decisions
-- `development-practices.md` - coding conventions and project design principles
+- `development-practices.md` - general project implementation principles
+- `typescript-practices.md` - TypeScript type, enum and naming conventions
+- `server-architecture.md` - server module ownership, dependency direction and lifecycle
 - `scpi-scheduler.md` - SCPI priority, coalescing and latency behaviour
 - `frontend.md` - React/Zustand/uPlot data flow and interaction model
 - `waveforms.md` - live/deep waveform ownership, downsampling and viewport caching
