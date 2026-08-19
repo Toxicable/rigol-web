@@ -259,7 +259,11 @@ On success the server returns:
 ```ts
 export interface DeepCaptureChannelInfo {
   channel: Channel;
+  unit: ChannelUnit;
   sampleCount: number;
+  xIncrement: number;
+  xOrigin: number;
+  xReference: number;
 }
 
 export interface DeepCaptureReadyMessage {
@@ -272,7 +276,15 @@ export interface DeepCaptureReadyMessage {
 
 `captureId` is positive. `channels` is non-empty and contains only channels actually retained in the completed capture.
 
-A deep capture is explicit and may take noticeable time. Do not pretend it is preemptible once a native RAW binary transaction is in progress.
+Axis/unit metadata is included here deliberately. It lets the browser immediately convert its desired visible time range into source sample indices before receiving the first deep viewport binary frame; without it the browser would not yet know the capture's source-index/time mapping.
+
+For each channel:
+
+```ts
+x = xOrigin + (sampleIndex - xReference) * xIncrement;
+```
+
+A deep capture is explicit and may take noticeable time. Do not pretend it is preemptible once a native RAW scheduled operation is in progress.
 
 The browser then asks for display-sized views of that retained capture.
 
@@ -343,7 +355,9 @@ For a command with no text response, `response` is the empty string. It remains 
 
 Raw console commands still pass through the normal serialized SCPI path so they cannot corrupt query/response framing.
 
-Version 1 of the console is for commands and text queries. If a raw console query produces a binary block, reject it clearly rather than attempting to place arbitrary binary data inside the JSON `response` string. Native waveform reads belong to the waveform services.
+Version 1 of the console is for commands and text queries. If a raw console query produces a binary block, the transport must still consume that **complete** binary response safely and then the console request fails clearly. Never attempt to parse a binary block as newline-delimited text just because the console does not expose binary results.
+
+Native waveform reads belong to the waveform services.
 
 ## Live waveforms
 
