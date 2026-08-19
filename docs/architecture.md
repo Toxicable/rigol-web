@@ -35,15 +35,18 @@ Rigol Web server
 Rigol DHO804
 ```
 
-Tentative stack:
+Selected stack:
 
 - Node.js + TypeScript server
 - React + TypeScript frontend
 - Vite
-- Canvas or WebGL waveform rendering
+- Zustand for application/scope state
+- uPlot for waveform rendering
 - one WebSocket connection between browser and server
 
 HTTP is only needed to serve the frontend and simple infrastructure endpoints such as health checks.
+
+Frontend details are documented in `frontend.md`.
 
 ## Scope connection
 
@@ -68,17 +71,20 @@ The browser uses one persistent WebSocket connection to the server.
 The WebSocket carries:
 
 - commands
-- scope state and state changes
+- scope state
 - measurements
 - errors
 - SCPI console requests/responses
-- waveform data
+- live waveform data
+- deep-capture viewport data
 
-Control/state messages may use JSON.
-
-Waveform samples should use binary WebSocket frames rather than JSON arrays.
+Use JSON for control/state/lifecycle messages and binary WebSocket frames for waveform samples.
 
 WebSocket compression should be disabled initially. This runs on a local network, so responsiveness and low latency matter more than reducing bandwidth.
+
+The server sends complete authoritative `ScopeState` snapshots rather than optional-field-heavy partial patches.
+
+The protocol is documented in `websocket-protocol.md`.
 
 ## Scope state
 
@@ -143,6 +149,24 @@ There should be no arbitrary fixed-rate throttle unless measurement shows one is
 
 When the interaction ends, the final value must be sent with highest priority, then read back from the scope and reconciled.
 
+## Frontend data flow
+
+Application/scope state and waveform data use separate paths.
+
+```text
+WebSocket
+   |
+   +---- JSON state/control ----> Zustand ----> React UI
+   |
+   +---- binary waveform ------> waveform layer ----> uPlot
+```
+
+Waveform samples do not live in React or Zustand state.
+
+A uPlot instance is created once for a waveform view and updated imperatively as data arrives.
+
+See `frontend.md`.
+
 ## Waveform acquisition
 
 The application deliberately separates live display acquisition from deep acquisition.
@@ -154,6 +178,7 @@ While running:
 - use the DHO waveform NORMAL/screen path
 - keep waveform reads small
 - optimise for transaction latency
+- send live samples directly to the browser as binary frames
 - stale waveform frames may be discarded
 
 The live display is for responsiveness, not complete acquisition memory.
@@ -163,19 +188,30 @@ The live display is for responsiveness, not complete acquisition memory.
 When stopped or after a single acquisition:
 
 - use RAW waveform acquisition
-- allow large acquisition-memory transfers
-- treat the transfer as an explicit long-running operation
+- retrieve the full acquisition into server memory
+- treat the transfer from the DHO804 as an explicit long-running operation
+- keep the full raw capture server-side
+- downsample on the server for the requested browser viewport
+- use min/max bucketing rather than every-Nth-sample decimation
+- return display-resolution binary waveform windows to the browser
+- overscan viewport responses so small pans remain local and immediate
 
-Deep acquisition must not be part of the normal live-display loop.
+The browser should not receive tens of millions of samples merely to discard most of them before rendering.
+
+Panning and zooming within an already acquired deep capture must not require another read from the DHO804.
+
+See `waveforms.md`.
 
 ## Waveform rendering
 
-The browser renders numerical waveform samples itself.
+uPlot is the selected waveform renderer.
 
-Waveform frames must carry enough metadata to convert samples to real time/voltage values, including the equivalent of:
+uPlot receives display-sized datasets. It is not responsible for handling the full raw acquisition depth directly.
+
+Waveform data must carry enough metadata to convert samples to real time/voltage values, including the equivalent of:
 
 - channel
-- sample count
+- sample count/range
 - X increment
 - X origin
 - X reference
@@ -213,7 +249,7 @@ Initial functionality:
 - basic edge trigger configuration
 - basic measurements
 - raw SCPI console
-- deep waveform retrieval while stopped
+- deep waveform retrieval and server-side viewport downsampling while stopped
 
 More of the DHO804 command set can be added incrementally after the interaction model performs well.
 
@@ -258,6 +294,14 @@ type ScopeConnection =
 ```
 
 Do not use `undefined`, nullable values or optional members as substitutes for modelling actual states.
+
+## Architecture documents
+
+- `architecture.md` - overall decisions
+- `scpi-scheduler.md` - SCPI priority, coalescing and latency behaviour
+- `frontend.md` - React/Zustand/uPlot data flow and interaction model
+- `waveforms.md` - live/deep waveform ownership, downsampling and viewport caching
+- `websocket-protocol.md` - browser/server message model
 
 ## References
 
