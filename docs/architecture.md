@@ -8,6 +8,8 @@ The goal is to provide a faster, clearer and more flexible interface than the sc
 
 This is a personal project. The initial design should not be distorted by requirements for commercial deployment, arbitrary instruments, hostile multi-user environments or hypothetical future hardware.
 
+Implementation conventions and design practices are documented in `development-practices.md`.
+
 ## Target hardware
 
 Initial target:
@@ -283,11 +285,20 @@ Use optional properties only when absence has genuine domain meaning.
 
 Where state legitimately has multiple forms, prefer discriminated unions rather than bags of optional fields.
 
+For fixed domain/protocol values, use numeric TypeScript enums rather than string enums.
+
 ```ts
+export enum ScopeConnectionState {
+  Disconnected = 0,
+  Connecting = 1,
+  Connected = 2,
+}
+
 type ScopeConnection =
-  | { state: "disconnected" }
+  | { state: ScopeConnectionState.Disconnected; reason: string }
+  | { state: ScopeConnectionState.Connecting }
   | {
-      state: "connected";
+      state: ScopeConnectionState.Connected;
       identity: ScopeIdentity;
       scope: ScopeState;
     };
@@ -298,6 +309,7 @@ Do not use `undefined`, nullable values or optional members as substitutes for m
 ## Architecture documents
 
 - `architecture.md` - overall decisions
+- `development-practices.md` - coding conventions and project design principles
 - `scpi-scheduler.md` - SCPI priority, coalescing and latency behaviour
 - `frontend.md` - React/Zustand/uPlot data flow and interaction model
 - `waveforms.md` - live/deep waveform ownership, downsampling and viewport caching
