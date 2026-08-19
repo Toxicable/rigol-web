@@ -23,7 +23,7 @@ Use these rules:
 
 - all fields are required unless absence has genuine domain meaning
 - fixed domain values use numeric TypeScript enums
-- physical quantities use numbers in SI units
+- physical quantities use numbers in SI units or the explicitly modelled channel amplitude unit
 - do not expose Rigol SCPI abbreviations directly to the browser
 - do not put waveform sample arrays in `ScopeState`
 - do not put live measurement values in `ScopeState`
@@ -79,10 +79,18 @@ export enum ChannelCoupling {
   Ground = 3,
 }
 
+export enum ChannelUnit {
+  Volts = 1,
+  Amps = 2,
+  Watts = 3,
+  Unknown = 4,
+}
+
 export interface ChannelState {
   channel: Channel;
   enabled: boolean;
   coupling: ChannelCoupling;
+  unit: ChannelUnit;
   scale: number;
   offset: number;
   probeRatio: number;
@@ -98,9 +106,11 @@ export type ChannelStates = [
 
 Units:
 
-- `scale`: V/div
-- `offset`: V
+- `scale`: current channel amplitude unit/div
+- `offset`: current channel amplitude unit
 - `probeRatio`: dimensionless attenuation ratio
+
+The DHO804 can display channel amplitude as volts, amps, watts or an unknown/arbitrary unit. The scope defaults to volts, but unit is part of the authoritative state because changing it on the physical scope changes related displayed quantities.
 
 Each tuple member still carries its `channel` identity. The tuple guarantees four channels while the explicit field prevents array position becoming the only channel identifier.
 
@@ -112,11 +122,21 @@ For channel `n` from 1 to 4:
 | --- | --- | --- | --- |
 | `enabled` | `:CHANnel<n>:DISPlay?` | `:CHANnel<n>:DISPlay {ON|OFF}` | `1` or `0` |
 | `coupling` | `:CHANnel<n>:COUPling?` | `:CHANnel<n>:COUPling {AC|DC|GND}` | `AC`, `DC`, `GND` |
-| `scale` | `:CHANnel<n>:SCALe?` | `:CHANnel<n>:SCALe <value>` | scientific notation, V/div |
-| `offset` | `:CHANnel<n>:OFFSet?` | `:CHANnel<n>:OFFSet <value>` | scientific notation, V |
+| `unit` | `:CHANnel<n>:UNITs?` | not required by the initial UI | `VOLT`, `AMP`, `WATT`, `UNKN` |
+| `scale` | `:CHANnel<n>:SCALe?` | `:CHANnel<n>:SCALe <value>` | scientific notation |
+| `offset` | `:CHANnel<n>:OFFSet?` | `:CHANnel<n>:OFFSet <value>` | scientific notation |
 | `probeRatio` | `:CHANnel<n>:PROBe?` | not required by the initial UI | numeric ratio |
 
-For a 1X probe ratio, the DHO800 vertical scale range is 500 µV/div to 10 V/div. Fine adjustment means scale must remain a number rather than a fixed 1-2-5 enum.
+Channel unit mapping:
+
+```text
+VOLT -> ChannelUnit.Volts
+AMP  -> ChannelUnit.Amps
+WATT -> ChannelUnit.Watts
+UNKN -> ChannelUnit.Unknown
+```
+
+For a 1X probe ratio, the DHO800 vertical scale range is 500 µV/div to 10 V/div when the unit is volts. Fine adjustment means scale must remain a number rather than a fixed 1-2-5 enum.
 
 The permitted offset range depends on the current vertical scale. Do not duplicate that relationship as a large client-side type. The scope remains authoritative and the final interaction value is read back after commit.
 
@@ -431,6 +451,8 @@ For an analog source, the Programming Guide defines the edge trigger-level range
 ( 4.5 × VerticalScale - Offset)
 ```
 
+The level uses the current amplitude unit of the selected source.
+
 As with channel offset, the scope remains authoritative for dependent range enforcement.
 
 Do not query edge-only fields when the current trigger type is not Edge merely to populate a structurally convenient object.
@@ -464,12 +486,14 @@ The logical read set is:
 
 :CHAN1:DISP?
 :CHAN1:COUP?
+:CHAN1:UNIT?
 :CHAN1:SCAL?
 :CHAN1:OFFS?
 :CHAN1:PROB?
 ...
 :CHAN4:DISP?
 :CHAN4:COUP?
+:CHAN4:UNIT?
 :CHAN4:SCAL?
 :CHAN4:OFFS?
 :CHAN4:PROB?
@@ -547,25 +571,58 @@ An interactive operation's final commit follows the scheduler commit/readback ru
 
 Measurement values are intentionally outside `ScopeState`.
 
-They are continuously changing results, not configuration state, and putting them in the 1 Hz authoritative scope snapshot would couple measurement refresh rate to configuration polling.
+They are continuously changing results, not configuration state, and putting them in the approximately 1 Hz authoritative scope snapshot would couple measurement refresh rate to configuration polling.
 
-The DHO804 driver should expose measurement operations separately using `:MEASure:ITEM?` with an explicit measurement kind and source channel.
+Use a small shared initial measurement set:
 
-Examples:
+```ts
+export enum MeasurementKind {
+  Vpp = 1,
+  Vmax = 2,
+  Vmin = 3,
+  Vavg = 4,
+  Vrms = 5,
+  Frequency = 6,
+  Period = 7,
+}
+
+export interface MeasurementSpec {
+  kind: MeasurementKind;
+  channel: Channel;
+}
+
+export interface MeasurementValue {
+  kind: MeasurementKind;
+  channel: Channel;
+  value: number;
+}
+```
+
+Driver mapping:
+
+| Measurement kind | SCPI query item |
+| --- | --- |
+| `Vpp` | `VPP` |
+| `Vmax` | `VMAX` |
+| `Vmin` | `VMIN` |
+| `Vavg` | `VAVG` |
+| `Vrms` | `VRMS` |
+| `Frequency` | `FREQuency` |
+| `Period` | `PERiod` |
+
+The query form is:
 
 ```text
-:MEASure:ITEM? VPP,CHANnel1
-:MEASure:ITEM? VRMS,CHANnel1
-:MEASure:ITEM? VAVG,CHANnel1
-:MEASure:ITEM? FREQuency,CHANnel1
-:MEASure:ITEM? PERiod,CHANnel1
+:MEASure:ITEM? <item>,CHANnel<n>
 ```
 
 The Programming Guide returns the current measurement value in scientific notation.
 
-Do not make measurement values optional members of every `ChannelState`.
+Measurement reads should be explicit low-rate work rather than part of every state validation cycle. The WebSocket protocol uses request/result messages containing a list of `MeasurementSpec` values so the browser can refresh only the measurements it is actually showing.
 
-The exact initial UI subset of measurement kinds can be chosen by the frontend/control workstream without changing the core `ScopeState` shape.
+If any requested measurement read fails, fail that measurement request clearly rather than returning a partially populated array with optional values.
+
+Additional measurement kinds can be added later by assigning new numeric enum values and adding the corresponding driver mapping.
 
 ## Waveform metadata is separate
 
@@ -582,7 +639,7 @@ The waveform service obtains metadata for the acquisition being transferred, inc
 
 That metadata describes a particular waveform payload and belongs with that payload/capture.
 
-See `waveforms.md`.
+The browser/server binary waveform format is documented in `waveform-protocol.md`.
 
 ## Parsing rules
 
@@ -624,7 +681,8 @@ These DHO804 facts affect application behaviour and should not be generalized aw
 - 70 MHz analog bandwidth
 - 12-bit vertical resolution
 - 5 ns/div to 500 s/div timebase range
-- 500 µV/div to 10 V/div vertical scale at 1X probe ratio
+- 500 µV/div to 10 V/div vertical scale at 1X probe ratio in volts
+- channel amplitude units can be volts, amps, watts or unknown/arbitrary
 - no external trigger input on DHO804
 - DHO800 supports trigger types through CAN but not LIN
 - one enabled channel can sample up to 1.25 GSa/s
