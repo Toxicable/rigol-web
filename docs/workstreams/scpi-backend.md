@@ -17,23 +17,24 @@ Read:
 - `docs/scpi-scheduler.md`
 - `docs/scope-model.md`
 - `docs/waveforms.md`
+- `docs/websocket-protocol.md`
 - `docs/testing.md`
 
-Use the Rigol DHO800/DHO900 Programming Guide as the device specification when implementing command strings and response parsing.
+Use the Rigol DHO800/DHO900 Programming Guide as the device specification for command strings and response parsing.
 
 ## Dependencies
 
 This workstream starts after Foundation and may depend on:
 
 - `src/shared/scope-types.ts`
-- stable protocol/domain numeric enums
+- stable numeric protocol/domain enums
 - Vitest/tooling already configured
 
-It must not require the WebSocket, frontend or waveform-service workstreams to exist.
+It must not require WebSocket, frontend or waveform-service implementations to exist.
 
 ## File ownership
 
-This workstream owns:
+Own:
 
 ```text
 src/server/scpi/
@@ -47,7 +48,7 @@ src/server/scope/
 `- dho804-driver.test.ts
 ```
 
-Small additional files under these two owned directories are acceptable when they have a concrete single responsibility, for example a focused native waveform decoder.
+Small extra files under those directories are acceptable only for a concrete single responsibility, such as isolated native WORD decoding.
 
 Do not edit:
 
@@ -58,12 +59,13 @@ Do not edit:
 - `src/server/scope/scope-controller.ts`
 - `src/server/scope/scope-state-store.ts`
 - `src/server/scope/scope-poller.ts`
+- `src/shared/**`
 
-Do not change shared protocol/domain contracts unless there is a genuine contradiction in the architecture docs. If one exists, report it rather than silently reshaping the shared types.
+If a shared contract is genuinely contradictory, report it rather than silently changing it.
 
-## `ScpiTransport`
+# ScpiTransport
 
-`ScpiTransport` owns the persistent TCP socket and response framing only.
+`ScpiTransport` owns the persistent TCP socket and complete response framing only.
 
 Configure connected sockets with:
 
@@ -72,9 +74,32 @@ socket.setNoDelay(true);
 socket.setKeepAlive(true);
 ```
 
-The scope host/port are supplied by the caller. Do not hard-code an unverified DHO804 TCP port into this layer.
+Host/port are supplied by the caller. Do not hard-code an unverified DHO804 TCP port.
 
-Expose a small concrete transaction API equivalent to:
+## Response model
+
+A raw SCPI query can return text or an IEEE/TMC binary block. The transport must be able to consume either safely before deciding whether the response type was what the caller expected.
+
+Use a server-only numeric union equivalent to:
+
+```ts
+export enum ScpiResponseKind {
+  Text = 1,
+  Binary = 2,
+}
+
+export type ScpiResponse =
+  | {
+      kind: ScpiResponseKind.Text;
+      value: string;
+    }
+  | {
+      kind: ScpiResponseKind.Binary;
+      value: Uint8Array;
+    };
+```
+
+A practical API is:
 
 ```ts
 class ScpiTransport {
@@ -82,49 +107,69 @@ class ScpiTransport {
   disconnect(): void;
 
   command(command: string): Promise<void>;
+  query(command: string): Promise<ScpiResponse>;
   queryText(command: string): Promise<string>;
   queryBinary(command: string): Promise<Uint8Array>;
 }
 ```
 
-Only `ScpiScheduler` invokes these transaction methods during normal operation.
+`queryText`/`queryBinary` may be convenience wrappers around `query`.
 
-A text query is not complete until its response terminator has been consumed. A binary query is not complete until the full IEEE/TMC block and its terminator have been consumed.
+If `queryText` receives a binary response, it must first consume the **entire** binary block and terminator, then reject with a response-type error. It must never scan binary bytes for a newline as though they were text.
 
-### Text framing
+Likewise, if `queryBinary` receives a normal text response, consume the full text line before rejecting the type mismatch.
 
-Handle arbitrary TCP chunk boundaries. A response can arrive:
+This is required so a raw SCPI console query such as a waveform query cannot corrupt framing merely because version 1 does not expose binary console results.
 
-- all at once
-- one byte at a time
-- split around the terminator
+Only `ScpiScheduler` invokes transport transaction methods during normal operation.
 
-Do not assume one Node `data` event equals one SCPI response.
+## Text framing
 
-### Binary framing
+Handle arbitrary TCP chunk boundaries. A response may arrive in one chunk or many.
 
-Support the DHO804 `#N<length><payload>` definite-length block form.
+A text query is complete only after the response terminator has been consumed.
 
-The parser must handle header/payload/terminator split across arbitrary TCP chunks.
+Do not assume one Node `data` event equals one response.
 
-Return only the binary payload bytes to the caller.
+## Binary framing
 
-Reject malformed headers and incomplete payloads clearly.
+Support the DHO804 definite-length block:
 
-### Failure
+```text
+#N<decimal payload length><payload><terminator>
+```
 
-If socket close, timeout or malformed framing makes response ownership uncertain:
+Header, length digits, payload and terminator may be split across arbitrary TCP chunks.
+
+Return only payload bytes.
+
+Reject malformed headers/incomplete payloads clearly.
+
+## Response detection
+
+For a query, inspect the beginning of the actual response stream:
+
+- a valid `#N...` definite-length header means binary
+- otherwise parse a normal text response
+
+Do not decide the parser solely from the high-level feature that issued the query.
+
+## Failure
+
+If close, timeout or malformed framing makes response ownership uncertain:
 
 - reject the active transaction
-- make the transport unusable
+- mark transport unusable
 - close the socket
-- let runtime create a fresh connection later
+- let runtime create a fresh connection
 
 Do not scan forward for a plausible next response.
 
-## Scheduler domain
+# ScpiScheduler
 
-Use numeric enums:
+The scheduler is the sole serializer of `ScpiTransport` access.
+
+Use:
 
 ```ts
 export enum ScpiPriority {
@@ -156,35 +201,31 @@ export type ScpiCoalesceKey =
     };
 ```
 
-Do not add optional `channel` merely because some kinds do not use one.
+No optional `channel` field.
 
-## `ScpiScheduler`
+## Required behaviour
 
-The scheduler is the sole serializer of `ScpiTransport` access.
+Implement `docs/scpi-scheduler.md`:
 
-It must implement `docs/scpi-scheduler.md`:
-
-- P0 through P4 priority
+- P0-P4 priority
 - FIFO within priority where not supersedable
 - latest-value-wins P1 coalescing
-- P0 interaction commits never discarded
+- P0 commit never discarded
 - live-waveform freshness supersession
 - one scheduled operation at a time
-- support for a small number of exclusive multi-transaction operations
+- exclusive multi-transaction operations where semantic atomicity requires them
 - metrics
-- pending-work rejection when transport integrity is lost
+- reject pending work when transport integrity is lost
 
-### Scheduler API
+## Scheduler API
 
-The important abstraction is a scheduled **operation**, not merely a queue of command strings.
-
-A practical API is equivalent to:
+The primitive is a scheduled operation, conceptually:
 
 ```ts
 schedule<T>(operation: ScpiOperation<T>): Promise<T>;
 ```
 
-where an operation supplies required priority/kind semantics and an executor that receives transport access only while the operation owns the scheduler:
+The operation contains required priority/kind semantics and an executor:
 
 ```ts
 execute: (transport: ScpiTransport) => Promise<T>
@@ -192,58 +233,56 @@ execute: (transport: ScpiTransport) => Promise<T>
 
 Most operations execute one transport transaction.
 
-Waveform operations may execute several transport transactions atomically, for example setup + DATA query + PREamble/metadata.
+A live or RAW waveform operation may execute setup + data + metadata transactions while retaining exclusive scheduler ownership.
 
-Do not expose `ScpiTransport` outside the scheduler callback.
+Only the scheduler supplies transport to this callback.
 
-You may add convenience methods such as `scheduleCommand`/`scheduleTextQuery` around this primitive, but the exclusive callback capability is required.
+Convenience wrappers for ordinary command/text/binary transactions are fine.
 
-### Atomicity
+## Atomicity
 
-Priority is reconsidered between scheduled operations.
+Priority is reconsidered between scheduled operations, not between transport transactions inside an already-started exclusive operation.
 
-Once an exclusive operation begins, P0 cannot interrupt its internal transport transactions.
+Use multi-transaction exclusivity for:
 
-Use this only where stable DHO804 configuration is semantically required:
+- one single-channel live read
+- one single-channel RAW read, including internal chunks
 
-- one live single-channel waveform read
-- one RAW single-channel read, including internal chunks if used
+Do **not** wrap the full approximately 1 Hz state read in one exclusive operation. Its P4 queries should yield between transactions.
 
-Do **not** make the full approximately 1 Hz state poll one exclusive operation. Its individual P4 queries must yield to interaction.
+## Coalescing
 
-### Coalescing
-
-For each semantic interactive key:
+For a semantic P1 key:
 
 - one value may be in flight
 - at most one pending value exists
-- a newer pending value replaces the older one
+- a newer pending value replaces the old one
 
-Do not add a fixed-rate throttle.
+No arbitrary 10/20/30 Hz throttle.
 
-### Live supersession
+## Live supersession
 
-Do not queue a FIFO of P3 live reads. Retain at most one indication that a fresh live waveform is wanted after the current one.
+Do not queue multiple future P3 live reads. Retain at most one fresh-wanted indication after the current read.
 
-### Metrics
+## Metrics
 
 Expose at least:
 
 - operation kind
 - priority
-- queue wait duration
+- queue wait
 - total operation duration
 - binary byte count where applicable
 - coalesced interactive count
-- superseded live-request count
+- superseded live count
 
-A callback/small sink is enough. No logging framework.
+No telemetry framework.
 
-## `Dho804Driver`
+# Dho804Driver
 
-`Dho804Driver` is the only normal location for DHO804 SCPI strings and return-token parsing.
+`Dho804Driver` owns all normal DHO804-specific SCPI strings and return-token parsing.
 
-Application code calls typed methods and never constructs `:CHAN`, `:TRIG`, `:WAV` commands itself.
+Application layers use typed methods.
 
 ## Identification
 
@@ -253,11 +292,9 @@ Implement:
 identify(): Promise<ScopeInfo>
 ```
 
-using `*IDN?`.
+with `*IDN?` and reject any model other than exactly `DHO804`.
 
-Reject any model other than exactly `DHO804` during initialization.
-
-## Complete scope state
+## Complete state
 
 Implement:
 
@@ -265,27 +302,48 @@ Implement:
 readScopeState(priority: ScpiPriority): Promise<ScopeState>;
 ```
 
-using the exact mapping in `scope-model.md`.
-
-This includes:
+using `scope-model.md` exactly:
 
 - CH1-CH4 display/coupling/unit/scale/offset/probe ratio
-- timebase mode including XY derivation quirk
-- timebase scale/position
-- acquisition type/averages/memory depth/sample rate
+- timebase mode including XY quirk
+- horizontal scale/position
+- acquisition type/averages/depth/sample rate
 - run status
 - trigger type/sweep
-- Edge details only when current trigger type is Edge
+- Edge detail only for Edge trigger
 
-Each query in the full state read is a separate short scheduled operation using the requested priority. This allows P0/P1 work between P4 poll queries.
-
-Do not batch semicolon-separated SCPI queries initially. Benchmark before changing this.
+Each state query is a separate short scheduled operation using the requested priority. Do not initially batch SCPI query strings.
 
 ## Focused reads/writes
 
-Expose focused methods for controller use so final interaction readback does not require a complete state read.
+Expose typed focused operations needed by the controller, including:
 
-Required write/read pairs:
+```ts
+readChannelState(
+  channel: Channel,
+  priority: ScpiPriority,
+): Promise<ChannelState>;
+
+readHorizontalState(
+  priority: ScpiPriority,
+): Promise<HorizontalState>;
+
+readAcquisitionState(
+  priority: ScpiPriority,
+): Promise<AcquisitionState>;
+
+readTriggerState(
+  priority: ScpiPriority,
+): Promise<TriggerState>;
+
+readRunState(
+  priority: ScpiPriority,
+): Promise<ScopeRunState>;
+```
+
+`readTriggerState` returns one complete valid union member: read type/sweep first, then Edge-only fields only when Edge.
+
+Also expose required read/write pairs for:
 
 ```text
 channel enabled
@@ -294,46 +352,18 @@ channel offset
 horizontal scale
 horizontal position
 trigger type
-Edge trigger source
-Edge trigger slope
-Edge trigger level
+Edge source
+Edge slope
+Edge level
 ```
 
-Also expose:
+Every mutable write accepts required `ScpiPriority`.
 
-```ts
-readTriggerState(priority: ScpiPriority): Promise<TriggerState>;
-readRunState(priority: ScpiPriority): Promise<ScopeRunState>;
-```
-
-`readTriggerState` first reads trigger type/sweep and only reads Edge-specific fields when the type is Edge. It returns one complete valid `TriggerState` union member.
-
-Each mutable write accepts a required `ScpiPriority`.
-
-Interactive-capable writes use the correct semantic coalescing key when called with `ScpiPriority.Interactive`.
-
-An `Immediate` call for the same control is never lost through P1 coalescing.
-
-Example:
-
-```ts
-setChannelOffset(
-  channel: Channel,
-  value: number,
-  priority: ScpiPriority,
-): Promise<void>;
-
-readChannelOffset(
-  channel: Channel,
-  priority: ScpiPriority,
-): Promise<number>;
-```
-
-Use the same pattern for other focused controls.
+P1 writes use the correct semantic coalescing key. P0 writes never disappear into P1 coalescing.
 
 ## Run actions
 
-Expose typed methods for:
+Typed methods for:
 
 ```text
 :RUN
@@ -341,7 +371,7 @@ Expose typed methods for:
 :SINGle
 ```
 
-They always schedule at `ScpiPriority.Immediate`.
+always schedule at P0.
 
 ## Measurements
 
@@ -354,31 +384,33 @@ readMeasurements(
 ): Promise<MeasurementValue[]>;
 ```
 
-Map the initial kinds exactly from `scope-model.md` and return in request order.
+Map initial kinds from `scope-model.md`, preserve order and reject the whole request on any failed measurement.
 
-Each measurement query is its own short scheduled operation so interaction can run between measurement reads.
-
-If any query fails, reject the whole request rather than returning missing/optional values.
+Each measurement query is a separate short operation.
 
 ## Raw SCPI console
 
-Expose one deliberate passthrough such as:
+Expose one passthrough such as:
 
 ```ts
 executeRawScpi(command: string): Promise<string>;
 ```
 
-Schedule it at Normal priority.
+Rules:
 
-Version 1 supports commands and text queries. No-response commands return the required empty string.
+- Normal priority
+- one SCPI program message per execute
+- if the command contains a query header (`?`), use the transport's generic response parser through the scheduler
+- text response -> return it
+- binary response -> consume the entire block safely, then reject because v1 console is text-only
+- no-response command -> required empty string
+- invalidate waveform-configuration cache after any raw execution because arbitrary SCPI may have changed it
 
-Reject binary raw-query results clearly. Typed waveform operations own binary acquisition.
+A simple query-header detector is acceptable for v1. Do not risk leaving an unread query response in the socket.
 
-Because arbitrary raw SCPI may alter waveform configuration, invalidate the driver's waveform-configuration cache after execution.
+# Normalized waveform API
 
-## Normalized waveform result
-
-Export a server-only result equivalent to:
+Export server-only:
 
 ```ts
 export interface Dho804Waveform {
@@ -391,11 +423,9 @@ export interface Dho804Waveform {
 }
 ```
 
-Native Rigol waveform representation must not escape this driver boundary.
+Native Rigol blocks/sample codes do not escape the driver.
 
-## Live waveform
-
-Implement:
+## Live
 
 ```ts
 readLiveWaveform(
@@ -408,18 +438,15 @@ Requirements:
 
 - NORMAL mode
 - `pointCount` 1..1000
-- one exclusive P3 scheduled operation
-- setup source/mode/format/points only where cache says needed
-- query data and associated metadata inside that same operation
-- normalize native samples to Float32 amplitude values
-- return X metadata/unit
-- use live freshness supersession semantics
+- one exclusive P3 operation
+- apply only needed waveform setup where cache is trustworthy
+- DATA and associated metadata stay inside the same exclusive operation
+- normalize samples to Float32 amplitude values
+- use live freshness supersession
 
-A four-channel cycle is four separate calls, not one exclusive operation.
+One four-channel refresh is four calls, allowing higher-priority work between channels.
 
-## RAW waveform
-
-Implement:
+## RAW
 
 ```ts
 readRawWaveform(
@@ -430,111 +457,105 @@ readRawWaveform(
 
 Requirements:
 
-- caller is expected to have a stopped scope
-- one exclusive P2 scheduled operation for the whole single-channel RAW read
-- configure RAW/WORD/source/range inside that operation
-- WORD native format to preserve DHO804 12-bit acquisition resolution
-- may use bounded `STARt`/`STOP` chunks internally
-- if chunked, every chunk remains inside the same exclusive operation
-- assemble exactly `sampleCount` normalized amplitude values
-- return X metadata/unit
+- intended for stopped scope
+- one exclusive P2 operation for the complete single-channel read
+- configure RAW/WORD/source/range inside it
+- WORD native format preserves DHO804 12-bit resolution
+- internal `STARt`/`STOP` chunks are allowed
+- if chunked, all chunks remain inside the same exclusive scheduled operation
+- assemble exactly `sampleCount` values
 - any chunk failure rejects the whole read
 
-Do not allow Run, raw console or another waveform source change to interleave between RAW chunks.
+Do not allow Run/raw-console/another waveform source change between chunks.
 
-The explicit deep-capture workflow accepts that an already-started large RAW channel read cannot be preempted by a later P0 command.
+## WORD verification
 
-## Native WORD verification
+The manual states two bytes per WORD sample but the waveform material used here does not unambiguously specify native byte ordering/signedness.
 
-The manual states two bytes per WORD point but the waveform section available to this project does not unambiguously specify byte ordering/signedness.
+Isolate WORD decoding in one function. Implement from the best available DHO800 evidence, then require the real-DHO804 cross-check in `testing.md` before calling deep WORD capture hardware-verified.
 
-Keep native WORD decoding isolated in one function.
-
-Implement from the best available DHO800 behaviour/reference, but mark real-DHO804 cross-check from `testing.md` as required before declaring deep WORD hardware-verified.
-
-Do not encode native WORD assumptions in shared/browser types.
+Do not leak this uncertainty into the browser protocol.
 
 ## Native amplitude conversion
 
-Use DHO waveform metadata to convert native codes to normalized amplitude values.
-
-The Programming Guide demonstrates BYTE conversion as:
+Use DHO waveform metadata. The Programming Guide demonstrates BYTE conversion as:
 
 ```text
 (raw - YORigin - YREFerence) * YINCrement
 ```
 
-Keep this device-specific conversion entirely inside the driver.
+Keep device-specific conversion inside the driver.
 
-## Waveform configuration caching
+## Waveform setup cache
 
-Cache only transport-relevant waveform setup where it avoids redundant commands, such as source/mode/format/points.
+Cache only transfer configuration that removes redundant SCPI setup work.
 
-Invalidate when:
+Invalidate after:
 
-- transport reconnects
-- raw SCPI console executes
-- another driver path changes the same setup
+- reconnect
+- raw SCPI console execution
+- another driver path changes relevant setup
 - configuration truth is otherwise unknown
 
-Do not create a second broad cache of application `ScopeState` inside the driver.
+Do not create a second application `ScopeState` cache in the driver.
 
-## Tests
+# Tests
 
 Follow `testing.md`.
 
-Required cases include:
+Required coverage includes:
 
-- arbitrary TCP chunking for text/binary responses
-- binary header/payload framing failures
-- P0-P4 scheduler ordering
-- coalescing and independent semantic keys
-- final P0 commit preservation
+- arbitrary TCP chunking for text/binary
+- generic query correctly detects text versus binary
+- text-expected/binary-actual consumes the full binary response before rejecting
+- binary-expected/text-actual consumes the full text response before rejecting
+- next query remains correctly framed after either type mismatch
+- malformed binary framing fails transport
+- P0-P4 ordering
+- semantic coalescing
+- P0 commit preservation
 - exclusive operation prevents interleaving
-- poll-style short P4 operations allow P0/P1 between them
-- live freshness supersession
+- separate P4 state queries allow P0/P1 between them
+- live supersession
 - transport failure rejects pending work
-- DHO804 ID parsing/model rejection
-- complete scope-state parsing
-- complete `readTriggerState` for Edge and non-Edge
-- all trigger token mappings
+- ID/model parsing
+- full scope state
+- channel/horizontal/acquisition/trigger/run focused reads
+- trigger token mapping
 - channel-unit mapping
-- measurement mapping/order
+- measurements
 - PREamble parsing
 - BYTE waveform conversion fixture
-- RAW chunk assembly inside one exclusive operation
-- isolated WORD decoder fixture once interpretation is chosen
+- RAW chunk assembly within one exclusive operation
+- isolated WORD fixture once interpretation is chosen
 
-No physical scope is required for `pnpm test`.
+No physical scope is required for normal tests.
 
-## Non-goals
+# Non-goals
 
 Do not implement:
 
 - WebSocket server
-- `ScopeController`
-- `ScopeStateStore`
-- background poll timer
+- controller/store/poller
 - React/Zustand
-- live multi-channel loop
-- deep capture IDs/storage
-- server min/max downsampling
-- browser binary encoding/decoding
+- multi-channel live loop
+- deep capture IDs/storage/downsampling
+- browser binary frames
 - reconnect loop
-- generic instrument API
+- generic instrument framework
 
-## Definition of done
+# Definition of done
 
-This workstream is complete when:
+Complete when:
 
-1. `ScpiTransport` handles complete text and IEEE/TMC binary transactions over a persistent socket.
-2. `ScpiScheduler` implements documented priorities, coalescing, live supersession, exclusive multi-transaction operations and metrics.
-3. `Dho804Driver` implements complete initial state/control/measurement mappings.
-4. Focused controller reads include complete `readTriggerState` and run-state readback.
-5. Typed live and RAW waveform methods return normalized `Dho804Waveform` values without exposing native Rigol blocks.
-6. Live setup/data/metadata and RAW setup/chunks/metadata remain coherent through scheduler atomicity.
-7. Tests cover framing, scheduler semantics, DHO parsing and waveform conversion boundaries.
+1. transport safely consumes complete text or IEEE/TMC responses and type mismatches cannot desynchronize the stream.
+2. scheduler implements priority/coalescing/live supersession/exclusive operations/metrics.
+3. driver implements the finalized DHO804 state/control/measurement model.
+4. focused state-group reads support authoritative controller reconciliation.
+5. live/RAW APIs return normalized `Dho804Waveform` without native Rigol representation escaping.
+6. waveform setup/data/metadata and RAW chunks remain coherent through scheduler exclusivity.
+7. tests cover framing, response-type mismatch safety, scheduling and DHO parsing.
 8. `pnpm typecheck` and `pnpm test` pass.
-9. No higher-layer server/UI behaviour leaked into the backend.
+9. no higher-layer behaviour leaked into this stream.
 
-Report any item that still specifically requires real-DHO804 verification, particularly native WORD decoding, rather than claiming mocks prove hardware behaviour.
+Report real-hardware verification still required, especially native WORD decoding, rather than claiming mocks prove DHO804 behaviour.
