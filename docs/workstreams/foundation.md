@@ -24,7 +24,7 @@ Node.js server
 Rigol DHO804
 ```
 
-The selected application stack is:
+Selected stack:
 
 - Node.js + TypeScript server
 - React + TypeScript frontend
@@ -36,8 +36,6 @@ The selected application stack is:
 
 All required software dependencies should be free/open-source. Do not introduce paid tooling, hosted services or commercial libraries.
 
-The repository currently contains architecture documentation but no application code or package/tooling setup.
-
 ## Read before changing code
 
 Read these documents before implementation:
@@ -48,16 +46,16 @@ Read these documents before implementation:
 - `docs/scope-model.md`
 - `docs/server-architecture.md`
 - `docs/websocket-protocol.md`
+- `docs/waveform-protocol.md`
 
-The following are useful context but should not cause the foundation stream to implement their behaviour:
+Useful context that must not cause the foundation stream to implement later behaviour:
 
 - `docs/scpi-scheduler.md`
 - `docs/frontend.md`
 - `docs/waveforms.md`
+- `docs/testing.md`
 
-The architecture documents are requirements, not suggestions. If a detail is not decided there, prefer the simplest implementation that leaves the later stream free to make the real decision.
-
-Do not silently replace an existing architecture decision with a different library, framework or pattern.
+The architecture documents are requirements, not suggestions. Do not silently replace an existing architecture decision with a different library, framework or pattern.
 
 ## Important project rules
 
@@ -73,7 +71,7 @@ In particular:
 - do not use string enums for protocol discriminants
 - fields are required unless absence has genuine domain meaning
 - prefer discriminated unions for genuinely different states
-- do not make fields optional just to make construction easier
+- do not make fields optional merely to make construction easier
 - do not introduce a dependency-injection framework
 - do not introduce a generic event bus
 - do not create a generic instrument abstraction
@@ -84,12 +82,12 @@ The project intentionally targets the DHO804 first. Do not generalize for other 
 
 ## Foundation objective
 
-Create the repository skeleton and stable shared seam that lets later implementation proceed in parallel with low merge-conflict risk.
+Create the repository skeleton and stable shared seam that lets later implementation proceed independently with low merge-conflict risk.
 
-After this stream, later work should be able to independently add:
+After this stream, later work should be able to add:
 
 - SCPI transport/scheduler/DHO804 driver
-- server runtime/controller/WebSocket behaviour
+- server state/control/WebSocket behaviour
 - waveform acquisition/downsampling
 - frontend controls and uPlot rendering
 
@@ -103,7 +101,8 @@ Create the initial structure around these paths:
 src/
 |- shared/
 |  |- scope-types.ts
-|  `- websocket-protocol.ts
+|  |- websocket-protocol.ts
+|  `- waveform-protocol.ts
 |
 |- server/
 |  `- server.ts
@@ -115,8 +114,6 @@ src/
 ```
 
 Do not create empty placeholder files for every future server class. Future streams own those files and directories.
-
-Git does not require empty directories to exist ahead of time.
 
 ## Tooling
 
@@ -160,7 +157,7 @@ Use ESM consistently.
 
 Avoid unnecessary path aliases initially. Relative imports are acceptable and make ownership obvious.
 
-Provide scripts with clear single purposes. At minimum the repository should support equivalents of:
+Provide scripts with clear single purposes. At minimum:
 
 ```text
 pnpm dev:web
@@ -190,10 +187,8 @@ It should not yet:
 - implement scheduling
 - open a WebSocket server
 - implement reconnect behaviour
-- contain runtime scope state
-- serve production frontend assets unless that falls out trivially from the chosen build setup
-
-The shared `ScopeState` type may exist in `src/shared/scope-types.ts`; the server shell must not instantiate or manage it yet.
+- instantiate runtime scope state
+- serve production frontend assets unless that falls out trivially from the build setup
 
 The server shell exists to prove the Node/TypeScript build and execution path works.
 
@@ -216,21 +211,18 @@ It should not yet:
 - implement drag controls
 - mock large amounts of future UI
 
-Later frontend streams own those decisions and components.
+Later frontend work owns those decisions and components.
 
-## Shared types
+## `scope-types.ts`
 
-The foundation owns the stable shared vocabulary that has already been specified by the architecture.
+Implement the shared domain types from `docs/scope-model.md`.
 
-### `scope-types.ts`
-
-Implement the domain types from `docs/scope-model.md` exactly enough to establish the shared compile-time contract for later workstreams.
-
-This includes:
+At minimum this includes:
 
 - `ScopeInfo`
 - `Channel`
 - `ChannelCoupling`
+- `ChannelUnit`
 - `ChannelState`
 - `ChannelStates`
 - `TimebaseMode`
@@ -245,18 +237,21 @@ This includes:
 - `OtherTriggerType`
 - `TriggerState`
 - `ScopeState`
+- `MeasurementKind`
+- `MeasurementSpec`
+- `MeasurementValue`
 
-Do not implement SCPI parsing, command strings or driver behaviour in this file. `scope-types.ts` contains the shared domain types only.
+Do not implement SCPI command strings or parsing in this shared file.
 
 Do not change the documented model merely to make construction easier. In particular, do not add `?`, `undefined`, `null`, broad strings, `unknown` payloads or generic key/value bags.
 
 The trigger model is intentionally a discriminated union: Edge trigger has its required Edge-specific fields, while other DHO804 trigger types contain only the state version 1 actually models.
 
-### `websocket-protocol.ts`
+## `websocket-protocol.ts`
 
-Establish the stable numeric protocol enums already documented in `docs/websocket-protocol.md`.
+Implement the stable JSON protocol definitions from `docs/websocket-protocol.md`.
 
-The currently documented message values are:
+Stable message values:
 
 ```ts
 export enum MessageType {
@@ -271,14 +266,17 @@ export enum MessageType {
   DeepCaptureRequest = 14,
   WaveformViewportRequest = 15,
   ScpiExecute = 16,
+  MeasurementRead = 17,
 
   CommandCompleted = 20,
   CommandFailed = 21,
   ScpiResult = 22,
+  MeasurementResult = 23,
+  DeepCaptureReady = 24,
 }
 ```
 
-Also establish the documented fixed enums whose values are already decided:
+Also implement:
 
 ```ts
 export enum AcquisitionAction {
@@ -305,32 +303,70 @@ export enum ControlKind {
 }
 ```
 
-Do not invent additional control kinds during foundation work.
+Define `PROTOCOL_VERSION = 1`.
 
-Where a full message interface still depends on a later behavioural decision, do not create generic placeholders merely so every conceptual message can be represented on day one. Establish the stable enums and concrete message types whose payloads are already unambiguous from `scope-model.md` and `websocket-protocol.md`.
+Implement the documented shared JSON message/payload types, including:
 
-In particular, do not implement WebSocket routing, acknowledgements, backpressure or binary-frame encoding in the foundation.
+- `ControlChange`
+- `InteractiveControl`
+- `ControlSetMessage`
+- `InteractionUpdateMessage`
+- `InteractionCommitMessage`
+- `AcquisitionActionMessage`
+- `MeasurementReadMessage`
+- `MeasurementResultMessage`
+- `DeepCaptureRequestMessage`
+- `DeepCaptureChannelInfo`
+- `DeepCaptureReadyMessage`
+- `WaveformViewportRequestMessage`
+- `ScpiExecuteMessage`
+- `ScpiResultMessage`
+- lifecycle messages
+- command completion/failure messages
+- `ClientMessage`
+- `ServerJsonMessage`
 
-## Protocol version
+Do not implement runtime WebSocket routing or validation in the foundation. These are compile-time shared contracts.
 
-Define one explicit integer protocol version in shared code. Version `1` is appropriate for the initial implementation.
+Do not use `unknown` as a generic control payload. Use the explicit discriminated unions already documented.
 
-Do not implement negotiation or compatibility machinery. A later WebSocket stream can fail clearly when versions differ.
+## `waveform-protocol.ts`
+
+Implement the stable shared constants/enums from `docs/waveform-protocol.md`:
+
+```ts
+export const WAVEFORM_MAGIC = 0x46574752;
+export const WAVEFORM_FRAME_VERSION = 1;
+export const WAVEFORM_HEADER_BYTES = 64;
+export const WAVEFORM_POINT_BYTES = 8;
+
+export enum WaveformEncoding {
+  IndexedFloat32 = 1,
+}
+```
+
+Import/re-exporting `WaveformKind` through a barrel is not allowed. Prefer importing the existing `WaveformKind` from `websocket-protocol.ts` where needed rather than defining a second enum with duplicate ownership.
+
+It is acceptable to define small interfaces describing decoded header/point data if they exactly match the documented fixed layout and are useful to both server and browser.
+
+Do not implement a generic binary serialization framework.
+
+Server encoding and browser decoding belong to later workstreams so they can be tested independently against the same fixed fixture bytes.
 
 ## Tests
 
-Set up Vitest and include a small number of foundation-level tests that provide actual value.
+Set up Vitest and include foundation-level tests that protect stable contracts.
 
-Useful tests include:
+Useful tests:
 
-- protocol enum values are the documented stable integers
-- domain enum values used on the wire remain the documented integers
-- simple shared helper behaviour, if any exists
-- a server health test only if it remains small and does not require introducing a test framework around HTTP
+- `MessageType` values are exactly the documented integers
+- `ControlKind`, `AcquisitionAction`, `WaveformKind` and `WaveformEncoding` values remain stable
+- domain numeric enums used on the wire remain the documented values
+- waveform magic/header/point byte constants remain exact
+- `PROTOCOL_VERSION === 1`
+- a server health test only if it remains small and does not require adding unnecessary HTTP test infrastructure
 
-Do not write placeholder tests for future SCPI, scheduler, waveform or UI functionality.
-
-The purpose here is to prove the test toolchain works and protect stable shared values, not to create fake coverage.
+Do not write placeholder tests for future SCPI, scheduler, waveform service or UI functionality.
 
 ## Build outputs
 
@@ -344,24 +380,23 @@ dist/
 
 Do not commit generated build output.
 
-The exact TypeScript/Vite configuration may differ if needed, but preserve the separation and keep the build understandable.
-
 ## Hard scope boundary
 
 Do not implement any of the following in this workstream:
 
 - TCP/SCPI transport
-- IEEE binary-block parsing
+- IEEE/TMC binary-block parsing
 - SCPI scheduler
 - priority queues or coalescing
 - DHO804 SCPI command execution or response parsing
-- scope discovery or connection logic
+- scope connection/initialization
 - runtime scope-state reads/writes
 - scope polling
 - WebSocket server/client behaviour
+- runtime JSON validation
 - command routing
 - waveform acquisition
-- waveform binary framing
+- binary waveform frame encoding/decoding
 - deep capture storage
 - downsampling
 - uPlot integration
@@ -372,19 +407,17 @@ Do not implement any of the following in this workstream:
 
 Those are separate implementation streams.
 
-If you find yourself needing one of these to complete the foundation, stop and reassess whether the foundation has grown beyond its purpose.
-
 ## Avoid shared-file churn
 
 One purpose of this stream is to create stable seams before parallel development begins.
 
 Keep `src/shared/` deliberately small.
 
-Do not create generic catch-all types or helpers that every future stream will edit. Prefer specific files owned by future streams over central utility files.
-
 Do not create `utils.ts`, `types.ts`, `constants.ts` or similar dumping-ground modules.
 
-The initial shared protocol values and domain model should be explicit and boring.
+Do not create generic catch-all types or helpers that every future stream will edit.
+
+The shared protocol/domain model should be explicit and boring.
 
 ## Definition of done
 
@@ -396,11 +429,12 @@ The foundation is complete when all of the following are true:
 4. `pnpm build` succeeds and produces separate server/web output.
 5. `pnpm dev:server` starts the minimal Node server and `/health` succeeds.
 6. `pnpm dev:web` starts the Vite frontend and renders the minimal Rigol Web shell.
-7. `src/shared/scope-types.ts` implements the finalized `ScopeState` domain contract from `docs/scope-model.md` without optional-field shortcuts.
-8. Stable documented protocol enums use actual numeric TypeScript enums with explicit wire values.
-9. TypeScript filenames follow lowercase kebab-case and there are no `index.ts` files.
-10. No SCPI, waveform, control-plane or real UI feature work has leaked into the foundation.
-11. The diff remains small enough that the later implementation streams can branch from it without inheriting unnecessary abstractions.
+7. `src/shared/scope-types.ts` implements the finalized domain contract without optional-field shortcuts.
+8. `src/shared/websocket-protocol.ts` implements the finalized stable JSON message contract and numeric wire enums.
+9. `src/shared/waveform-protocol.ts` contains the exact binary protocol constants/enums.
+10. TypeScript filenames follow lowercase kebab-case and there are no `index.ts` files.
+11. No SCPI, waveform-service, control-plane or real UI feature work has leaked into the foundation.
+12. The diff remains small enough that later implementation streams can branch from it without inheriting unnecessary abstractions.
 
 ## Implementation behaviour for an LLM
 
@@ -412,10 +446,10 @@ When executing this workstream:
 - keep the diff focused on foundation work
 - prefer simple conventional configuration over clever tooling
 - do not add optional fields to avoid making a modelling decision
-- copy the finalized shared domain semantics from `docs/scope-model.md`; do not reinterpret the Rigol manual in the foundation stream
-- run the relevant install, typecheck, test and build commands before declaring completion
-- report the files changed and the commands/results at the end
+- copy finalized shared semantics from the architecture docs rather than reinterpreting the Rigol manual
+- run install, typecheck, tests and build before declaring completion
+- report files changed and command results at the end
 
-If there is a genuine contradiction between the repository documents that blocks implementation, identify the exact conflict rather than silently choosing a new architecture.
+If there is a genuine contradiction between repository documents that blocks implementation, identify the exact conflict rather than silently choosing a new architecture.
 
 Otherwise, make the simplest implementation consistent with the existing docs and finish the foundation.
