@@ -15,7 +15,7 @@ HTTP is only needed for application assets and simple endpoints such as `/health
 
 Protocol discriminants and fixed protocol values use actual numeric TypeScript enums. Property names remain descriptive.
 
-TypeScript conventions are documented in `typescript-practices.md`.
+TypeScript conventions are documented in `typescript-practices.md`. The authoritative connected-scope model is documented in `scope-model.md`.
 
 ## Message types
 
@@ -50,6 +50,8 @@ Do not use string discriminants such as `"interaction.update"` or `"scope.state"
 The server sends complete authoritative `ScopeState` snapshots rather than `Partial<ScopeState>` patches.
 
 The state object is small, the application runs on a local network, and full snapshots avoid patch-merging ambiguity and optional-field-heavy types.
+
+`ScopeState` and `ScopeInfo` are defined by `scope-model.md`; the protocol should import those shared types rather than recreate them.
 
 Conceptually:
 
@@ -102,8 +104,13 @@ export enum ControlKind {
   HorizontalScale = 4,
   HorizontalPosition = 5,
   TriggerLevel = 6,
+  TriggerType = 7,
+  TriggerSource = 8,
+  TriggerSlope = 9,
 }
 ```
+
+The initial `TriggerType` control is required so the UI can explicitly select Edge trigger after the physical scope or another SCPI client has selected another trigger type. Version 1 only needs to offer Edge as a writable trigger type even though `ScopeState` can report the other DHO804 trigger types.
 
 The exact control set grows with implemented scope features. The protocol should keep semantic control variants rather than accepting arbitrary object paths.
 
@@ -118,6 +125,8 @@ interface ControlSetMessage {
   control: ControlChange;
 }
 ```
+
+`ControlChange` should be an explicit discriminated union whose payload type matches the corresponding domain type from `scope-model.md`. For example, trigger source uses `Channel`, trigger slope uses `EdgeSlope`, and trigger type uses `TriggerType`; do not send their SCPI string spellings over the WebSocket.
 
 ## Continuous interactions
 
@@ -161,6 +170,8 @@ interface AcquisitionActionMessage {
   action: AcquisitionAction;
 }
 ```
+
+These map to the DHO804 root `:RUN`, `:STOP` and `:SINGle` commands. They are actions, not direct writes to `ScopeRunState`.
 
 ## Command completion
 
