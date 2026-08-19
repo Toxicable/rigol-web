@@ -140,6 +140,8 @@ The server maintains a cached model of important scope state, including at least
 - trigger slope
 - acquisition state
 
+The concrete DHO804 types, SCPI mappings and Rigol-specific response parsing rules are documented in `scope-model.md`.
+
 Web interactions update the UI optimistically so controls feel immediate.
 
 Ordinary discrete operations may be read back immediately where useful. Continuous interactions are not read back on every intermediate value.
@@ -291,6 +293,7 @@ More of the DHO804 command set can be added incrementally after the interaction 
 - `architecture.md` - overall decisions
 - `development-practices.md` - general project implementation principles
 - `typescript-practices.md` - TypeScript type, enum and naming conventions
+- `scope-model.md` - DHO804 domain types and exact SCPI state/control mapping
 - `server-architecture.md` - server module ownership, dependency direction and lifecycle
 - `scpi-scheduler.md` - SCPI priority, coalescing and latency behaviour
 - `frontend.md` - React/Zustand/uPlot data flow and interaction model
