@@ -41,7 +41,7 @@ Responsibilities:
 - enable low-latency socket behaviour such as `TCP_NODELAY`
 - write command bytes
 - read complete text responses
-- read complete IEEE-style binary blocks
+- read complete IEEE/TMC binary blocks
 - report socket, framing and timeout failures
 
 It does not know about channels, trigger settings, browser messages, priorities or polling.
@@ -75,12 +75,16 @@ Responsibilities include:
 - exact SCPI command strings
 - parsing DHO804 responses into application values
 - channel, timebase, trigger and acquisition operations
+- measurement queries
 - live waveform queries
 - RAW/deep waveform queries
-- waveform preamble and scaling metadata
+- native waveform PREamble/scaling metadata
+- conversion of native DHO804 waveform codes into normalized amplitude values
 - DHO804-specific behaviour and quirks
 
-Application layers should call typed driver operations rather than constructing SCPI strings themselves.
+Application layers call typed driver operations rather than constructing SCPI strings themselves.
+
+Native Rigol waveform block/code representation ends at this boundary. The waveform services consume normalized per-channel `Float32Array` amplitude data plus X metadata and channel unit.
 
 The raw SCPI console is the deliberate exception: its command text originates in the browser, but execution still passes through `ScpiScheduler` so it cannot corrupt stream ordering.
 
@@ -91,6 +95,8 @@ The raw SCPI console is the deliberate exception: its command text originates in
 It does not query the instrument itself and does not contain SCPI logic.
 
 The DHO804 remains authoritative. The store is the server-side representation used by the browser-facing application.
+
+The store always contains a complete connected-scope snapshot. Disconnected lifecycle state is represented separately rather than by making `ScopeState` fields optional.
 
 ## ScopeController
 
@@ -104,9 +110,10 @@ Responsibilities include:
 - interactive update semantics
 - final interaction commits
 - optimistic state where appropriate
-- authoritative readback after an interaction completes
+- authoritative focused readback after an interaction completes
 - Run / Stop / Single actions
-- coordinating actions that involve more than one lower-level operation
+- measurements and raw SCPI routing
+- rejecting stale poll snapshots after newer local mutations
 
 The WebSocket layer should not contain scope-control logic, and the DHO804 driver should not know about browser message types.
 
@@ -122,7 +129,7 @@ Its purpose is to detect changes made through:
 - another SCPI client
 - other drift between cached and actual state
 
-Polling must not overwrite a property with stale data while that property is being manipulated interactively.
+Poll cycles do not pile up. If a local state-affecting mutation occurs while a complete poll snapshot is in flight, that stale poll snapshot is discarded and the next cycle validates again.
 
 The poller owns its timer. Timers do not belong inside the driver or state store.
 
@@ -132,11 +139,12 @@ The poller owns its timer. Timers do not belong inside the driver or state store
 
 Responsibilities:
 
-- request small live waveform reads through `Dho804Driver`
+- request small normalized live waveform reads through `Dho804Driver`
 - select enabled channels as required
+- read enabled channels as separate serialized transactions
 - avoid building a FIFO backlog of waveform requests
 - keep at most one acquisition in progress and one indication that a newer frame is wanted
-- publish fresh live waveform data toward the WebSocket layer
+- encode/publish fresh live waveform data toward the WebSocket layer
 
 Live waveform work is disposable and lower priority than interaction.
 
@@ -146,16 +154,19 @@ Live waveform work is disposable and lower priority than interaction.
 
 Responsibilities:
 
-- explicit RAW/deep acquisition
-- storage of full raw sample arrays on the server
-- capture IDs and capture lookup
+- explicit RAW/deep acquisition while stopped
+- server storage of normalized per-channel `Float32Array` captures
+- one latest-completed positive capture ID in version 1
 - selecting requested sample ranges
 - server-side min/max downsampling
 - overscanned viewport responses for responsive browser pan/zoom
+- encoding deep viewport binary frames
+
+A failed replacement capture leaves the previous completed capture intact. A successful replacement invalidates the previous capture ID.
 
 Panning or zooming an existing deep capture must not trigger another read from the oscilloscope.
 
-See `waveforms.md` for detailed waveform behaviour.
+See `waveforms.md` and `waveform-protocol.md` for detailed waveform behaviour.
 
 ## WebSocketGateway
 
@@ -164,7 +175,7 @@ See `waveforms.md` for detailed waveform behaviour.
 Responsibilities:
 
 - accept browser WebSocket connections
-- validate and decode incoming protocol messages
+- validate and decode incoming JSON protocol messages
 - dispatch commands to the appropriate application service
 - serialize state, results and errors
 - send binary waveform frames
@@ -172,11 +183,13 @@ Responsibilities:
 
 It must not construct DHO804 SCPI commands, directly mutate scope state, or implement waveform downsampling.
 
-See `websocket-protocol.md` for protocol details.
+Multiple browser tabs share the same physical scope/server state. Version 1 does not add session ownership or locking.
+
+See `websocket-protocol.md` for JSON protocol details.
 
 ## ScopeRuntime
 
-`ScopeRuntime` composes and owns the lifetime of the server-side scope components.
+`ScopeRuntime` composes and owns the lifetime of the server-side scope session.
 
 Conceptually:
 
@@ -192,17 +205,19 @@ ScopeRuntime
   `- DeepCaptureService
 ```
 
-Startup is deliberately direct:
+A successful scope session starts directly:
 
 ```text
 connect TCP
-   -> identify and verify DHO804
+   -> identify and require DHO804
    -> read a complete initial ScopeState
    -> publish Connected state
    -> start polling and live-waveform work
 ```
 
 A partially initialized scope is not treated as connected.
+
+The HTTP/WebSocket application itself may remain running while the scope is switched off. Version 1 reconnection is deliberately simple: one connection attempt at a time and a fixed short retry interval after failure. Each reconnect creates a fresh scope session; stale operations from the old session are never replayed.
 
 ## Failure philosophy
 
@@ -216,10 +231,11 @@ If socket or SCPI framing integrity is no longer trustworthy:
 - close the scope connection rather than guessing
 - discard stale queued and interactive work
 - do not replay old commands after a reconnect
+- publish the disconnected state visibly to browser clients
 
-Reconnect behaviour, where used, should remain simple. Do not add circuit breakers, persistent command queues, per-command retry policies or complex degraded states unless actual use demonstrates a need.
+Reconnect behaviour remains simple. Do not add circuit breakers, persistent command queues, per-command retry policies or complex degraded states unless actual use demonstrates a need.
 
-Completed deep captures are independent data and may remain available after the live scope connection is lost. An in-progress capture that loses its transport fails.
+An in-progress deep capture that loses transport fails. Version 1 may discard retained deep capture state when a completely new scope session is created rather than complicating cross-session ownership.
 
 ## Dependency direction
 
@@ -240,13 +256,14 @@ TCP/framing
 
 Do not add a dependency-injection framework or generic event bus. Ordinary constructor dependencies and explicit callbacks/subscriptions are sufficient.
 
-## Suggested source layout
+## Source layout
 
 ```text
 src/
 |- shared/
 |  |- scope-types.ts
-|  `- websocket-protocol.ts
+|  |- websocket-protocol.ts
+|  `- waveform-protocol.ts
 |
 |- server/
 |  |- server.ts
@@ -265,7 +282,8 @@ src/
 |  |- waveform/
 |  |  |- live-waveform-service.ts
 |  |  |- deep-capture-service.ts
-|  |  `- downsample.ts
+|  |  |- downsample.ts
+|  |  `- waveform-frame-encoder.ts
 |  |
 |  `- websocket/
 |     `- websocket-gateway.ts
@@ -273,14 +291,31 @@ src/
 `- web/
 ```
 
+Tests live beside the files they exercise rather than in a separate generic test hierarchy.
+
 TypeScript naming and type conventions are documented separately in `typescript-practices.md`.
+
+## Workstream ownership
+
+Implementation boundaries are documented under `docs/workstreams/`:
+
+- `foundation.md`
+- `scpi-backend.md`
+- `server-control.md`
+- `waveforms.md`
+- `frontend.md`
+- `integration.md`
+
+The point of those handoffs is to let implementation proceed with minimal shared-file contention.
 
 ## Key boundaries
 
-The three boundaries that should remain especially clear are:
+The boundaries that should remain especially clear are:
 
 - `Dho804Driver` is the DHO804/SCPI semantic boundary
 - `ScopeController` is the application-command boundary
 - `ScpiScheduler` is the serialized transport-ownership boundary
+- waveform services own normalized display/capture data, not native Rigol encoding
+- `WebSocketGateway` owns browser transport, not scope semantics
 
 Keeping those boundaries simple should let the rest of the application evolve without turning the server into a generic framework.
