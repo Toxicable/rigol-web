@@ -117,7 +117,7 @@ WebSocket compression should be disabled initially. This runs on a local network
 
 The server sends complete authoritative `ScopeState` snapshots rather than partial patches.
 
-The protocol is documented in `websocket-protocol.md`.
+The JSON protocol is documented in `websocket-protocol.md`. The binary waveform layout is documented in `waveform-protocol.md`.
 
 ## Scope state
 
@@ -126,9 +126,9 @@ The physical oscilloscope is the authoritative source of state.
 The server maintains a cached model of important scope state, including at least:
 
 - channel enable state
+- channel coupling and amplitude unit
 - channel vertical scale
 - channel vertical offset
-- coupling
 - probe ratio
 - horizontal scale
 - horizontal position
@@ -169,7 +169,7 @@ Examples:
 - vertical offset
 - trigger level
 - horizontal position
-- other draggable/continuous controls
+- vertical/horizontal scale when gesture driven
 
 During interaction:
 
@@ -225,7 +225,7 @@ When stopped or after a single acquisition:
 - use RAW waveform acquisition
 - retrieve the full acquisition into server memory
 - treat the transfer from the DHO804 as an explicit long-running operation
-- keep the full raw capture server-side
+- keep the full capture server-side
 - downsample on the server for the requested browser viewport
 - use min/max bucketing rather than every-Nth-sample decimation
 - return display-resolution binary waveform windows to the browser
@@ -237,24 +237,17 @@ Panning and zooming within an already acquired deep capture must not require ano
 
 See `waveforms.md`.
 
-## Waveform rendering
+## Waveform representation
 
-uPlot is the selected waveform renderer.
+The DHO804's native waveform codes and TMC/IEEE block format stop at the DHO804 driver boundary.
 
-uPlot receives display-sized datasets. It is not responsible for handling the full raw acquisition depth directly.
+The server normalizes waveform samples into numeric amplitude values before sending browser frames. Deep captures are stored as per-channel `Float32Array`s in the current channel amplitude unit, which keeps the rest of the application independent from Rigol native WORD encoding details.
 
-Waveform data must carry enough metadata to convert samples to real time/voltage values, including the equivalent of:
+The browser binary frame uses fixed-size indexed Float32 records. Each record carries the original source sample index and amplitude value, allowing the same format to represent both sequential live samples and min/max-downsampled deep points.
 
-- channel
-- sample count/range
-- X increment
-- X origin
-- X reference
-- Y increment
-- Y origin
-- Y reference
+The frame also carries X increment/origin/reference and channel amplitude unit, so the browser can derive real X values without receiving native Rigol Y code-scaling fields.
 
-The DHO804 is a 12-bit scope, so 16-bit sample storage is a natural representation for WORD waveform data.
+See `waveform-protocol.md`.
 
 ## Backpressure
 
@@ -267,6 +260,14 @@ If the browser cannot keep up:
 - never discard control, state or error messages merely to preserve old waveform data
 
 The live stream represents current state, not an event log.
+
+## Measurements
+
+Measurement results are dynamic data and do not live inside `ScopeState`.
+
+The browser requests only the measurements it is currently displaying. Start with a low refresh rate around 1 Hz and benchmark before increasing it. Measurement queries must not delay interactive scope controls.
+
+The initial shared measurement set and exact SCPI mapping are documented in `scope-model.md`.
 
 ## Version 1 scope
 
@@ -298,7 +299,9 @@ More of the DHO804 command set can be added incrementally after the interaction 
 - `scpi-scheduler.md` - SCPI priority, coalescing and latency behaviour
 - `frontend.md` - React/Zustand/uPlot data flow and interaction model
 - `waveforms.md` - live/deep waveform ownership, downsampling and viewport caching
-- `websocket-protocol.md` - browser/server message model
+- `websocket-protocol.md` - JSON browser/server message model
+- `waveform-protocol.md` - binary waveform frame layout
+- `testing.md` - fake layers, unit/integration tests and real-scope benchmarks
 
 ## References
 
