@@ -4,7 +4,7 @@
 
 This document is a self-contained implementation handoff for an engineer or coding LLM picking up the initial foundation work for Rigol Web.
 
-The goal is to establish a small, compiling, testable project skeleton and the minimum stable shared contracts needed for later implementation streams. Do the implementation work described here; do not redesign the application or expand into later streams.
+The goal is to establish a small, compiling, testable project skeleton and the stable shared contracts needed for later implementation streams. Do the implementation work described here; do not redesign the application or expand into later streams.
 
 ## Project context
 
@@ -45,6 +45,7 @@ Read these documents before implementation:
 - `docs/architecture.md`
 - `docs/development-practices.md`
 - `docs/typescript-practices.md`
+- `docs/scope-model.md`
 - `docs/server-architecture.md`
 - `docs/websocket-protocol.md`
 
@@ -83,7 +84,7 @@ The project intentionally targets the DHO804 first. Do not generalize for other 
 
 ## Foundation objective
 
-Create the repository skeleton and minimum shared seam that lets later implementation proceed in parallel with low merge-conflict risk.
+Create the repository skeleton and stable shared seam that lets later implementation proceed in parallel with low merge-conflict risk.
 
 After this stream, later work should be able to independently add:
 
@@ -189,8 +190,10 @@ It should not yet:
 - implement scheduling
 - open a WebSocket server
 - implement reconnect behaviour
-- contain scope state
+- contain runtime scope state
 - serve production frontend assets unless that falls out trivially from the chosen build setup
+
+The shared `ScopeState` type may exist in `src/shared/scope-types.ts`; the server shell must not instantiate or manage it yet.
 
 The server shell exists to prove the Node/TypeScript build and execution path works.
 
@@ -217,28 +220,37 @@ Later frontend streams own those decisions and components.
 
 ## Shared types
 
-The foundation owns only the minimum stable shared vocabulary needed to establish compile-time seams.
+The foundation owns the stable shared vocabulary that has already been specified by the architecture.
 
 ### `scope-types.ts`
 
-Define only domain types whose meaning is already unambiguous from the architecture.
+Implement the domain types from `docs/scope-model.md` exactly enough to establish the shared compile-time contract for later workstreams.
 
-At minimum this should include stable primitives such as the DHO804 channel identity:
+This includes:
 
-```ts
-export enum Channel {
-  Ch1 = 1,
-  Ch2 = 2,
-  Ch3 = 3,
-  Ch4 = 4,
-}
-```
+- `ScopeInfo`
+- `Channel`
+- `ChannelCoupling`
+- `ChannelState`
+- `ChannelStates`
+- `TimebaseMode`
+- `HorizontalState`
+- `AcquisitionType`
+- `AcquisitionState`
+- `ScopeRunState`
+- `TriggerType`
+- `TriggerSweep`
+- `EdgeSlope`
+- `TriggerCoupling`
+- `OtherTriggerType`
+- `TriggerState`
+- `ScopeState`
 
-Do not invent detailed trigger/acquisition/channel semantics that require SCPI manual research which belongs to the DHO804/state-model implementation work.
+Do not implement SCPI parsing, command strings or driver behaviour in this file. `scope-types.ts` contains the shared domain types only.
 
-Do not make a speculative giant `ScopeState` simply to appear complete. If the complete `ScopeState` has not yet been specified by the architecture, keep the foundation vocabulary intentionally small and let the appropriate later stream extend it.
+Do not change the documented model merely to make construction easier. In particular, do not add `?`, `undefined`, `null`, broad strings, `unknown` payloads or generic key/value bags.
 
-Most importantly, do not hide undecided modelling behind `?`, `undefined`, `null`, `unknown`, broad string dictionaries or generic key/value bags.
+The trigger model is intentionally a discriminated union: Edge trigger has its required Edge-specific fields, while other DHO804 trigger types contain only the state version 1 actually models.
 
 ### `websocket-protocol.ts`
 
@@ -266,7 +278,7 @@ export enum MessageType {
 }
 ```
 
-Also establish the documented fixed enums whose values are already decided, including:
+Also establish the documented fixed enums whose values are already decided:
 
 ```ts
 export enum AcquisitionAction {
@@ -279,13 +291,25 @@ export enum WaveformKind {
   Live = 1,
   DeepViewport = 2,
 }
+
+export enum ControlKind {
+  ChannelEnabled = 1,
+  ChannelScale = 2,
+  ChannelOffset = 3,
+  HorizontalScale = 4,
+  HorizontalPosition = 5,
+  TriggerLevel = 6,
+  TriggerType = 7,
+  TriggerSource = 8,
+  TriggerSlope = 9,
+}
 ```
 
-`ControlKind` may contain the currently documented values, but do not invent additional control kinds during foundation work.
+Do not invent additional control kinds during foundation work.
 
-Where a full message interface depends on an unsettled detailed domain model, do not invent the model merely so every conceptual protocol message can be represented on day one. Establish the stable enums and only concrete message types whose payload types are already well-defined.
+Where a full message interface still depends on a later behavioural decision, do not create generic placeholders merely so every conceptual message can be represented on day one. Establish the stable enums and concrete message types whose payloads are already unambiguous from `scope-model.md` and `websocket-protocol.md`.
 
-The later state/control implementation stream can expand the shared contract deliberately.
+In particular, do not implement WebSocket routing, acknowledgements, backpressure or binary-frame encoding in the foundation.
 
 ## Protocol version
 
@@ -300,12 +324,13 @@ Set up Vitest and include a small number of foundation-level tests that provide 
 Useful tests include:
 
 - protocol enum values are the documented stable integers
+- domain enum values used on the wire remain the documented integers
 - simple shared helper behaviour, if any exists
 - a server health test only if it remains small and does not require introducing a test framework around HTTP
 
 Do not write placeholder tests for future SCPI, scheduler, waveform or UI functionality.
 
-The purpose here is to prove the test toolchain works, not to create fake coverage.
+The purpose here is to prove the test toolchain works and protect stable shared values, not to create fake coverage.
 
 ## Build outputs
 
@@ -329,9 +354,9 @@ Do not implement any of the following in this workstream:
 - IEEE binary-block parsing
 - SCPI scheduler
 - priority queues or coalescing
-- DHO804 SCPI commands
-- scope discovery
-- full `ScopeState` mapping
+- DHO804 SCPI command execution or response parsing
+- scope discovery or connection logic
+- runtime scope-state reads/writes
 - scope polling
 - WebSocket server/client behaviour
 - command routing
@@ -359,7 +384,7 @@ Do not create generic catch-all types or helpers that every future stream will e
 
 Do not create `utils.ts`, `types.ts`, `constants.ts` or similar dumping-ground modules.
 
-The initial shared protocol values should be explicit and boring.
+The initial shared protocol values and domain model should be explicit and boring.
 
 ## Definition of done
 
@@ -371,10 +396,11 @@ The foundation is complete when all of the following are true:
 4. `pnpm build` succeeds and produces separate server/web output.
 5. `pnpm dev:server` starts the minimal Node server and `/health` succeeds.
 6. `pnpm dev:web` starts the Vite frontend and renders the minimal Rigol Web shell.
-7. Stable documented protocol enums use actual numeric TypeScript enums with explicit wire values.
-8. TypeScript filenames follow lowercase kebab-case and there are no `index.ts` files.
-9. No SCPI, waveform, control-plane or real UI feature work has leaked into the foundation.
-10. The diff remains small enough that the later implementation streams can branch from it without inheriting unnecessary abstractions.
+7. `src/shared/scope-types.ts` implements the finalized `ScopeState` domain contract from `docs/scope-model.md` without optional-field shortcuts.
+8. Stable documented protocol enums use actual numeric TypeScript enums with explicit wire values.
+9. TypeScript filenames follow lowercase kebab-case and there are no `index.ts` files.
+10. No SCPI, waveform, control-plane or real UI feature work has leaked into the foundation.
+11. The diff remains small enough that the later implementation streams can branch from it without inheriting unnecessary abstractions.
 
 ## Implementation behaviour for an LLM
 
@@ -386,7 +412,7 @@ When executing this workstream:
 - keep the diff focused on foundation work
 - prefer simple conventional configuration over clever tooling
 - do not add optional fields to avoid making a modelling decision
-- do not guess at DHO804-specific semantics that are not part of this stream
+- copy the finalized shared domain semantics from `docs/scope-model.md`; do not reinterpret the Rigol manual in the foundation stream
 - run the relevant install, typecheck, test and build commands before declaring completion
 - report the files changed and the commands/results at the end
 
