@@ -2,11 +2,11 @@
 
 ## Audience
 
-This handoff covers the server-side application/control plane after foundation has landed.
+This handoff covers the server-side application/control plane after Foundation has landed.
 
 It owns cached scope state, control semantics, state validation polling and browser WebSocket JSON transport. It does **not** own SCPI/TCP implementation, waveform acquisition/downsampling or React.
 
-This workstream can be developed in parallel with the waveform and frontend workstreams once the foundation/shared contracts exist.
+This workstream can be developed in parallel with the waveform and frontend workstreams using typed driver fakes.
 
 ## Read first
 
@@ -21,12 +21,11 @@ Read:
 - `docs/websocket-protocol.md`
 - `docs/waveform-protocol.md`
 - `docs/testing.md`
-
-Also read the public API exported by the SCPI-backend workstream if it has already landed. If developing in parallel, use the required driver surface described below and keep any temporary test fake local to this workstream.
+- `docs/workstreams/scpi-backend.md`
 
 ## File ownership
 
-This workstream owns:
+Own:
 
 ```text
 src/server/scope/
@@ -42,7 +41,7 @@ src/server/websocket/
 `- websocket-gateway.test.ts
 ```
 
-It does not own:
+Do not edit:
 
 - `src/server/scpi/**`
 - `src/server/scope/dho804-driver.ts`
@@ -50,36 +49,34 @@ It does not own:
 - `src/server/server.ts`
 - `src/server/scope-runtime.ts`
 - `src/web/**`
-- shared protocol/type files created by foundation
+- `src/shared/**`
 
-Final runtime composition belongs to the integration workstream.
+Final runtime composition belongs to Integration.
 
-## Required lower-level driver surface
+# Driver surface
 
-This workstream expects a typed `Dho804Driver` with the capabilities defined by `docs/workstreams/scpi-backend.md`:
+Consume the typed DHO804 driver contract from the SCPI backend, including:
 
-- read complete `ScopeState`
-- focused reads/writes for each v1 control
-- `readTriggerState(priority)` or equivalent focused complete trigger read
-- Run/Stop/Single
-- measurement reads
-- raw text SCPI console
+```ts
+readScopeState(priority): Promise<ScopeState>;
+readChannelState(channel, priority): Promise<ChannelState>;
+readHorizontalState(priority): Promise<HorizontalState>;
+readAcquisitionState(priority): Promise<AcquisitionState>;
+readTriggerState(priority): Promise<TriggerState>;
+readRunState(priority): Promise<ScopeRunState>;
+```
 
-The controller must never construct DHO804 SCPI strings.
+plus focused reads/writes for each v1 control, Run/Stop/Single, measurements and raw text SCPI.
 
-If the concrete driver method names differ slightly, adapt at import/call sites rather than adding a generic instrument abstraction.
+Never construct SCPI strings here.
 
-## `ScopeStateStore`
+# ScopeStateStore
 
-`ScopeStateStore` owns one complete connected `ScopeState` snapshot and subscriptions to snapshot replacement.
-
-Construct it with a complete state:
+Construct with one complete connected `ScopeState`:
 
 ```ts
 new ScopeStateStore(initialState)
 ```
-
-It must never contain a half-populated scope.
 
 A suitable API is:
 
@@ -90,216 +87,245 @@ update(updater: (state: ScopeState) => ScopeState): void;
 subscribe(listener: (state: ScopeState) => void): () => void;
 ```
 
-Exact names may vary, but keep it small.
+Do not represent disconnect with an optional `ScopeState`.
 
-Do not make `ScopeState` optional to represent disconnect. Connection lifecycle is a different state and belongs at the runtime/gateway boundary.
+Treat snapshots immutably enough that subscribers can reliably observe replacement/change.
 
-The store does not query the DHO804 and contains no SCPI strings.
+Waveform arrays never enter this store.
 
-## Immutable snapshot behaviour
+# ScopeController
 
-Treat `ScopeState` snapshots as replaceable values.
+The controller owns browser-action semantics and cached-state reconciliation.
 
-Avoid mutating nested channel objects in place if that makes subscribers unable to detect change reliably.
-
-This state is small. Clarity is more important than micro-optimizing allocation here.
-
-Waveform arrays do not enter this store.
-
-## `ScopeController`
-
-`ScopeController` owns application semantics between browser control messages and `Dho804Driver`.
-
-Responsibilities:
+It handles:
 
 - `ControlSet`
 - `InteractionUpdate`
 - `InteractionCommit`
 - Run/Stop/Single
-- measurement reads
+- measurements
 - raw SCPI console
-- optimistic server state
-- authoritative focused readback
-- protecting cached state from stale poll results
+- optimistic state
+- focused authoritative readback
+- stale-poll protection
 
 It does not know about WebSocket objects.
 
-## State revision
+## Mutation revision
 
-Use one simple monotonic server-side mutation revision to prevent a long background poll from overwriting newer local work.
-
-Conceptually:
+Use one monotonic server-side revision:
 
 ```ts
 private mutationRevision = 0;
 ```
 
-Increment it whenever Rigol Web performs a local state-affecting action or starts/updates an interaction.
+Increment whenever Rigol Web performs/starts a local state-affecting action or interaction update.
 
-Before a poll starts, the poller records:
+A poll captures the revision before beginning. When its complete `ScopeState` returns, apply it only if the revision is unchanged.
 
-```ts
-const revision = controller.getMutationRevision();
-```
+If a local mutation happened while the P4 snapshot was being assembled, discard that whole poll result. The next approximately 1 Hz cycle will validate again.
 
-When the complete polled state returns:
+This intentionally avoids per-property optional timestamps/conflict machinery.
 
-```ts
-controller.applyPolledState(polledState, revision);
-```
+# Optimistic changes
 
-Apply the snapshot only if the current mutation revision still equals the revision captured at poll start.
-
-If any local mutation occurred while the poll was in flight, discard that entire poll result. The next approximately 1 Hz cycle will catch physical/external changes.
-
-This is intentionally coarse. It is simpler and safer than per-property stale-poll bookkeeping, and a discarded poll cycle is cheap compared with a UI value jumping backwards.
-
-Do not use optional per-property timestamps or a generic conflict-resolution framework.
-
-## Discrete control flow
-
-For `ControlSet`:
-
-1. validate the semantic operation at the protocol/controller boundary
-2. optimistically update the cached state where the new shape is already valid
-3. increment mutation revision
-4. issue the typed driver write at Normal priority
-5. perform a focused readback where necessary to obtain the actual scope value
-6. replace the corresponding cached value with authoritative readback
-7. let store subscribers publish the new full snapshot
-
-For ordinary discrete values, focused readback is preferred where it is cheap.
-
-For structural trigger-type change to Edge, the cached `TriggerState` cannot be validly changed by setting only `type`; the Edge variant requires source/slope/level/coupling. Therefore:
-
-- send `TriggerType.Edge`
-- call `readTriggerState(Normal)` afterwards
-- replace the whole trigger object with that authoritative complete Edge state
-
-Do not temporarily construct an invalid Edge object with missing fields.
-
-## Interactive control flow
-
-For `InteractionUpdate`:
-
-1. increment mutation revision
-2. apply the desired value to the server cached snapshot immediately
-3. invoke the corresponding driver setter at `ScpiPriority.Interactive`
-4. do not query the scope after each intermediate value
-5. do not wait for acknowledgement before the next update
-
-The DHO804 driver/scheduler owns latest-value-wins coalescing.
-
-For `InteractionCommit`:
-
-1. increment mutation revision
-2. apply the final desired value to cached state
-3. send the final setter at `ScpiPriority.Immediate`
-4. when that write completes, issue the focused property read at `ScpiPriority.Immediate`
-5. update the cached field to the authoritative returned value
-6. complete the request
-
-The P0 final write/readback must not be replaced by an intermediate P1 value.
-
-## Control mapping
-
-Use the shared `ControlChange` union exactly.
-
-Map:
-
-- `ChannelEnabled` -> driver channel display write/read
-- `ChannelScale` -> channel scale
-- `ChannelOffset` -> channel offset
-- `HorizontalScale` -> main timebase scale
-- `HorizontalPosition` -> main timebase offset
-- `TriggerLevel` -> Edge trigger level
-- `TriggerType` -> version 1 accepts only `TriggerType.Edge`
-- `TriggerSource` -> Edge source
-- `TriggerSlope` -> Edge slope
-
-If an Edge-only control is received while authoritative trigger type is not Edge, fail that request clearly. Do not silently send an Edge subcommand under another trigger type.
-
-The frontend can explicitly send `TriggerType.Edge` first.
-
-## Optimistic update helpers
-
-Because `ScopeState` is strongly typed and nested, write small explicit update helpers rather than a generic path mutation utility.
+Write small explicit semantic state-update functions.
 
 Examples:
 
 ```text
-replaceChannel(state, channel, update)
-setHorizontalScale(state, value)
-setTriggerLevel(edgeState, value)
+replaceChannel(...)
+setChannelOffset(...)
+setHorizontalPosition(...)
+setEdgeTriggerLevel(...)
 ```
 
-Do not introduce `setByPath`, string property names or `Record<string, unknown>`.
+Do not use generic string property paths or `Record<string, unknown>` mutation helpers.
 
-## Run/Stop/Single
+For a control whose new shape is already valid, update cached state immediately before/while sending the scope write.
 
-Acquisition actions are immediate commands.
+For a structural change such as non-Edge -> Edge trigger, do **not** optimistically construct an incomplete Edge union member. Send the trigger-type write, then read a complete `TriggerState` and replace the trigger object.
 
-Controller flow:
+# Discrete ControlSet flow
+
+General flow:
+
+1. validate semantic operation
+2. increment mutation revision
+3. optimistically update cached state where structurally valid
+4. send typed driver write at Normal priority
+5. perform the control's required authoritative readback group
+6. update all affected cached fields from the returned scope state
+7. complete request
+
+A write may affect more than the exact property named by the browser. Read back the dependent effective state instead of waiting for the next poll where the dependency is important to the UI.
+
+## Required dependent readback groups
+
+### Channel enabled
+
+Changing enabled-channel count can alter effective memory depth/sample rate.
+
+After the write, read:
+
+- `readChannelState(channel, Normal)`
+- `readAcquisitionState(Normal)`
+
+Update both channel and acquisition state.
+
+### Channel scale
+
+Changing scale can clamp/alter channel offset range, and may affect valid Edge trigger level when that channel is the trigger source.
+
+After the write:
+
+- read complete `ChannelState`
+- if current trigger is Edge and uses this channel, read complete `TriggerState`
+
+### Channel offset
+
+For a discrete offset change:
+
+- read complete `ChannelState`
+- if current trigger is Edge and uses this channel, read complete `TriggerState`
+
+This catches any dependent trigger-level clamping.
+
+### Horizontal scale
+
+Changing time/div can change horizontal position through the scope's expansion-reference behaviour and changes effective sample rate.
+
+After the write, read:
+
+- `HorizontalState`
+- `AcquisitionState`
+
+Do not assume the previous horizontal position remains authoritative.
+
+### Horizontal position
+
+Read focused horizontal state/position after the write.
+
+### Trigger type
+
+Version 1 only accepts a browser write selecting `TriggerType.Edge`.
+
+After the write, read complete `TriggerState` because Edge requires source/slope/level/coupling.
+
+### Trigger source
+
+After the write, read complete `TriggerState` because changing source can change valid level/coupling/effective trigger state.
+
+### Trigger slope
+
+Read slope or complete `TriggerState`; no optional intermediate object.
+
+### Trigger level
+
+Read authoritative level after the write.
+
+These extra reads are for discrete/final reconciliation, not every intermediate drag value.
+
+# Interactive flow
+
+## InteractionUpdate
+
+For each intermediate update:
 
 1. increment mutation revision
-2. call the typed driver Run/Stop/Single action
-3. read `ScopeRunState` or a small authoritative state subset after completion where useful
-4. update the cached state
+2. apply desired value to cached state immediately
+3. call matching driver setter at `ScpiPriority.Interactive`
+4. do not query the scope
+5. do not await an acknowledgement before accepting later updates
 
-Do not pretend the action is a direct assignment to `runState` because Single may transition through WAIT/TD before STOP.
+The driver/scheduler owns latest-value-wins coalescing.
 
-The approximately 1 Hz poll continues to reflect the ongoing run status.
+## InteractionCommit
 
-## Measurements
+For the final value:
 
-`MeasurementRead` is request/response work outside `ScopeState`.
+1. increment mutation revision
+2. apply final desired value optimistically
+3. send setter at P0
+4. perform P0 authoritative readback
+5. update all dependent cached state
+6. complete request
 
-Controller:
+Dependent final readbacks:
 
-- validates non-empty specs
-- asks driver for values at Background priority
-- returns the full ordered `MeasurementValue[]`
-- fails the request if any measurement fails
+- ChannelScale -> ChannelState and Edge TriggerState if source matches
+- ChannelOffset -> ChannelState and Edge TriggerState if source matches
+- HorizontalScale -> HorizontalState and AcquisitionState
+- HorizontalPosition -> HorizontalState
+- TriggerLevel -> TriggerState
 
-Measurement reads should not increment state mutation revision because they do not change scope configuration.
+The P0 final write/readback cannot be replaced by P1 intermediates.
 
-They may be delayed behind interactive/user control work.
+# Edge-only controls
 
-## Raw SCPI console
+If `TriggerSource`, `TriggerSlope` or `TriggerLevel` arrives while authoritative trigger type is not Edge, fail clearly.
 
-The controller passes the raw console string to `Dho804Driver.executeRawScpi` or equivalent.
+Do not silently send an Edge subcommand under another trigger type.
 
-After any raw SCPI execution, increment mutation revision conservatively because the command may have changed scope state.
+Frontend explicitly sends `TriggerType.Edge` first.
 
-Do not attempt to parse arbitrary console commands and manually mutate cached state. The next validation cycle will reconcile it.
+# Run / Stop / Single
 
-Binary raw query results are rejected in version 1 as documented in `websocket-protocol.md`.
+These are actions, not assignments to `runState`.
 
-## `ScopePoller`
+Flow:
 
-`ScopePoller` owns its timer.
+1. increment mutation revision
+2. call typed immediate driver action
+3. read `ScopeRunState` afterwards when useful
+4. update cached run state
+
+Single may move through WAIT/TD before STOP, so the approximately 1 Hz poll continues to reflect later transitions.
+
+# Measurements
+
+Measurements are outside `ScopeState`.
+
+For `MeasurementRead`:
+
+- require a non-empty request
+- call driver at Background priority
+- preserve requested order
+- return all values or fail the whole request
+- do not increment mutation revision
+
+Measurement work must not delay interaction.
+
+# Raw SCPI console
+
+Pass raw command to the driver at Normal priority.
+
+After any raw execution:
+
+- increment mutation revision conservatively because arbitrary SCPI may change state
+- do not try to parse arbitrary command text into cached-state mutations
+- let the next validation cycle reconcile
+
+A binary query is consumed safely by the SCPI transport and then rejected by the text-only v1 console, as specified by the backend/protocol docs.
+
+# ScopePoller
 
 Initial period: approximately 1,000 ms.
 
-On each cycle:
+Each cycle:
 
-1. if the previous cycle is still running, skip this tick
+1. if previous cycle is still running, skip this tick
 2. capture controller mutation revision
-3. call `driver.readScopeState(ScpiPriority.Background)`
-4. on success, call `controller.applyPolledState(state, capturedRevision)`
-5. if revision changed, the result is discarded
+3. `driver.readScopeState(Background)`
+4. apply only if revision remains unchanged
 
-Do not queue polls.
+Do not queue poll cycles.
 
-Do not make the scheduler aware of the timer.
+The poller owns its timer; scheduler does not.
 
-The approximately 1 Hz period is a starting point, not a hard real-time requirement.
+# WebSocket connection state
 
-## WebSocket connection state
-
-Do not represent disconnected state by making scope fields optional.
-
-Use a discriminated union with a numeric enum, for example:
+Keep disconnect lifecycle separate from `ScopeState` using a numeric union, for example:
 
 ```ts
 export enum ServerScopeConnectionKind {
@@ -319,172 +345,150 @@ export type ServerScopeConnection =
     };
 ```
 
-The final runtime/integration workstream can set the current connection variant on the gateway.
+Runtime/Integration swaps the current connection/session variant.
 
-## `WebSocketGateway`
+# WebSocketGateway
 
-The gateway owns browser transport only.
+Own browser transport only.
 
-Use `ws`, already installed by foundation.
+Use `ws` with per-message compression disabled initially.
 
 Responsibilities:
 
-- accept browser WebSocket clients on the existing HTTP server
-- send current connection/scope state to a newly connected browser
-- validate incoming JSON structure
-- dispatch control/measurement/SCPI messages to `ScopeController`
-- dispatch deep-capture/viewport requests through explicit waveform callbacks supplied by integration
-- send complete `ScopeState` snapshots on store changes
-- send command/result/error JSON
-- expose a method/callback target for binary waveform publication
-- enforce outgoing waveform backpressure
+- accept browser clients
+- send current scope lifecycle/state to new clients
+- explicitly validate JSON variants
+- dispatch control/measurement/SCPI requests
+- dispatch deep capture/viewport through required waveform callbacks supplied by Integration
+- broadcast complete `ScopeState` snapshots on store changes
+- send completion/result/failure JSON
+- expose binary waveform publication
+- bound/replace stale waveform output under backpressure
 
-It must not contain SCPI strings or downsampling.
+No SCPI strings or downsampling here.
 
 ## Waveform integration seam
 
-The waveform workstream owns the actual services. To keep file ownership separate, the gateway accepts required explicit callbacks/interfaces rather than importing a concrete waveform service implementation during this workstream.
-
-A suitable structural contract is conceptually:
+Accept required callbacks/interface equivalent to:
 
 ```ts
 interface WaveformRequestHandlers {
-  requestDeepCapture(requestId: number): Promise<DeepCaptureReadyMessage>;
-  requestViewport(request: WaveformViewportRequestMessage): Promise<Uint8Array>;
+  requestDeepCapture(
+    requestId: number,
+  ): Promise<DeepCaptureReadyMessage>;
+
+  requestViewport(
+    request: WaveformViewportRequestMessage,
+  ): Promise<Uint8Array>;
 }
 ```
 
-If you prefer individual constructor callbacks rather than an interface object, that is also fine.
-
-Do not make these callbacks optional. The integration workstream supplies real implementations; tests supply small fakes.
-
-The gateway also exposes something equivalent to:
+and expose something equivalent to:
 
 ```ts
 broadcastWaveform(frame: Uint8Array): void;
 ```
 
-for `LiveWaveformService` publication.
+Do not make these optional or create a DI framework. Integration supplies real callbacks; tests supply fakes.
 
-This is a narrow explicit seam, not a DI framework.
+# JSON validation
 
-## JSON validation
-
-Write small explicit runtime validators for the shared client message variants.
+Small explicit checks are enough; do not add a schema dependency.
 
 Reject:
 
 - malformed JSON
 - unknown `MessageType`
-- non-integer/negative request IDs
-- invalid numeric enum values
+- invalid request IDs
+- invalid numeric enums/channels
 - non-finite control numbers
-- invalid channel numbers
 - empty measurement requests
-- invalid deep viewport ranges
+- invalid viewport ranges/pixel width
 
-The validator may return a discriminated result or throw a dedicated protocol error. Do not produce partially valid objects.
+Do not construct partially valid objects.
 
-Do not add Zod or another schema dependency unless there is a later concrete reason.
+# Request result rules
 
-## Request results
+One logical result/failure for each request ID:
 
-Messages with `requestId` produce exactly one logical success result or failure.
-
-Examples:
-
-- ControlSet -> `CommandCompleted` / `CommandFailed`
+- ControlSet -> completion/failure
 - InteractionCommit -> completion/failure
 - AcquisitionAction -> completion/failure
-- MeasurementRead -> `MeasurementResult` / failure
-- ScpiExecute -> `ScpiResult` / failure
-- DeepCaptureRequest -> `DeepCaptureReady` / failure
-- WaveformViewportRequest -> binary frame / failure
+- MeasurementRead -> MeasurementResult/failure
+- ScpiExecute -> ScpiResult/failure
+- DeepCaptureRequest -> DeepCaptureReady/failure
+- WaveformViewportRequest -> binary frame/failure
 
-Intermediate `InteractionUpdate` has no acknowledgement.
+`InteractionUpdate` has no acknowledgement.
 
-## Multi-client behaviour
+# Multi-client behaviour
 
-Keep it simple.
+Multiple tabs share one physical scope and server state.
 
-Multiple browser tabs may connect. There is one shared physical scope and one shared server `ScopeState`.
+- broadcast state to all
+- accept valid control from any
+- no ownership/session locking
 
-- broadcast authoritative state snapshots to all clients
-- accept valid control commands from any connected client
-- do not add ownership/session locking
-- all clients see the resulting state
+Last useful operation wins through normal scheduler/state semantics. This is sufficient for a personal tool.
 
-If two clients fight over a control, last useful operation wins through the same scope/scheduler semantics. This is acceptable for a personal tool.
+# Binary backpressure
 
-## WebSocket waveform backpressure
+Never preserve stale waveform data at the expense of JSON control/state/errors.
 
-JSON state/control/error messages must not be dropped merely to preserve old waveform frames.
+Per client:
 
-For each client, keep waveform buffering bounded.
+- bound outgoing waveform buffering
+- retain newest pending live frame per channel
+- discard superseded deep viewport frames
+- use `ws.bufferedAmount`/send callbacks pragmatically
 
-A simple implementation is sufficient:
+No custom streaming subsystem.
 
-- if a waveform write is currently backed up, retain only the newest pending live frame per channel
-- retain only the newest pending deep viewport frame relevant to current requests
-- when the socket has room again, send the newest retained frame
-- discard superseded waveform data
-
-Do not create an unbounded FIFO of binary frames.
-
-Use `ws.bufferedAmount` and send completion callbacks pragmatically; do not build a custom streaming protocol.
-
-Disable per-message compression for the WebSocket server initially.
-
-## Tests
+# Tests
 
 Follow `testing.md`.
 
-Required cases include:
+Required cases:
 
-- complete state-store snapshot replacement/subscription
-- optimistic updates
-- stale poll revision discarded
-- fresh poll applied
-- final commit write then focused readback
+- complete store snapshots/subscriptions
+- optimistic semantic updates
+- stale poll revision discarded; fresh poll applied
+- dependent readback groups above
+- final P0 commit then readback
 - non-Edge control rejection
-- trigger-type transition obtains complete Edge state
-- measurement result order/failure semantics
-- raw SCPI increments mutation revision
+- trigger type transition produces complete Edge state
+- measurement order/failure
+- raw SCPI revision invalidation
 - poll cycles do not overlap
-- JSON validation rejects bad variants
-- request IDs preserved
-- multiple clients receive state broadcast
-- binary waveform path stays outside state store
-- backpressure replaces stale waveform frames
+- JSON validation
+- request IDs/results
+- multi-client state broadcast
+- binary data never enters state store
+- waveform backpressure replaces stale frames
 
-Do not mock SCPI strings here. Fake the typed driver methods.
+Fake typed driver methods; do not mock SCPI strings here.
 
-## Non-goals
+# Non-goals
 
 Do not implement:
 
-- TCP sockets to the DHO804
-- SCPI response parsing
-- scheduler internals
-- waveform acquisition
-- deep capture storage/downsampling
-- waveform binary encoding
+- DHO TCP/SCPI parsing/scheduler
+- waveform acquisition/downsampling/encoding
 - React/Zustand/uPlot
-- final server startup/composition
-- automatic reconnect loops
+- final runtime/startup/reconnect
 - auth/session ownership
 
-## Definition of done
+# Definition of done
 
-This workstream is complete when:
+Complete when:
 
-1. `ScopeStateStore` holds/subscribes complete strongly typed snapshots.
-2. `ScopeController` implements normal controls, optimistic interactive updates, final P0 readback semantics, measurements and raw console routing.
-3. Stale background polls cannot overwrite newer local work.
-4. `ScopePoller` performs non-overlapping approximately 1 Hz background validation.
-5. `WebSocketGateway` validates/dispatches the complete JSON protocol and broadcasts state/results.
-6. Gateway has a narrow explicit integration seam for waveform requests/publication without implementing waveform logic.
-7. WebSocket waveform output is bounded/latest-oriented under backpressure.
-8. Tests pass without a physical DHO804.
+1. state store holds only complete connected snapshots.
+2. controller implements optimistic controls, P0 final reconciliation and documented dependent readbacks.
+3. stale poll snapshots cannot overwrite newer local work.
+4. poller is non-overlapping approximately 1 Hz background validation.
+5. gateway validates/dispatches finalized JSON protocol and broadcasts full state.
+6. waveform integration seam is explicit and narrow.
+7. binary backpressure is bounded/latest-oriented.
+8. tests pass without physical DHO804.
 9. `pnpm typecheck` and `pnpm test` pass.
-10. No SCPI/backend, waveform-service or frontend ownership boundaries were crossed.
+10. no backend/waveform/frontend ownership boundary was crossed.
