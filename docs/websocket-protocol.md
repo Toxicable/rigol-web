@@ -13,6 +13,38 @@ Use:
 
 HTTP is only needed for application assets and simple endpoints such as `/health`.
 
+Protocol discriminants and fixed protocol values use actual numeric TypeScript enums. Property names remain descriptive.
+
+TypeScript conventions are documented in `typescript-practices.md`.
+
+## Message types
+
+Assign protocol enum values explicitly and keep them stable once used on the wire.
+
+The initial message space can be grouped for readability:
+
+```ts
+export enum MessageType {
+  ScopeConnected = 1,
+  ScopeState = 2,
+  ScopeDisconnected = 3,
+
+  ControlSet = 10,
+  InteractionUpdate = 11,
+  InteractionCommit = 12,
+  AcquisitionAction = 13,
+  DeepCaptureRequest = 14,
+  WaveformViewportRequest = 15,
+  ScpiExecute = 16,
+
+  CommandCompleted = 20,
+  CommandFailed = 21,
+  ScpiResult = 22,
+}
+```
+
+Do not use string discriminants such as `"interaction.update"` or `"scope.state"` on the wire.
+
 ## State delivery
 
 The server sends complete authoritative `ScopeState` snapshots rather than `Partial<ScopeState>` patches.
@@ -24,19 +56,21 @@ Conceptually:
 ```ts
 type ServerMessage =
   | {
-      type: "scope.connected";
-      protocolVersion: 1;
+      type: MessageType.ScopeConnected;
+      protocolVersion: number;
       info: ScopeInfo;
       state: ScopeState;
     }
   | {
-      type: "scope.state";
+      type: MessageType.ScopeState;
       state: ScopeState;
     }
   | {
-      type: "scope.disconnected";
+      type: MessageType.ScopeDisconnected;
       reason: string;
-    };
+    }
+  | CommandResult
+  | ScpiResultMessage;
 ```
 
 ## Client commands
@@ -58,13 +92,28 @@ type ClientMessage =
   | ScpiExecuteMessage;
 ```
 
+Control kinds are also numeric enums rather than string paths:
+
+```ts
+export enum ControlKind {
+  ChannelEnabled = 1,
+  ChannelScale = 2,
+  ChannelOffset = 3,
+  HorizontalScale = 4,
+  HorizontalPosition = 5,
+  TriggerLevel = 6,
+}
+```
+
+The exact control set grows with implemented scope features. The protocol should keep semantic control variants rather than accepting arbitrary object paths.
+
 ## Discrete control changes
 
 Ordinary controls use request IDs so completion or failure can be associated with the originating operation.
 
 ```ts
 interface ControlSetMessage {
-  type: "control.set";
+  type: MessageType.ControlSet;
   requestId: number;
   control: ControlChange;
 }
@@ -78,7 +127,7 @@ They do not need a request ID or acknowledgement for every intermediate value.
 
 ```ts
 interface InteractionUpdateMessage {
-  type: "interaction.update";
+  type: MessageType.InteractionUpdate;
   control: InteractiveControl;
 }
 ```
@@ -87,7 +136,7 @@ The final value is sent separately as an interaction commit:
 
 ```ts
 interface InteractionCommitMessage {
-  type: "interaction.commit";
+  type: MessageType.InteractionCommit;
   requestId: number;
   control: InteractiveControl;
 }
@@ -97,32 +146,40 @@ The server schedules the committed value at highest priority and performs author
 
 ## Acquisition actions
 
+Use a numeric enum for the action itself:
+
 ```ts
+export enum AcquisitionAction {
+  Run = 1,
+  Stop = 2,
+  Single = 3,
+}
+
 interface AcquisitionActionMessage {
-  type: "acquisition.action";
+  type: MessageType.AcquisitionAction;
   requestId: number;
-  action: "run" | "stop" | "single";
+  action: AcquisitionAction;
 }
 ```
 
 ## Command completion
 
-Messages with a `requestId` receive a completion or failure response.
+Messages with a `requestId` receive a completion or failure response where an explicit result is useful.
 
 ```ts
 type CommandResult =
   | {
-      type: "command.completed";
+      type: MessageType.CommandCompleted;
       requestId: number;
     }
   | {
-      type: "command.failed";
+      type: MessageType.CommandFailed;
       requestId: number;
       error: string;
     };
 ```
 
-The UI should remain optimistic where appropriate and should not generally block interaction waiting for `command.completed`.
+The UI should remain optimistic where appropriate and should not generally block interaction waiting for `CommandCompleted`.
 
 ## Raw SCPI console
 
@@ -130,9 +187,15 @@ The SCPI console uses explicit request/response messages and is not a bypass aro
 
 ```ts
 interface ScpiExecuteMessage {
-  type: "scpi.execute";
+  type: MessageType.ScpiExecute;
   requestId: number;
   command: string;
+}
+
+interface ScpiResultMessage {
+  type: MessageType.ScpiResult;
+  requestId: number;
+  response: string;
 }
 ```
 
@@ -141,6 +204,15 @@ Raw console commands still pass through the normal serialized SCPI path so they 
 ## Live waveforms
 
 Live waveform samples are sent as binary frames.
+
+Binary headers should also use numeric fixed values rather than serialized strings, for example:
+
+```ts
+export enum WaveformKind {
+  Live = 1,
+  DeepViewport = 2,
+}
+```
 
 Live frames should contain enough fixed metadata to identify and scale the payload, including:
 
@@ -161,13 +233,32 @@ Live waveform frames are disposable. When backpressure occurs, prefer the newest
 
 The server owns the full deep capture. The browser does not normally receive the complete raw acquisition.
 
-Deep-capture lifecycle/control messages are JSON.
+Deep-capture lifecycle/control messages are JSON using numeric message discriminants.
 
 The browser requests display-resolution viewport data by capture ID, sample range and pixel width.
 
-The corresponding sample payload is returned as a binary frame.
+The corresponding sample payload is returned as a binary frame using `WaveformKind.DeepViewport`.
 
 See `waveforms.md` for downsampling and overscan behaviour.
+
+## Protocol representation
+
+Numeric enums reduce repeated string values without making the protocol opaque.
+
+Keep descriptive object keys:
+
+```json
+{
+  "type": 11,
+  "control": {
+    "kind": 3,
+    "channel": 1,
+    "value": 0.42
+  }
+}
+```
+
+Do not compress ordinary protocol messages into positional arrays merely to save a few additional bytes.
 
 ## Protocol versioning
 
