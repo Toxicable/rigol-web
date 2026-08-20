@@ -12,7 +12,9 @@ import { ControlKind, type InteractiveControl } from "../../shared/websocket-pro
 import {
   channelOffsetFromDrag,
   horizontalPositionFromDrag,
+  horizontalRangeFromDrag,
   triggerLevelFromDrag,
+  type HorizontalRange,
 } from "../interaction-math.js";
 import { DeepCaptureKind, useScopeStore } from "../scope-store.js";
 import type { ScopeWebSocketClient } from "../websocket-client.js";
@@ -24,13 +26,24 @@ interface WaveformPlotProps {
   client: ScopeWebSocketClient;
 }
 
+interface DeepVisibleRange extends HorizontalRange {
+  captureId: number;
+}
+
 type DragState =
   | {
-      kind: "horizontal";
+      kind: "live-horizontal";
       pointerId: number;
       startX: number;
       startPosition: number;
       scale: number;
+      width: number;
+    }
+  | {
+      kind: "deep-horizontal";
+      pointerId: number;
+      startX: number;
+      startRange: DeepVisibleRange;
       width: number;
     }
   | {
@@ -86,10 +99,14 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
   const plotRef = useRef<uPlot | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const [size, setSize] = useState({ width: 1, height: 1 });
+  const [deepVisibleRange, setDeepVisibleRange] = useState<DeepVisibleRange | null>(null);
   const applyOptimisticControl = useScopeStore(
     (state) => state.applyOptimisticControl,
   );
   const deepCapture = useScopeStore((state) => state.deepCapture);
+  const isDeep =
+    deepCapture.kind === DeepCaptureKind.Ready &&
+    controller.getDisplayMode() === WaveformDisplayMode.Deep;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -176,50 +193,90 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
   }, [controller]);
 
   useEffect(() => {
+    if (!isDeep || deepCapture.kind !== DeepCaptureKind.Ready) {
+      setDeepVisibleRange(null);
+      return;
+    }
+
+    setDeepVisibleRange((current) => {
+      if (current?.captureId === deepCapture.captureId) {
+        return current;
+      }
+      return {
+        captureId: deepCapture.captureId,
+        xMin: scope.horizontal.position - 5 * scope.horizontal.scale,
+        xMax: scope.horizontal.position + 5 * scope.horizontal.scale,
+      };
+    });
+  }, [deepCapture, isDeep, scope.horizontal.position, scope.horizontal.scale]);
+
+  useEffect(() => {
     const plot = plotRef.current;
     if (plot === null) {
       return;
     }
 
-    const xMin = scope.horizontal.position - 5 * scope.horizontal.scale;
-    const xMax = scope.horizontal.position + 5 * scope.horizontal.scale;
-    plot.setScale("x", { min: xMin, max: xMax });
+    const visibleRange =
+      isDeep && deepVisibleRange !== null
+        ? deepVisibleRange
+        : {
+            xMin: scope.horizontal.position - 5 * scope.horizontal.scale,
+            xMax: scope.horizontal.position + 5 * scope.horizontal.scale,
+          };
+    plot.setScale("x", { min: visibleRange.xMin, max: visibleRange.xMax });
     for (const channel of scope.channels) {
       plot.setScale(channelScaleName(channel.channel), {
         min: -channel.offset - 4 * channel.scale,
         max: -channel.offset + 4 * channel.scale,
       });
     }
-  }, [scope]);
+  }, [deepVisibleRange, isDeep, scope]);
 
   useEffect(() => {
     if (
+      !isDeep ||
       deepCapture.kind !== DeepCaptureKind.Ready ||
-      controller.getDisplayMode() !== WaveformDisplayMode.Deep
+      deepVisibleRange === null ||
+      deepVisibleRange.captureId !== deepCapture.captureId
     ) {
       return;
     }
-    const xMin = scope.horizontal.position - 5 * scope.horizontal.scale;
-    const xMax = scope.horizontal.position + 5 * scope.horizontal.scale;
+
     for (const channelInfo of deepCapture.channels) {
       controller.setDesiredDeepTimeRange(
         deepCapture.captureId,
         channelInfo.channel,
-        xMin,
-        xMax,
+        deepVisibleRange.xMin,
+        deepVisibleRange.xMax,
         size.width,
         channelInfo,
       );
     }
-  }, [controller, deepCapture, scope.horizontal.position, scope.horizontal.scale, size.width]);
+  }, [controller, deepCapture, deepVisibleRange, isDeep, size.width]);
 
   const beginHorizontalDrag = (event: PointerEvent<HTMLDivElement>) => {
+    if (
+      isDeep &&
+      deepCapture.kind === DeepCaptureKind.Ready &&
+      deepVisibleRange?.captureId === deepCapture.captureId
+    ) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      dragRef.current = {
+        kind: "deep-horizontal",
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startRange: deepVisibleRange,
+        width: size.width,
+      };
+      return;
+    }
+
     if (scope.horizontal.mode !== TimebaseMode.Main) {
       return;
     }
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = {
-      kind: "horizontal",
+      kind: "live-horizontal",
       pointerId: event.pointerId,
       startX: event.clientX,
       startPosition: scope.horizontal.position,
@@ -278,7 +335,9 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
     }
 
     switch (drag.kind) {
-      case "horizontal":
+      case "deep-horizontal":
+        return null;
+      case "live-horizontal":
         return {
           kind: ControlKind.HorizontalPosition,
           value: horizontalPositionFromDrag(
@@ -312,7 +371,26 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
     }
   };
 
+  const updateDeepPan = (event: PointerEvent<HTMLDivElement>): boolean => {
+    const drag = dragRef.current;
+    if (drag?.kind !== "deep-horizontal" || drag.pointerId !== event.pointerId) {
+      return false;
+    }
+
+    const range = horizontalRangeFromDrag(
+      drag.startRange,
+      event.clientX - drag.startX,
+      drag.width,
+    );
+    setDeepVisibleRange({ captureId: drag.startRange.captureId, ...range });
+    return true;
+  };
+
   const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    if (updateDeepPan(event)) {
+      return;
+    }
+
     const control = controlForPointer(event);
     if (control === null) {
       return;
@@ -322,6 +400,11 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
   };
 
   const finishPointer = (event: PointerEvent<HTMLDivElement>) => {
+    if (updateDeepPan(event)) {
+      dragRef.current = null;
+      return;
+    }
+
     const control = controlForPointer(event);
     dragRef.current = null;
     if (control === null) {
@@ -336,11 +419,12 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
   };
 
   const triggerY = triggerMarkerY(scope, size.height);
+  const isPannable = isDeep || scope.horizontal.mode === TimebaseMode.Main;
 
   return (
     <div className="waveform-shell">
       <div
-        className={`waveform-host ${scope.horizontal.mode === TimebaseMode.Main ? "is-pannable" : ""}`}
+        className={`waveform-host ${isPannable ? "is-pannable" : ""}`}
         ref={hostRef}
       />
       <div
