@@ -1,3 +1,4 @@
+import type { ScopeInfo } from "../shared/scope-types.js";
 import {
   MessageType,
   type DeepCaptureReadyMessage,
@@ -24,6 +25,7 @@ interface FailureSignal {
 }
 
 interface ScopeSession {
+  info: ScopeInfo;
   transport: ScpiTransport;
   scheduler: ScpiScheduler;
   stateStore: ScopeStateStore;
@@ -162,12 +164,9 @@ export class ScopeRuntime {
         }
 
         this.session = session;
-        const info = await new Dho804Driver(session.scheduler).identify();
-        this.requireSameSession(session);
-
         this.publishConnection({
           kind: ServerScopeConnectionKind.Connected,
-          info,
+          info: session.info,
           stateStore: session.stateStore,
           controller: session.controller,
         });
@@ -205,45 +204,46 @@ export class ScopeRuntime {
 
   private async createSession(): Promise<ScopeSession> {
     const transport = new ScpiTransport();
-    await transport.connect(this.host, this.port);
+    let scheduler: ScpiScheduler | null = null;
 
-    const scheduler = new ScpiScheduler(transport);
-    const driver = new Dho804Driver(scheduler);
-    const info = await driver.identify();
-    if (info.model !== "DHO804") {
-      throw new Error(`Unsupported oscilloscope model: ${info.model}`);
+    try {
+      await transport.connect(this.host, this.port);
+      scheduler = new ScpiScheduler(transport);
+      const driver = new Dho804Driver(scheduler);
+      const info = await driver.identify();
+      const initialState = await driver.readScopeState(ScpiPriority.Normal);
+      const stateStore = new ScopeStateStore(initialState);
+      const controller = new ScopeController(driver, stateStore);
+      const failure = createFailureSignal();
+      const poller = new ScopePoller(driver, controller, (error) => failure.fail(error));
+      const live = new LiveWaveformService({
+        driver,
+        getScopeState: () => stateStore.getState(),
+        publishFrame: this.publishWaveform,
+        reportError: (error) => failure.fail(error),
+      });
+      const deep = new DeepCaptureService(driver);
+      const unsubscribeState = stateStore.subscribe(() => {
+        live.requestFresh();
+      });
+
+      return {
+        info,
+        transport,
+        scheduler,
+        stateStore,
+        controller,
+        poller,
+        live,
+        deep,
+        unsubscribeState,
+        failure,
+      };
+    } catch (error) {
+      scheduler?.stop(asError(error));
+      transport.disconnect();
+      throw error;
     }
-    const initialState = await driver.readScopeState(ScpiPriority.Normal);
-    const stateStore = new ScopeStateStore(initialState);
-    const controller = new ScopeController(driver, stateStore);
-    const failure = createFailureSignal();
-    const poller = new ScopePoller(driver, controller, (error) => failure.fail(error));
-    const live = new LiveWaveformService({
-      driver,
-      getScopeState: () => stateStore.getState(),
-      publishFrame: this.publishWaveform,
-      reportError: (error) => failure.fail(error),
-    });
-    const deep = new DeepCaptureService(driver);
-    const unsubscribeState = stateStore.subscribe(() => {
-      live.requestFresh();
-    });
-
-    const session: ScopeSession = {
-      transport,
-      scheduler,
-      stateStore,
-      controller,
-      poller,
-      live,
-      deep,
-      unsubscribeState,
-      failure,
-    };
-
-    // identify() above verifies the endpoint before this session is ever published.
-    void info;
-    return session;
   }
 
   private async disposeSession(session: ScopeSession, reason: Error): Promise<void> {
