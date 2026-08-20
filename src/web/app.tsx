@@ -36,9 +36,15 @@ export function App() {
     return () => client.dispose();
   }, [client]);
 
+  useEffect(() => {
+    if (connection.kind === BrowserConnectionKind.ScopeConnected) {
+      controller.setLiveChannels(connection.scope.channels);
+    }
+  }, [connection, controller]);
+
   return (
     <main className="app-shell">
-      <ScopeToolbar client={client} controller={controller} />
+      <ScopeToolbar client={client} />
       {connection.kind === BrowserConnectionKind.ScopeConnected ? (
         <>
           <div className="scope-layout">
