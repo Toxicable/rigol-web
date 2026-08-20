@@ -118,6 +118,46 @@ export class WaveformController {
     this.notify();
   }
 
+  public retireDeepCapture(): void {
+    const changed =
+      this.displayMode !== WaveformDisplayMode.Live ||
+      this.captureId !== 0 ||
+      this.deepFrames.size !== 0 ||
+      this.desiredViewports.size !== 0 ||
+      this.pendingViewports.size !== 0;
+
+    this.displayMode = WaveformDisplayMode.Live;
+    this.captureId = 0;
+    this.deepFrames.clear();
+    this.desiredViewports.clear();
+    this.pendingViewports.clear();
+
+    if (changed) {
+      this.notify();
+    }
+  }
+
+  public resetSession(): void {
+    const hadLiveFrames = this.liveFrames.size !== 0;
+    this.liveFrames.clear();
+    const hadDeepState =
+      this.displayMode !== WaveformDisplayMode.Live ||
+      this.captureId !== 0 ||
+      this.deepFrames.size !== 0 ||
+      this.desiredViewports.size !== 0 ||
+      this.pendingViewports.size !== 0;
+
+    this.displayMode = WaveformDisplayMode.Live;
+    this.captureId = 0;
+    this.deepFrames.clear();
+    this.desiredViewports.clear();
+    this.pendingViewports.clear();
+
+    if (hadLiveFrames || hadDeepState) {
+      this.notify();
+    }
+  }
+
   public acceptFrame(frame: DecodedWaveformFrame): boolean {
     if (frame.kind === WaveformKind.Live) {
       const current = this.liveFrames.get(frame.channel);
@@ -162,6 +202,9 @@ export class WaveformController {
     pixelWidth: number,
     info: DeepCaptureChannelInfo,
   ): void {
+    if (captureId !== this.captureId || this.displayMode !== WaveformDisplayMode.Deep) {
+      return;
+    }
     if (!(pixelWidth > 0)) {
       throw new Error("Viewport pixel width must be positive");
     }
