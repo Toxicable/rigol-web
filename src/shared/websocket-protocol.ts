@@ -11,6 +11,8 @@ import type {
 
 export const PROTOCOL_VERSION = 1;
 
+export type NonEmptyArray<T> = [T, ...T[]];
+
 export enum MessageType {
   ScopeConnected = 1,
   ScopeState = 2,
@@ -85,7 +87,7 @@ export type ControlChange =
     }
   | {
       kind: ControlKind.TriggerType;
-      value: TriggerType;
+      value: TriggerType.Edge;
     }
   | {
       kind: ControlKind.TriggerSource;
@@ -129,7 +131,7 @@ export interface AcquisitionActionMessage {
 export interface MeasurementReadMessage {
   type: MessageType.MeasurementRead;
   requestId: number;
-  measurements: MeasurementSpec[];
+  measurements: NonEmptyArray<MeasurementSpec>;
 }
 
 export interface MeasurementResultMessage {
@@ -156,7 +158,7 @@ export interface DeepCaptureReadyMessage {
   type: MessageType.DeepCaptureReady;
   requestId: number;
   captureId: number;
-  channels: DeepCaptureChannelInfo[];
+  channels: NonEmptyArray<DeepCaptureChannelInfo>;
 }
 
 export interface WaveformViewportRequestMessage {
