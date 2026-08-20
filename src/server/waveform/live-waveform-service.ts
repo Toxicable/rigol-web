@@ -1,0 +1,136 @@
+import { Channel, ScopeRunState, type ScopeState } from "../../shared/scope-types.js";
+import { WaveformKind } from "../../shared/websocket-protocol.js";
+import type { Dho804Waveform } from "../scope/dho804-driver.js";
+import { encodeWaveformFrame } from "./waveform-frame-encoder.js";
+
+export interface LiveWaveformDriver {
+  readLiveWaveform(channel: Channel, pointCount: number): Promise<Dho804Waveform>;
+}
+
+export interface LiveWaveformServiceOptions {
+  driver: LiveWaveformDriver;
+  getScopeState: () => ScopeState;
+  publishFrame: (frame: Uint8Array) => void;
+  pointCount?: number;
+}
+
+const DEFAULT_POINT_COUNT = 1_000;
+
+function nextUint32(value: number): number {
+  return (value + 1) >>> 0;
+}
+
+export class LiveWaveformService {
+  private readonly driver: LiveWaveformDriver;
+  private readonly getScopeState: () => ScopeState;
+  private readonly publishFrame: (frame: Uint8Array) => void;
+  private readonly pointCount: number;
+  private readonly sequences = new Uint32Array(5);
+  private liveWanted = false;
+  private freshWanted = false;
+  private loopPromise: Promise<void> | null = null;
+
+  public constructor(options: LiveWaveformServiceOptions) {
+    if (!Number.isInteger(options.pointCount ?? DEFAULT_POINT_COUNT)
+      || (options.pointCount ?? DEFAULT_POINT_COUNT) < 1
+      || (options.pointCount ?? DEFAULT_POINT_COUNT) > 1_000) {
+      throw new Error("Live waveform pointCount must be an integer from 1 to 1000");
+    }
+    this.driver = options.driver;
+    this.getScopeState = options.getScopeState;
+    this.publishFrame = options.publishFrame;
+    this.pointCount = options.pointCount ?? DEFAULT_POINT_COUNT;
+  }
+
+  public start(): void {
+    this.liveWanted = true;
+    this.requestFresh();
+  }
+
+  public stop(): void {
+    this.liveWanted = false;
+    this.freshWanted = false;
+  }
+
+  public requestFresh(): void {
+    if (!this.liveWanted) {
+      return;
+    }
+    this.freshWanted = true;
+    this.ensureLoop();
+  }
+
+  public async waitForIdle(): Promise<void> {
+    while (this.loopPromise !== null) {
+      await this.loopPromise;
+    }
+  }
+
+  private ensureLoop(): void {
+    if (this.loopPromise !== null) {
+      return;
+    }
+    this.loopPromise = this.runLoop().finally(() => {
+      this.loopPromise = null;
+      if (this.liveWanted && this.freshWanted) {
+        this.ensureLoop();
+      }
+    });
+  }
+
+  private async runLoop(): Promise<void> {
+    while (this.liveWanted && this.freshWanted) {
+      this.freshWanted = false;
+      const state = this.getScopeState();
+      if (state.runState === ScopeRunState.Stopped) {
+        return;
+      }
+
+      const enabledChannels = state.channels
+        .filter((channelState) => channelState.enabled)
+        .map((channelState) => channelState.channel);
+      if (enabledChannels.length === 0) {
+        return;
+      }
+
+      for (const channel of enabledChannels) {
+        if (!this.liveWanted) {
+          return;
+        }
+        const waveform = await this.driver.readLiveWaveform(channel, this.pointCount);
+        if (waveform.channel !== channel) {
+          throw new Error(`Driver returned CH${waveform.channel} while reading CH${channel}`);
+        }
+        this.publishWaveform(waveform);
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+
+      if (this.liveWanted) {
+        this.freshWanted = true;
+      }
+    }
+  }
+
+  private publishWaveform(waveform: Dho804Waveform): void {
+    const sampleIndices = new Uint32Array(waveform.samples.length);
+    for (let index = 0; index < sampleIndices.length; index += 1) {
+      sampleIndices[index] = index;
+    }
+    const sequence = nextUint32(this.sequences[waveform.channel]!);
+    this.sequences[waveform.channel] = sequence;
+    this.publishFrame(encodeWaveformFrame({
+      kind: WaveformKind.Live,
+      channel: waveform.channel,
+      unit: waveform.unit,
+      sequence,
+      captureId: 0,
+      sourceStartSample: 0,
+      sourceEndSample: waveform.samples.length,
+      xIncrement: waveform.xIncrement,
+      xOrigin: waveform.xOrigin,
+      xReference: waveform.xReference,
+      sampleIndices,
+      values: waveform.samples,
+    }));
+  }
+}
