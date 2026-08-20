@@ -177,23 +177,30 @@ export class ScopeRuntime {
         if (this.session === session) {
           this.session = null;
         }
+        if (this.running) {
+          this.publishDisconnected(failure);
+        }
         await this.disposeSession(session, failure);
 
         if (!this.running) {
           break;
         }
-        this.publishDisconnected(failure);
       } catch (error) {
         if (session !== null) {
           if (this.session === session) {
             this.session = null;
           }
+          if (this.running) {
+            this.publishDisconnected(error);
+          }
           await this.disposeSession(session, asError(error));
+        } else if (this.running) {
+          this.publishDisconnected(error);
         }
+
         if (!this.running) {
           break;
         }
-        this.publishDisconnected(error);
       }
 
       if (this.running) {
