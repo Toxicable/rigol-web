@@ -8,4 +8,15 @@ export default defineConfig({
     outDir: fileURLToPath(new URL("./dist/web", import.meta.url)),
     emptyOutDir: true,
   },
+  server: {
+    proxy: {
+      "/ws": {
+        target: "http://localhost:3000",
+        ws: true,
+      },
+      "/health": {
+        target: "http://localhost:3000",
+      },
+    },
+  },
 });
