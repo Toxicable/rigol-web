@@ -92,6 +92,33 @@ describe("waveform controller", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it("retires deep mode and ignores later viewport work for the retired capture", () => {
+    const request = vi.fn(() => 1);
+    const controller = new WaveformController(request);
+    controller.setDeepCapture(8);
+    controller.acceptFrame(frame(Channel.Ch1, WaveformKind.DeepViewport, 1, 8));
+
+    controller.retireDeepCapture();
+    expect(controller.getDisplayMode()).toBe(WaveformDisplayMode.Live);
+    expect(controller.getFrame(Channel.Ch1)).toBeUndefined();
+
+    controller.setDesiredDeepTimeRange(8, Channel.Ch1, 0, 0.0001, 800, INFO);
+    expect(request).not.toHaveBeenCalled();
+    expect(controller.acceptFrame(frame(Channel.Ch1, WaveformKind.DeepViewport, 2, 8))).toBe(false);
+  });
+
+  it("clears live and deep buffers at a new scope session boundary", () => {
+    const controller = new WaveformController(() => 0);
+    controller.acceptFrame(frame(Channel.Ch1, WaveformKind.Live, 5));
+    controller.setDeepCapture(6);
+    controller.acceptFrame(frame(Channel.Ch2, WaveformKind.DeepViewport, 1, 6));
+
+    controller.resetSession();
+    expect(controller.getDisplayMode()).toBe(WaveformDisplayMode.Live);
+    expect(controller.getFrame(Channel.Ch1)).toBeUndefined();
+    expect(controller.getFrame(Channel.Ch2)).toBeUndefined();
+  });
+
   it("converts time ranges to half-open sample ranges", () => {
     expect(timeRangeToSampleRange(10.2e-6, 20.1e-6, INFO)).toEqual({
       startSample: 10,
