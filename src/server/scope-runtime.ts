@@ -18,6 +18,7 @@ import {
 } from "./websocket/websocket-gateway.js";
 
 const DEFAULT_RECONNECT_DELAY_MS = 2_000;
+const DEFAULT_CONNECT_TIMEOUT_MS = 3_000;
 
 interface FailureSignal {
   promise: Promise<Error>;
@@ -43,6 +44,7 @@ export interface ScopeRuntimeOptions {
   publishConnection: (connection: ServerScopeConnection) => void;
   publishWaveform: (frame: Uint8Array) => void;
   reconnectDelayMs?: number;
+  connectTimeoutMs?: number;
 }
 
 function errorMessage(error: unknown): string {
@@ -76,11 +78,13 @@ export class ScopeRuntime {
   private readonly host: string;
   private readonly port: number;
   private readonly reconnectDelayMs: number;
+  private readonly connectTimeoutMs: number;
   private readonly publishConnection: ScopeRuntimeOptions["publishConnection"];
   private readonly publishWaveform: ScopeRuntimeOptions["publishWaveform"];
   private running = false;
   private loopPromise: Promise<void> | null = null;
   private session: ScopeSession | null = null;
+  private initializingTransport: ScpiTransport | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryResolve: (() => void) | null = null;
   private disconnectedReason = "Scope connection pending";
@@ -96,10 +100,15 @@ export class ScopeRuntime {
     if (!Number.isFinite(reconnectDelayMs) || reconnectDelayMs < 0) {
       throw new Error("reconnectDelayMs must be a non-negative finite number");
     }
+    const connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+    if (!Number.isFinite(connectTimeoutMs) || connectTimeoutMs <= 0) {
+      throw new Error("connectTimeoutMs must be a positive finite number");
+    }
 
     this.host = options.host;
     this.port = options.port;
     this.reconnectDelayMs = reconnectDelayMs;
+    this.connectTimeoutMs = connectTimeoutMs;
     this.publishConnection = options.publishConnection;
     this.publishWaveform = options.publishWaveform;
   }
@@ -119,6 +128,7 @@ export class ScopeRuntime {
 
     this.running = false;
     this.wakeRetryDelay();
+    this.initializingTransport?.disconnect();
     this.session?.failure.fail(new Error("Scope runtime stopped"));
 
     const loop = this.loopPromise;
@@ -212,9 +222,10 @@ export class ScopeRuntime {
   private async createSession(): Promise<ScopeSession> {
     const transport = new ScpiTransport();
     let scheduler: ScpiScheduler | null = null;
+    this.initializingTransport = transport;
 
     try {
-      await transport.connect(this.host, this.port);
+      await this.connectTransport(transport);
       scheduler = new ScpiScheduler(transport);
       const driver = new Dho804Driver(scheduler);
       const info = await driver.identify();
@@ -227,7 +238,13 @@ export class ScopeRuntime {
         driver,
         getScopeState: () => stateStore.getState(),
         publishFrame: this.publishWaveform,
-        reportError: (error) => failure.fail(error),
+        reportError: (error) => {
+          if (!transport.isUsable()) {
+            failure.fail(error);
+            return;
+          }
+          console.error("Live waveform acquisition failed", error);
+        },
       });
       const deep = new DeepCaptureService(driver);
       const unsubscribeState = stateStore.subscribe(() => {
@@ -250,6 +267,31 @@ export class ScopeRuntime {
       scheduler?.stop(asError(error));
       transport.disconnect();
       throw error;
+    } finally {
+      if (this.initializingTransport === transport) {
+        this.initializingTransport = null;
+      }
+    }
+  }
+
+  private async connectTransport(transport: ScpiTransport): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error(`SCPI connection timed out after ${this.connectTimeoutMs} ms`));
+        transport.disconnect();
+      }, this.connectTimeoutMs);
+    });
+
+    try {
+      await Promise.race([
+        transport.connect(this.host, this.port),
+        timeout,
+      ]);
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
     }
   }
 

@@ -23,6 +23,7 @@ export class ScpiTransport {
   private pending: PendingResponse | null = null;
   private receiveBuffer = Buffer.alloc(0);
   private usable = false;
+  private cancelPendingConnect: ((error: Error) => void) | null = null;
 
   public constructor(private readonly responseTimeoutMs = 5_000) {
     if (!Number.isFinite(responseTimeoutMs) || responseTimeoutMs <= 0) {
@@ -58,27 +59,59 @@ export class ScpiTransport {
 
     try {
       await new Promise<void>((resolve, reject) => {
-        const onConnect = (): void => {
+        let settled = false;
+
+        const cleanup = (): void => {
+          socket.off("connect", onConnect);
           socket.off("error", onInitialError);
+          socket.off("close", onInitialClose);
+          this.cancelPendingConnect = null;
+        };
+        const fail = (error: Error): void => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          cleanup();
+          reject(error);
+        };
+        const onConnect = (): void => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          cleanup();
           resolve();
         };
         const onInitialError = (error: Error): void => {
-          socket.off("connect", onConnect);
-          reject(error);
+          fail(error);
         };
+        const onInitialClose = (): void => {
+          fail(new ScpiTransportError("SCPI socket closed before connecting"));
+        };
+
+        this.cancelPendingConnect = fail;
         socket.once("connect", onConnect);
         socket.once("error", onInitialError);
+        socket.once("close", onInitialClose);
         socket.connect(port, host);
       });
       this.usable = true;
     } catch (error) {
-      this.socket = null;
+      this.cancelPendingConnect = null;
+      if (this.socket === socket) {
+        this.socket = null;
+      }
       socket.destroy();
       throw error;
     }
   }
 
   public disconnect(): void {
+    const cancelPendingConnect = this.cancelPendingConnect;
+    this.cancelPendingConnect = null;
+    cancelPendingConnect?.(new ScpiTransportError("SCPI transport disconnected"));
+
     const socket = this.socket;
     this.socket = null;
     this.usable = false;
