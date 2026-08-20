@@ -128,7 +128,7 @@ export class LiveWaveformService {
         return false;
       }
       if (waveform.channel !== channel) {
-        throw new Error($`Driver returned CH${waveform.channel} while reading CH${channel}`);
+        throw new Error(`Driver returned CH${waveform.channel} while reading CH${channel}`);
       }
       this.publishWaveform(waveform);
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
