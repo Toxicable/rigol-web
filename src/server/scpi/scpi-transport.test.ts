@@ -17,7 +17,13 @@ afterEach(async () => {
   );
 });
 
-async function peer(onCommand: (command: string, write: (data: Uint8Array | string) => void) => void) {
+async function peer(
+  onCommand: (
+    command: string,
+    write: (data: Uint8Array | string) => void,
+    close: () => void,
+  ) => void,
+) {
   const server = createServer((socket) => {
     let buffered = "";
     socket.on("data", (chunk) => {
@@ -27,7 +33,7 @@ async function peer(onCommand: (command: string, write: (data: Uint8Array | stri
         if (newline < 0) return;
         const command = buffered.slice(0, newline);
         buffered = buffered.slice(newline + 1);
-        onCommand(command, (data) => socket.write(data));
+        onCommand(command, (data) => socket.write(data), () => socket.destroy());
       }
     });
   });
@@ -88,6 +94,28 @@ describe("ScpiTransport", () => {
     const transport = new ScpiTransport(1000);
     await transport.connect("127.0.0.1", port);
     await expect(transport.query("BAD?")).rejects.toBeInstanceOf(ScpiTransportError);
+    expect(transport.isUsable()).toBe(false);
+  });
+
+  it("rejects a text query when the socket closes mid-response", async () => {
+    const port = await peer((_command, write, close) => {
+      write("PARTIAL");
+      queueMicrotask(close);
+    });
+    const transport = new ScpiTransport(1000);
+    await transport.connect("127.0.0.1", port);
+    await expect(transport.queryText("TEXT?")).rejects.toBeInstanceOf(ScpiTransportError);
+    expect(transport.isUsable()).toBe(false);
+  });
+
+  it("rejects a binary query when the socket closes before the declared payload completes", async () => {
+    const port = await peer((_command, write, close) => {
+      write(Uint8Array.from([0x23, 0x31, 0x34, 1, 2]));
+      queueMicrotask(close);
+    });
+    const transport = new ScpiTransport(1000);
+    await transport.connect("127.0.0.1", port);
+    await expect(transport.queryBinary("BIN?")).rejects.toBeInstanceOf(ScpiTransportError);
     expect(transport.isUsable()).toBe(false);
   });
 });

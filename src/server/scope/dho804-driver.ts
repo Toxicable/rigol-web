@@ -271,7 +271,7 @@ export class Dho804Driver {
     return parseTriggerType(await this.queryText(":TRIGger:MODE?", priority));
   }
 
-  public async setTriggerType(type: TriggerType, priority: ScpiPriority): Promise<void> {
+  public async setTriggerType(type: TriggerType.Edge, priority: ScpiPriority): Promise<void> {
     if (type !== TriggerType.Edge) {
       throw new Error("Version 1 only supports writing Edge trigger type");
     }
@@ -282,7 +282,7 @@ export class Dho804Driver {
     return parseChannelSource(await this.queryText(":TRIGger:EDGE:SOURce?", priority));
   }
 
-  public async setEdgeSource(channel: Channel, priority: ScpiPriority): Promise<void> {
+  public async setTriggerSource(channel: Channel, priority: ScpiPriority): Promise<void> {
     await this.command(`:TRIGger:EDGE:SOURce CHANnel${channel}`, priority, null);
   }
 
@@ -290,7 +290,7 @@ export class Dho804Driver {
     return parseEdgeSlope(await this.queryText(":TRIGger:EDGE:SLOPe?", priority));
   }
 
-  public async setEdgeSlope(slope: EdgeSlope, priority: ScpiPriority): Promise<void> {
+  public async setTriggerSlope(slope: EdgeSlope, priority: ScpiPriority): Promise<void> {
     await this.command(`:TRIGger:EDGE:SLOPe ${edgeSlopeToken(slope)}`, priority, null);
   }
 
@@ -301,7 +301,7 @@ export class Dho804Driver {
     );
   }
 
-  public async setEdgeLevel(value: number, priority: ScpiPriority): Promise<void> {
+  public async setTriggerLevel(value: number, priority: ScpiPriority): Promise<void> {
     requireFinite(value, "trigger level");
     await this.command(
       `:TRIGger:EDGE:LEVel ${value}`,
@@ -345,7 +345,7 @@ export class Dho804Driver {
   public async executeRawScpi(command: string): Promise<string> {
     validateRawProgramMessage(command);
     try {
-      if (command.includes("?")) {
+      if (hasUnquotedQueryMarker(command)) {
         return await this.scheduler.schedule({
           priority: ScpiPriority.Normal,
           kind: ScpiOperationKind.RawScpi,
@@ -716,6 +716,34 @@ function validateRawProgramMessage(command: string): void {
   if (command.includes("\n") || command.includes("\r")) {
     throw new Error("Raw SCPI execution accepts exactly one program message");
   }
+}
+
+function hasUnquotedQueryMarker(command: string): boolean {
+  let quote: "\"" | "'" | null = null;
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index];
+    if (character === undefined) {
+      continue;
+    }
+    if (quote !== null) {
+      if (character === quote) {
+        if (command[index + 1] === quote) {
+          index += 1;
+        } else {
+          quote = null;
+        }
+      }
+      continue;
+    }
+    if (character === "\"" || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === "?") {
+      return true;
+    }
+  }
+  return false;
 }
 
 function failToken(name: string, value: string): never {

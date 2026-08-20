@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AcquisitionType,
   Channel,
+  ChannelCoupling,
   ChannelUnit,
   EdgeSlope,
   MeasurementKind,
+  ScopeRunState,
+  TimebaseMode,
+  TriggerCoupling,
+  TriggerSweep,
   TriggerType,
 } from "../../shared/scope-types.js";
 import {
@@ -57,6 +63,22 @@ function respond(transport: ScriptedTransport, command: string, ...values: strin
   transport.text.set(command, values);
 }
 
+function respondChannel(
+  transport: ScriptedTransport,
+  channel: Channel,
+  enabled: string,
+  coupling: string,
+  unit: string,
+): void {
+  const prefix = `:CHANnel${channel}`;
+  respond(transport, `${prefix}:DISPlay?`, enabled);
+  respond(transport, `${prefix}:COUPling?`, coupling);
+  respond(transport, `${prefix}:UNITs?`, unit);
+  respond(transport, `${prefix}:SCALe?`, `${channel}E-1`);
+  respond(transport, `${prefix}:OFFSet?`, `-${channel}E-2`);
+  respond(transport, `${prefix}:PROBe?`, "10");
+}
+
 describe("Dho804Driver", () => {
   it("identifies only an exact DHO804", async () => {
     const transport = new ScriptedTransport();
@@ -79,7 +101,132 @@ describe("Dho804Driver", () => {
     respond(transport, ":TRIGger:EDGE:LEVel?", "1.25E-1");
     respond(transport, ":TRIGger:COUPling?", "DC");
     const state = await scriptedDriver(transport).readTriggerState(ScpiPriority.Background);
-    expect(state).toMatchObject({ type: TriggerType.Edge, source: Channel.Ch2, slope: EdgeSlope.Either, level: 0.125 });
+    expect(state).toEqual({
+      type: TriggerType.Edge,
+      sweep: TriggerSweep.Normal,
+      source: Channel.Ch2,
+      slope: EdgeSlope.Either,
+      level: 0.125,
+      coupling: TriggerCoupling.Dc,
+    });
+  });
+
+  it("maps every non-Edge DHO804 trigger token without reading Edge-only fields", async () => {
+    const mappings: Array<[string, TriggerType]> = [
+      ["PULS", TriggerType.Pulse],
+      ["SLOP", TriggerType.Slope],
+      ["VID", TriggerType.Video],
+      ["PATT", TriggerType.Pattern],
+      ["DUR", TriggerType.Duration],
+      ["TIM", TriggerType.Timeout],
+      ["RUNT", TriggerType.Runt],
+      ["WIND", TriggerType.Window],
+      ["DEL", TriggerType.Delay],
+      ["SET", TriggerType.SetupHold],
+      ["NEDG", TriggerType.NthEdge],
+      ["RS232", TriggerType.Rs232],
+      ["IIC", TriggerType.I2c],
+      ["SPI", TriggerType.Spi],
+      ["CAN", TriggerType.Can],
+    ];
+
+    for (const [token, expectedType] of mappings) {
+      const transport = new ScriptedTransport();
+      respond(transport, ":TRIGger:MODE?", token);
+      respond(transport, ":TRIGger:SWEep?", "AUTO");
+      await expect(scriptedDriver(transport).readTriggerState(ScpiPriority.Background)).resolves.toEqual({
+        type: expectedType,
+        sweep: TriggerSweep.Auto,
+      });
+      expect(transport.commands).toEqual([":TRIGger:MODE?", ":TRIGger:SWEep?"]);
+    }
+  });
+
+  it("builds a complete scope snapshot from focused state reads", async () => {
+    const transport = new ScriptedTransport();
+    respondChannel(transport, Channel.Ch1, "1", "DC", "VOLT");
+    respondChannel(transport, Channel.Ch2, "0", "AC", "AMP");
+    respondChannel(transport, Channel.Ch3, "1", "GND", "WATT");
+    respondChannel(transport, Channel.Ch4, "0", "DC", "UNKN");
+    respond(transport, ":TIMebase:XY:ENABle?", "0");
+    respond(transport, ":TIMebase:MODE?", "ROLL");
+    respond(transport, ":TIMebase:MAIN:SCALe?", "1E-3");
+    respond(transport, ":TIMebase:MAIN:OFFSet?", "2E-4");
+    respond(transport, ":ACQuire:TYPE?", "AVER");
+    respond(transport, ":ACQuire:AVERages?", "16");
+    respond(transport, ":ACQuire:MDEPth?", "5.0000E+06");
+    respond(transport, ":ACQuire:SRATe?", "6.25E+08");
+    respond(transport, ":TRIGger:STATus?", "WAIT");
+    respond(transport, ":TRIGger:MODE?", "PULS");
+    respond(transport, ":TRIGger:SWEep?", "SING");
+
+    const state = await scriptedDriver(transport).readScopeState(ScpiPriority.Background);
+    expect(state.channels[0]).toEqual({
+      channel: Channel.Ch1,
+      enabled: true,
+      coupling: ChannelCoupling.Dc,
+      unit: ChannelUnit.Volts,
+      scale: 0.1,
+      offset: -0.01,
+      probeRatio: 10,
+    });
+    expect(state.channels[1].unit).toBe(ChannelUnit.Amps);
+    expect(state.channels[2].unit).toBe(ChannelUnit.Watts);
+    expect(state.channels[3].unit).toBe(ChannelUnit.Unknown);
+    expect(state.horizontal).toEqual({ mode: TimebaseMode.Roll, scale: 0.001, position: 0.0002 });
+    expect(state.acquisition).toEqual({
+      type: AcquisitionType.Average,
+      averages: 16,
+      memoryDepth: 5_000_000,
+      sampleRate: 625_000_000,
+    });
+    expect(state.runState).toBe(ScopeRunState.Waiting);
+    expect(state.trigger).toEqual({ type: TriggerType.Pulse, sweep: TriggerSweep.Single });
+  });
+
+  it("derives XY mode independently of the base timebase token", async () => {
+    const transport = new ScriptedTransport();
+    respond(transport, ":TIMebase:XY:ENABle?", "1");
+    respond(transport, ":TIMebase:MODE?", "MAIN");
+    respond(transport, ":TIMebase:MAIN:SCALe?", "1E-6");
+    respond(transport, ":TIMebase:MAIN:OFFSet?", "0");
+    await expect(scriptedDriver(transport).readHorizontalState(ScpiPriority.Background)).resolves.toEqual({
+      mode: TimebaseMode.Xy,
+      scale: 0.000001,
+      position: 0,
+    });
+  });
+
+  it("exposes trigger setters with the Server Control contract names", async () => {
+    const transport = new ScriptedTransport();
+    const driver = scriptedDriver(transport);
+    await driver.setTriggerType(TriggerType.Edge, ScpiPriority.Normal);
+    await driver.setTriggerSource(Channel.Ch3, ScpiPriority.Normal);
+    await driver.setTriggerSlope(EdgeSlope.Falling, ScpiPriority.Normal);
+    await driver.setTriggerLevel(0.25, ScpiPriority.Interactive);
+    expect(transport.commands).toEqual([
+      ":TRIGger:MODE EDGE",
+      ":TRIGger:EDGE:SOURce CHANnel3",
+      ":TRIGger:EDGE:SLOPe NEGative",
+      ":TRIGger:EDGE:LEVel 0.25",
+    ]);
+  });
+
+  it("treats question marks inside quoted raw SCPI arguments as setters", async () => {
+    const transport = new ScriptedTransport();
+    const driver = scriptedDriver(transport);
+    await expect(driver.executeRawScpi(':DISPlay:TEXT "why?"')).resolves.toBe("");
+    await expect(driver.executeRawScpi(":DISPlay:TEXT 'still?'" )).resolves.toBe("");
+    expect(transport.commands).toEqual([
+      ':DISPlay:TEXT "why?"',
+      ":DISPlay:TEXT 'still?'",
+    ]);
+  });
+
+  it("still detects an unquoted raw SCPI query marker", async () => {
+    const transport = new ScriptedTransport();
+    respond(transport, ":SYSTem:ERRor?", "0,No error");
+    await expect(scriptedDriver(transport).executeRawScpi(":SYSTem:ERRor?")).resolves.toBe("0,No error");
   });
 
   it("preserves measurement order", async () => {

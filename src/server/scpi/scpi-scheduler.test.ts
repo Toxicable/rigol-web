@@ -9,8 +9,8 @@ import {
   ScpiScheduler,
 } from "./scpi-scheduler.js";
 
-function fakeTransport(): ScpiTransport {
-  return { isUsable: () => true } as ScpiTransport;
+function fakeTransport(isUsable: () => boolean = () => true): ScpiTransport {
+  return { isUsable } as ScpiTransport;
 }
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -81,5 +81,87 @@ describe("ScpiScheduler", () => {
     await Promise.all([running, a, b]);
     expect(order).toEqual([2]);
     expect(scheduler.getCounters().supersededLiveCount).toBe(1);
+  });
+
+  it("does not interleave higher priority work inside an in-flight exclusive transaction", async () => {
+    const scheduler = new ScpiScheduler(fakeTransport());
+    const gate = deferred();
+    const order: string[] = [];
+    const raw = scheduler.schedule({
+      priority: ScpiPriority.Normal,
+      kind: ScpiOperationKind.RawWaveform,
+      execute: async () => {
+        order.push("raw-start");
+        await gate.promise;
+        order.push("raw-end");
+      },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    const immediate = scheduler.schedule({
+      priority: ScpiPriority.Immediate,
+      kind: ScpiOperationKind.RunAction,
+      execute: async () => { order.push("p0"); },
+    });
+    gate.resolve();
+    await Promise.all([raw, immediate]);
+    expect(order).toEqual(["raw-start", "raw-end", "p0"]);
+  });
+
+  it("lets P0 and P1 work run between separate P4 state queries", async () => {
+    const scheduler = new ScpiScheduler(fakeTransport());
+    const gate = deferred();
+    const order: string[] = [];
+    const firstBackground = scheduler.schedule({
+      priority: ScpiPriority.Background,
+      kind: ScpiOperationKind.StateRead,
+      execute: async () => {
+        order.push("p4-first");
+        await gate.promise;
+      },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    const secondBackground = scheduler.schedule({
+      priority: ScpiPriority.Background,
+      kind: ScpiOperationKind.StateRead,
+      execute: async () => { order.push("p4-second"); },
+    });
+    const interactive = scheduler.schedule({
+      priority: ScpiPriority.Interactive,
+      kind: ScpiOperationKind.Write,
+      execute: async () => { order.push("p1"); },
+    });
+    const immediate = scheduler.schedule({
+      priority: ScpiPriority.Immediate,
+      kind: ScpiOperationKind.RunAction,
+      execute: async () => { order.push("p0"); },
+    });
+    gate.resolve();
+    await Promise.all([firstBackground, secondBackground, interactive, immediate]);
+    expect(order).toEqual(["p4-first", "p0", "p1", "p4-second"]);
+  });
+
+  it("rejects pending work when the transport becomes unusable", async () => {
+    let usable = true;
+    const scheduler = new ScpiScheduler(fakeTransport(() => usable));
+    const failure = new Error("transport failed");
+    let pendingRan = false;
+
+    const running = scheduler.schedule({
+      priority: ScpiPriority.Normal,
+      kind: ScpiOperationKind.StateRead,
+      execute: async () => {
+        usable = false;
+        throw failure;
+      },
+    });
+    const pending = scheduler.schedule({
+      priority: ScpiPriority.Background,
+      kind: ScpiOperationKind.StateRead,
+      execute: async () => { pendingRan = true; },
+    });
+
+    await expect(running).rejects.toBe(failure);
+    await expect(pending).rejects.toBe(failure);
+    expect(pendingRan).toBe(false);
   });
 });
