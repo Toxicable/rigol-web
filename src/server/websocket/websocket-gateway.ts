@@ -65,7 +65,7 @@ interface ClientState {
   socket: WebSocket;
   pendingLiveFrames: Map<Channel, Uint8Array>;
   liveSendInFlight: boolean;
-  viewportGeneration: number;
+  viewportGenerations: Map<Channel, number>;
 }
 
 interface WaveformHeader {
@@ -473,7 +473,7 @@ export class WebSocketGateway {
       socket,
       pendingLiveFrames: new Map(),
       liveSendInFlight: false,
-      viewportGeneration: 0,
+      viewportGenerations: new Map(),
     };
 
     this.clients.set(socket, client);
@@ -485,6 +485,7 @@ export class WebSocketGateway {
 
     socket.on("close", () => {
       client.pendingLiveFrames.clear();
+      client.viewportGenerations.clear();
       this.clients.delete(socket);
     });
 
@@ -616,11 +617,11 @@ export class WebSocketGateway {
     client: ClientState,
     message: WaveformViewportRequestMessage,
   ): Promise<void> {
-    const generation = client.viewportGeneration + 1;
-    client.viewportGeneration = generation;
+    const generation = (client.viewportGenerations.get(message.channel) ?? 0) + 1;
+    client.viewportGenerations.set(message.channel, generation);
     const frame = await this.waveformHandlers.requestViewport(message);
 
-    if (client.viewportGeneration !== generation) {
+    if (client.viewportGenerations.get(message.channel) !== generation) {
       this.sendFailure(
         client,
         message.requestId,
@@ -733,6 +734,7 @@ export class WebSocketGateway {
       return;
     }
 
+    client.pendingLiveFrames.delete(channel);
     this.sendLiveFrame(client, frame);
   }
 

@@ -273,6 +273,36 @@ describe("ScopeController", () => {
     expect(store.getState().acquisition.sampleRate).toBe(50_000_000);
   });
 
+  it("does not apply an older readback after a newer optimistic mutation", async () => {
+    const { controller, driver, store } = createController();
+    let resolveRead: ((value: HorizontalState) => void) | undefined;
+    const readHorizontalState = vi.spyOn(driver, "readHorizontalState").mockImplementationOnce(
+      () => new Promise<HorizontalState>((resolve) => {
+        resolveRead = resolve;
+      }),
+    );
+
+    const commit = controller.commitInteraction({
+      kind: ControlKind.HorizontalPosition,
+      value: 0.25,
+    });
+    await vi.waitFor(() => expect(readHorizontalState).toHaveBeenCalledOnce());
+
+    await controller.updateInteraction({
+      kind: ControlKind.HorizontalPosition,
+      value: 0.5,
+    });
+
+    if (resolveRead === undefined) {
+      throw new Error("Expected pending horizontal readback");
+    }
+
+    resolveRead({ ...driver.state.horizontal, position: 0.25 });
+    await commit;
+
+    expect(store.getState().horizontal.position).toBe(0.5);
+  });
+
   it("rejects Edge-only controls while another trigger type is authoritative", async () => {
     const { controller } = createController(createState(TriggerType.Pulse));
 

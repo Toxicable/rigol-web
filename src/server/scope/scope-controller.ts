@@ -163,14 +163,14 @@ export class ScopeController {
 
   public async setControl(control: ControlChange): Promise<void> {
     this.validateControl(control);
-    this.incrementMutationRevision();
+    const revision = this.incrementMutationRevision();
 
     if (control.kind !== ControlKind.TriggerType) {
       this.applyOptimisticControl(control);
     }
 
     await this.writeControl(control, PRIORITY_NORMAL);
-    await this.reconcileControl(control, PRIORITY_NORMAL);
+    await this.reconcileControl(control, PRIORITY_NORMAL, revision);
   }
 
   public async updateInteraction(control: InteractiveControl): Promise<void> {
@@ -182,14 +182,14 @@ export class ScopeController {
 
   public async commitInteraction(control: InteractiveControl): Promise<void> {
     this.validateControl(control);
-    this.incrementMutationRevision();
+    const revision = this.incrementMutationRevision();
     this.applyOptimisticControl(control);
     await this.writeControl(control, PRIORITY_IMMEDIATE);
-    await this.reconcileControl(control, PRIORITY_IMMEDIATE);
+    await this.reconcileControl(control, PRIORITY_IMMEDIATE, revision);
   }
 
   public async performAcquisitionAction(action: AcquisitionAction): Promise<void> {
-    this.incrementMutationRevision();
+    const revision = this.incrementMutationRevision();
 
     switch (action) {
       case AcquisitionAction.Run:
@@ -206,7 +206,7 @@ export class ScopeController {
     }
 
     const runState = await this.driver.readRunState(PRIORITY_IMMEDIATE);
-    this.stateStore.update((state) => ({ ...state, runState }));
+    this.applyReconciledUpdate(revision, (state) => ({ ...state, runState }));
   }
 
   public async readMeasurements(
@@ -249,8 +249,21 @@ export class ScopeController {
     return this.driver.executeRawScpi(command);
   }
 
-  private incrementMutationRevision(): void {
+  private incrementMutationRevision(): number {
     this.mutationRevision += 1;
+    return this.mutationRevision;
+  }
+
+  private applyReconciledUpdate(
+    capturedRevision: number,
+    updater: (state: ScopeState) => ScopeState,
+  ): boolean {
+    if (capturedRevision !== this.mutationRevision) {
+      return false;
+    }
+
+    this.stateStore.update(updater);
+    return true;
   }
 
   private validateControl(control: ControlChange): void {
@@ -369,12 +382,13 @@ export class ScopeController {
   private async reconcileControl(
     control: ControlChange,
     priority: ScopeDriverPriority,
+    capturedRevision: number,
   ): Promise<void> {
     switch (control.kind) {
       case ControlKind.ChannelEnabled: {
         const channel = await this.driver.readChannelState(control.channel, priority);
         const acquisition = await this.driver.readAcquisitionState(priority);
-        this.stateStore.update((state) => ({
+        this.applyReconciledUpdate(capturedRevision, (state) => ({
           ...replaceChannel(state, control.channel, channel),
           acquisition,
         }));
@@ -391,7 +405,7 @@ export class ScopeController {
           ? await this.driver.readTriggerState(priority)
           : undefined;
 
-        this.stateStore.update((state) => {
+        this.applyReconciledUpdate(capturedRevision, (state) => {
           const withChannel = replaceChannel(state, control.channel, channel);
           return trigger === undefined ? withChannel : { ...withChannel, trigger };
         });
@@ -400,12 +414,16 @@ export class ScopeController {
       case ControlKind.HorizontalScale: {
         const horizontal = await this.driver.readHorizontalState(priority);
         const acquisition = await this.driver.readAcquisitionState(priority);
-        this.stateStore.update((state) => ({ ...state, horizontal, acquisition }));
+        this.applyReconciledUpdate(capturedRevision, (state) => ({
+          ...state,
+          horizontal,
+          acquisition,
+        }));
         return;
       }
       case ControlKind.HorizontalPosition: {
         const horizontal = await this.driver.readHorizontalState(priority);
-        this.stateStore.update((state) => ({ ...state, horizontal }));
+        this.applyReconciledUpdate(capturedRevision, (state) => ({ ...state, horizontal }));
         return;
       }
       case ControlKind.TriggerType:
@@ -413,7 +431,7 @@ export class ScopeController {
       case ControlKind.TriggerSlope:
       case ControlKind.TriggerLevel: {
         const trigger = await this.driver.readTriggerState(priority);
-        this.stateStore.update((state) => ({ ...state, trigger }));
+        this.applyReconciledUpdate(capturedRevision, (state) => ({ ...state, trigger }));
         return;
       }
     }

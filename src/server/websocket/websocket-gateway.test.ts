@@ -410,24 +410,97 @@ describe("WebSocketGateway", () => {
     expect(new DataView((await latest).buffer).getUint32(8, true)).toBe(2);
   });
 
-  it("retains only the newest pending live frame per channel under backpressure", async () => {
-    const server = await createTestServer();
-    await connect(server);
-    const gatewayInternals = server.gateway as unknown as {
-      clients: Map<WebSocket, { socket: WebSocket; pendingLiveFrames: Map<Channel, Uint8Array> }>;
+  it("keeps viewport supersession independent per channel", async () => {
+    const resolvers = new Map<number, (frame: Uint8Array) => void>();
+    const handlers: WaveformRequestHandlers = {
+      requestDeepCapture: vi.fn(),
+      requestViewport: (request: WaveformViewportRequestMessage) => new Promise((resolve) => {
+        resolvers.set(request.requestId, resolve);
+      }),
     };
-    const serverClient = [...gatewayInternals.clients.values()][0]!;
-    Object.defineProperty(serverClient.socket, "bufferedAmount", {
-      configurable: true,
-      get: () => 300_000,
-    });
+    const server = await createTestServer(handlers);
+    const client = await connect(server);
+
+    const ch1Result = Promise.race([
+      waitForBinary(client).then((frame) => ({ kind: "binary" as const, frame })),
+      waitForJson(
+        client,
+        (message) => message.type === MessageType.CommandFailed && message.requestId === 42,
+      ).then((message) => ({ kind: "failure" as const, message })),
+    ]);
+
+    client.send(JSON.stringify({
+      type: MessageType.WaveformViewportRequest,
+      requestId: 42,
+      captureId: 1,
+      channel: Channel.Ch1,
+      startSample: 0,
+      endSample: 100,
+      pixelWidth: 50,
+    }));
+    client.send(JSON.stringify({
+      type: MessageType.WaveformViewportRequest,
+      requestId: 43,
+      captureId: 1,
+      channel: Channel.Ch2,
+      startSample: 0,
+      endSample: 100,
+      pixelWidth: 50,
+    }));
+
+    await vi.waitFor(() => expect(resolvers.size).toBe(2));
+    resolvers.get(42)!(createWaveformFrame(WaveformKind.DeepViewport, Channel.Ch1, 1, 3));
+
+    const firstResult = await ch1Result;
+    expect(firstResult.kind).toBe("binary");
+    if (firstResult.kind !== "binary") {
+      throw new Error("CH1 viewport was incorrectly superseded by CH2");
+    }
+    expect(new DataView(firstResult.frame.buffer).getUint8(6)).toBe(Channel.Ch1);
+
+    const ch2 = waitForBinary(client);
+    resolvers.get(43)!(createWaveformFrame(WaveformKind.DeepViewport, Channel.Ch2, 1, 4));
+    expect(new DataView((await ch2).buffer).getUint8(6)).toBe(Channel.Ch2);
+  });
+
+  it("replaces pending live frames and drops them when a newer frame can send directly", async () => {
+    const server = await createTestServer();
+    let bufferedAmount = 300_000;
+    const send = vi.fn();
+    const socket = {
+      readyState: WebSocket.OPEN,
+      get bufferedAmount() {
+        return bufferedAmount;
+      },
+      send,
+    } as unknown as WebSocket;
+    const client = {
+      socket,
+      pendingLiveFrames: new Map<Channel, Uint8Array>(),
+      liveSendInFlight: false,
+      viewportGenerations: new Map<Channel, number>(),
+    };
+    const queueLiveFrame = (server.gateway as unknown as {
+      queueLiveFrame(
+        clientState: typeof client,
+        channel: Channel,
+        frame: Uint8Array,
+      ): void;
+    }).queueLiveFrame.bind(server.gateway);
     const first = createWaveformFrame(WaveformKind.Live, Channel.Ch1, 0, 10);
-    const latest = createWaveformFrame(WaveformKind.Live, Channel.Ch1, 0, 11);
+    const pendingLatest = createWaveformFrame(WaveformKind.Live, Channel.Ch1, 0, 11);
+    const directLatest = createWaveformFrame(WaveformKind.Live, Channel.Ch1, 0, 12);
 
-    server.gateway.broadcastWaveform(first);
-    server.gateway.broadcastWaveform(latest);
+    queueLiveFrame(client, Channel.Ch1, first);
+    queueLiveFrame(client, Channel.Ch1, pendingLatest);
+    expect(client.pendingLiveFrames.size).toBe(1);
+    expect(client.pendingLiveFrames.get(Channel.Ch1)).toBe(pendingLatest);
 
-    expect(serverClient.pendingLiveFrames.size).toBe(1);
-    expect(serverClient.pendingLiveFrames.get(Channel.Ch1)).toBe(latest);
+    bufferedAmount = 0;
+    queueLiveFrame(client, Channel.Ch1, directLatest);
+
+    expect(client.pendingLiveFrames.has(Channel.Ch1)).toBe(false);
+    expect(send).toHaveBeenCalledOnce();
+    expect(send.mock.calls[0]?.[0]).toBe(directLatest);
   });
 });
