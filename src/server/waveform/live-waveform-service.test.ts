@@ -138,6 +138,76 @@ describe("LiveWaveformService", () => {
     expect(sequences.get(Channel.Ch3)).toEqual([1, 2]);
   });
 
+  it("reports a failed live read and continues without rejecting the loop", async () => {
+    const failure = new Error("live read failed");
+    let attempts = 0;
+    const driver: LiveWaveformDriver = {
+      readLiveWaveform: async (channel) => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw failure;
+        }
+        return waveform(channel);
+      },
+    };
+    const errors: unknown[] = [];
+    const frames: Uint8Array[] = [];
+    const service = new LiveWaveformService({
+      driver,
+      getScopeState: () => {
+        const state = createState();
+        state.channels = state.channels.map((channel) => ({
+          ...channel,
+          enabled: channel.channel === Channel.Ch1,
+        })) as ScopeState["channels"];
+        return state;
+      },
+      publishFrame: (frame) => {
+        frames.push(frame);
+        service.stop();
+      },
+      reportError: (error) => errors.push(error),
+    });
+
+    service.start();
+    await service.waitForIdle();
+
+    expect(errors).toEqual([failure]);
+    expect(attempts).toBe(2);
+    expect(frames).toHaveLength(1);
+  });
+
+  it("does not publish a read that completes after the service is stopped", async () => {
+    let resolveRead: ((value: Dho804Waveform) => void) | null = null;
+    const driver: LiveWaveformDriver = {
+      readLiveWaveform: async () => new Promise<Dho804Waveform>((resolve) => {
+        resolveRead = resolve;
+      }),
+    };
+    const frames: Uint8Array[] = [];
+    const service = new LiveWaveformService({
+      driver,
+      getScopeState: () => {
+        const state = createState();
+        state.channels = state.channels.map((channel) => ({
+          ...channel,
+          enabled: channel.channel === Channel.Ch1,
+        })) as ScopeState["channels"];
+        return state;
+      },
+      publishFrame: (frame) => frames.push(frame),
+    });
+
+    service.start();
+    await Promise.resolve();
+    expect(resolveRead).not.toBeNull();
+    service.stop();
+    resolveRead!(waveform(Channel.Ch1));
+    await service.waitForIdle();
+
+    expect(frames).toEqual([]);
+  });
+
   it("collapses repeated freshness requests while one read is in flight", async () => {
     let resolveFirst: ((value: Dho804Waveform) => void) | null = null;
     let activeReads = 0;

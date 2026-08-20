@@ -11,6 +11,7 @@ export interface LiveWaveformServiceOptions {
   driver: LiveWaveformDriver;
   getScopeState: () => ScopeState;
   publishFrame: (frame: Uint8Array) => void;
+  reportError?: (error: unknown) => void;
   pointCount?: number;
 }
 
@@ -20,10 +21,15 @@ function nextUint32(value: number): number {
   return (value + 1) >>> 0;
 }
 
+function defaultReportError(error: unknown): void {
+  console.error("Live waveform acquisition failed", error);
+}
+
 export class LiveWaveformService {
   private readonly driver: LiveWaveformDriver;
   private readonly getScopeState: () => ScopeState;
   private readonly publishFrame: (frame: Uint8Array) => void;
+  private readonly reportError: (error: unknown) => void;
   private readonly pointCount: number;
   private readonly sequences = new Uint32Array(5);
   private liveWanted = false;
@@ -39,6 +45,7 @@ export class LiveWaveformService {
     this.driver = options.driver;
     this.getScopeState = options.getScopeState;
     this.publishFrame = options.publishFrame;
+    this.reportError = options.reportError ?? defaultReportError;
     this.pointCount = options.pointCount ?? DEFAULT_POINT_COUNT;
   }
 
@@ -81,33 +88,45 @@ export class LiveWaveformService {
   private async runLoop(): Promise<void> {
     while (this.liveWanted && this.freshWanted) {
       this.freshWanted = false;
-      const state = this.getScopeState();
-      if (state.runState === ScopeRunState.Stopped) {
-        return;
-      }
-
-      const enabledChannels = state.channels
-        .filter((channelState) => channelState.enabled)
-        .map((channelState) => channelState.channel);
-      if (enabledChannels.length === 0) {
-        return;
-      }
-
-      for (const channel of enabledChannels) {
-        if (!this.liveWanted) {
-          return;
-        }
-        const waveform = await this.driver.readLiveWaveform(channel, this.pointCount);
-        if (waveform.channel !== channel) {
-          throw new Error(`Driver returned CH${waveform.channel} while reading CH${channel}`);
-        }
-        this.publishWaveform(waveform);
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      try {
+        await this.acquireCycle();
+      } catch (error) {
+        this.reportError(error);
       }
 
       if (this.liveWanted) {
         this.freshWanted = true;
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
+    }
+  }
+
+  private async acquireCycle(): Promise<void> {
+    const state = this.getScopeState();
+    if (state.runState === ScopeRunState.Stopped) {
+      return;
+    }
+
+    const enabledChannels = state.channels
+      .filter((channelState) => channelState.enabled)
+      .map((channelState) => channelState.channel);
+    if (enabledChannels.length === 0) {
+      return;
+    }
+
+    for (const channel of enabledChannels) {
+      if (!this.liveWanted) {
+        return;
+      }
+      const waveform = await this.driver.readLiveWaveform(channel, this.pointCount);
+      if (!this.liveWanted) {
+        return;
+      }
+      if (waveform.channel !== channel) {
+        throw new Error(`Driver returned CH${waveform.channel} while reading CH${channel}`);
+      }
+      this.publishWaveform(waveform);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
   }
 
@@ -117,8 +136,7 @@ export class LiveWaveformService {
       sampleIndices[index] = index;
     }
     const sequence = nextUint32(this.sequences[waveform.channel]!);
-    this.sequences[waveform.channel] = sequence;
-    this.publishFrame(encodeWaveformFrame({
+    const frame = encodeWaveformFrame({
       kind: WaveformKind.Live,
       channel: waveform.channel,
       unit: waveform.unit,
@@ -131,6 +149,8 @@ export class LiveWaveformService {
       xReference: waveform.xReference,
       sampleIndices,
       values: waveform.samples,
-    }));
+    });
+    this.publishFrame(frame);
+    this.sequences[waveform.channel] = sequence;
   }
 }
