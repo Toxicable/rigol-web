@@ -45,6 +45,8 @@ export type DeepCaptureState =
       kind: DeepCaptureKind.Ready;
       captureId: number;
       channels: NonEmptyArray<DeepCaptureChannelInfo>;
+      position: number;
+      scale: number;
     };
 
 export interface ScopeStoreState {
@@ -66,6 +68,7 @@ export interface ScopeStoreState {
     captureId: number,
     channels: NonEmptyArray<DeepCaptureChannelInfo>,
   ): void;
+  setDeepHorizontal(position: number, scale: number): void;
   clearDeepCapture(): void;
   setError(error: string | null): void;
 }
@@ -201,7 +204,33 @@ export const useScopeStore = create<ScopeStoreState>((set) => ({
   setDeepCapturing: (requestId) =>
     set({ deepCapture: { kind: DeepCaptureKind.Capturing, requestId } }),
   setDeepReady: (captureId, channels) =>
-    set({ deepCapture: { kind: DeepCaptureKind.Ready, captureId, channels } }),
+    set((state) => {
+      if (state.connection.kind !== BrowserConnectionKind.ScopeConnected) {
+        throw new Error("Deep capture became ready without a connected scope");
+      }
+      return {
+        deepCapture: {
+          kind: DeepCaptureKind.Ready,
+          captureId,
+          channels,
+          position: state.connection.scope.horizontal.position,
+          scale: state.connection.scope.horizontal.scale,
+        },
+      };
+    }),
+  setDeepHorizontal: (position, scale) => {
+    if (!Number.isFinite(position) || !Number.isFinite(scale) || !(scale > 0)) {
+      throw new Error("Deep horizontal position must be finite and scale must be positive");
+    }
+    set((state) => {
+      if (state.deepCapture.kind !== DeepCaptureKind.Ready) {
+        return state;
+      }
+      return {
+        deepCapture: { ...state.deepCapture, position, scale },
+      };
+    });
+  },
   clearDeepCapture: () => set({ deepCapture: noDeepCapture() }),
   setError: (lastError) => set({ lastError }),
 }));

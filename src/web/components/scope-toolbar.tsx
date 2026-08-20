@@ -2,10 +2,6 @@ import { ScopeRunState } from "../../shared/scope-types.js";
 import { AcquisitionAction } from "../../shared/websocket-protocol.js";
 import { BrowserConnectionKind, useScopeStore } from "../scope-store.js";
 import type { ScopeWebSocketClient } from "../websocket-client.js";
-import {
-  WaveformDisplayMode,
-  type WaveformController,
-} from "../waveform/waveform-controller.js";
 
 const RUN_STATE_LABELS: Record<ScopeRunState, string> = {
   [ScopeRunState.Triggered]: "T'D",
@@ -17,10 +13,9 @@ const RUN_STATE_LABELS: Record<ScopeRunState, string> = {
 
 interface ScopeToolbarProps {
   client: ScopeWebSocketClient;
-  controller: WaveformController;
 }
 
-export function ScopeToolbar({ client, controller }: ScopeToolbarProps) {
+export function ScopeToolbar({ client }: ScopeToolbarProps) {
   const connection = useScopeStore((state) => state.connection);
   const lastError = useScopeStore((state) => state.lastError);
 
@@ -37,10 +32,6 @@ export function ScopeToolbar({ client, controller }: ScopeToolbarProps) {
 
   const scope = connection.scope;
   const command = (action: AcquisitionAction) => {
-    if (action === AcquisitionAction.Run) {
-      controller.setDisplayMode(WaveformDisplayMode.Live);
-      useScopeStore.getState().clearDeepCapture();
-    }
     void client.acquisition(action).catch((error: unknown) => {
       useScopeStore.getState().setError(
         error instanceof Error ? error.message : String(error),
@@ -50,21 +41,7 @@ export function ScopeToolbar({ client, controller }: ScopeToolbarProps) {
 
   const deepCapture = async () => {
     try {
-      const ready = await client.deepCapture();
-      controller.setDisplayMode(WaveformDisplayMode.Deep);
-      const xMin = scope.horizontal.position - 5 * scope.horizontal.scale;
-      const xMax = scope.horizontal.position + 5 * scope.horizontal.scale;
-      const width = Math.max(1, Math.round(window.innerWidth * 0.6));
-      for (const channelInfo of ready.channels) {
-        controller.setDesiredDeepTimeRange(
-          ready.captureId,
-          channelInfo.channel,
-          xMin,
-          xMax,
-          width,
-          channelInfo,
-        );
-      }
+      await client.deepCapture();
     } catch (error) {
       useScopeStore.getState().setError(
         error instanceof Error ? error.message : String(error),

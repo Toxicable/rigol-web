@@ -53,6 +53,15 @@ function scope(position = 0): ScopeState {
   };
 }
 
+const DEEP_CHANNEL = {
+  channel: Channel.Ch1,
+  unit: ChannelUnit.Volts,
+  sampleCount: 1000,
+  xIncrement: 1e-6,
+  xOrigin: 0,
+  xReference: 0,
+} as const;
+
 describe("scope store", () => {
   beforeEach(() => {
     useScopeStore.setState({
@@ -112,31 +121,45 @@ describe("scope store", () => {
     }
   });
 
+  it("keeps deep horizontal view local to the retained capture", () => {
+    useScopeStore.getState().setScopeConnected(INFO, scope(0.25));
+    useScopeStore.getState().setDeepReady(9, [DEEP_CHANNEL]);
+
+    let deepCapture = useScopeStore.getState().deepCapture;
+    expect(deepCapture.kind).toBe(DeepCaptureKind.Ready);
+    if (deepCapture.kind !== DeepCaptureKind.Ready) {
+      throw new Error("expected ready deep capture");
+    }
+    expect(deepCapture.position).toBe(0.25);
+    expect(deepCapture.scale).toBe(0.001);
+
+    useScopeStore.getState().setDeepHorizontal(0.5, 0.0005);
+    deepCapture = useScopeStore.getState().deepCapture;
+    if (deepCapture.kind !== DeepCaptureKind.Ready) {
+      throw new Error("expected ready deep capture");
+    }
+    expect(deepCapture.position).toBe(0.5);
+    expect(deepCapture.scale).toBe(0.0005);
+
+    const connection = useScopeStore.getState().connection;
+    if (connection.kind !== BrowserConnectionKind.ScopeConnected) {
+      throw new Error("expected connected scope");
+    }
+    expect(connection.scope.horizontal.position).toBe(0.25);
+    expect(connection.scope.horizontal.scale).toBe(0.001);
+  });
+
   it("retires deep capture metadata at scope-session boundaries", () => {
-    useScopeStore.getState().setDeepReady(9, [
-      {
-        channel: Channel.Ch1,
-        unit: ChannelUnit.Volts,
-        sampleCount: 1000,
-        xIncrement: 1e-6,
-        xOrigin: 0,
-        xReference: 0,
-      },
-    ]);
+    useScopeStore.getState().setScopeConnected(INFO, scope());
+    useScopeStore.getState().setDeepReady(9, [DEEP_CHANNEL]);
     expect(useScopeStore.getState().deepCapture.kind).toBe(DeepCaptureKind.Ready);
 
     useScopeStore.getState().setTransportDisconnected("lost");
     expect(useScopeStore.getState().deepCapture).toEqual({ kind: DeepCaptureKind.None });
 
+    useScopeStore.getState().setScopeConnected(INFO, scope());
     useScopeStore.getState().setDeepReady(10, [
-      {
-        channel: Channel.Ch2,
-        unit: ChannelUnit.Volts,
-        sampleCount: 1000,
-        xIncrement: 1e-6,
-        xOrigin: 0,
-        xReference: 0,
-      },
+      { ...DEEP_CHANNEL, channel: Channel.Ch2 },
     ]);
     useScopeStore.getState().setScopeConnected(INFO, scope());
     expect(useScopeStore.getState().deepCapture).toEqual({ kind: DeepCaptureKind.None });

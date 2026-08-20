@@ -42,6 +42,10 @@ const INFO: DeepCaptureChannelInfo = {
   xReference: 0,
 };
 
+const ALL_ENABLED = [Channel.Ch1, Channel.Ch2, Channel.Ch3, Channel.Ch4].map(
+  (channel) => ({ channel, enabled: true }),
+);
+
 describe("waveform controller", () => {
   it("ignores stale live sequences independently per channel", () => {
     const controller = new WaveformController(() => 0);
@@ -50,6 +54,24 @@ describe("waveform controller", () => {
     expect(controller.acceptFrame(frame(Channel.Ch1, WaveformKind.Live, 4))).toBe(false);
     expect(controller.getFrame(Channel.Ch1)?.sequence).toBe(5);
     expect(controller.getFrame(Channel.Ch2)?.sequence).toBe(2);
+  });
+
+  it("clears disabled live channels and ignores late frames until re-enabled", () => {
+    const controller = new WaveformController(() => 0);
+    controller.acceptFrame(frame(Channel.Ch1, WaveformKind.Live, 5));
+
+    controller.setLiveChannels(
+      ALL_ENABLED.map((channel) =>
+        channel.channel === Channel.Ch1 ? { ...channel, enabled: false } : channel,
+      ),
+    );
+    expect(controller.getFrame(Channel.Ch1)).toBeUndefined();
+    expect(controller.acceptFrame(frame(Channel.Ch1, WaveformKind.Live, 6))).toBe(false);
+
+    controller.setLiveChannels(ALL_ENABLED);
+    expect(controller.getFrame(Channel.Ch1)).toBeUndefined();
+    expect(controller.acceptFrame(frame(Channel.Ch1, WaveformKind.Live, 7))).toBe(true);
+    expect(controller.getFrame(Channel.Ch1)?.sequence).toBe(7);
   });
 
   it("uses cached deep overscan for a small pan and requests near a boundary", () => {

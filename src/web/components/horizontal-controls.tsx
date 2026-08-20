@@ -3,7 +3,7 @@ import type { ChangeEvent } from "react";
 import { TimebaseMode, type ScopeState } from "../../shared/scope-types.js";
 import { ControlKind } from "../../shared/websocket-protocol.js";
 import { formatSampleRate, formatSamples, formatSeconds } from "../format-value.js";
-import { useScopeStore } from "../scope-store.js";
+import { DeepCaptureKind, useScopeStore } from "../scope-store.js";
 import type { ScopeWebSocketClient } from "../websocket-client.js";
 
 const MODE_LABELS: Record<TimebaseMode, string> = {
@@ -18,10 +18,24 @@ interface HorizontalControlsProps {
 }
 
 export function HorizontalControls({ scope, client }: HorizontalControlsProps) {
+  const deepCapture = useScopeStore((state) => state.deepCapture);
+  const isDeep = deepCapture.kind === DeepCaptureKind.Ready;
+  const displayedScale = isDeep ? deepCapture.scale : scope.horizontal.scale;
+  const displayedPosition = isDeep ? deepCapture.position : scope.horizontal.position;
+
   const setNumber = (kind: ControlKind.HorizontalScale | ControlKind.HorizontalPosition, value: number) => {
     if (!Number.isFinite(value) || (kind === ControlKind.HorizontalScale && value <= 0)) {
       return;
     }
+
+    if (deepCapture.kind === DeepCaptureKind.Ready) {
+      useScopeStore.getState().setDeepHorizontal(
+        kind === ControlKind.HorizontalPosition ? value : deepCapture.position,
+        kind === ControlKind.HorizontalScale ? value : deepCapture.scale,
+      );
+      return;
+    }
+
     const control = { kind, value } as const;
     useScopeStore.getState().applyOptimisticControl(control);
     void client.setControl(control).catch((error: unknown) => {
@@ -41,24 +55,24 @@ export function HorizontalControls({ scope, client }: HorizontalControlsProps) {
             type="number"
             min="0"
             step="any"
-            value={scope.horizontal.scale}
+            value={displayedScale}
             onChange={(event: ChangeEvent<HTMLInputElement>) =>
               setNumber(ControlKind.HorizontalScale, event.target.valueAsNumber)
             }
           />
-          <span>{formatSeconds(scope.horizontal.scale)}</span>
+          <span>{formatSeconds(displayedScale)}</span>
         </label>
         <label>
           Position
           <input
             type="number"
             step="any"
-            value={scope.horizontal.position}
+            value={displayedPosition}
             onChange={(event: ChangeEvent<HTMLInputElement>) =>
               setNumber(ControlKind.HorizontalPosition, event.target.valueAsNumber)
             }
           />
-          <span>{formatSeconds(scope.horizontal.position)}</span>
+          <span>{formatSeconds(displayedPosition)}</span>
         </label>
       </div>
       <dl className="compact-details horizontal-details">
@@ -66,7 +80,9 @@ export function HorizontalControls({ scope, client }: HorizontalControlsProps) {
         <div><dt>Sample rate</dt><dd>{formatSampleRate(scope.acquisition.sampleRate)}</dd></div>
         <div><dt>Memory</dt><dd>{formatSamples(scope.acquisition.memoryDepth)}</dd></div>
       </dl>
-      {scope.horizontal.mode !== TimebaseMode.Main ? (
+      {isDeep ? (
+        <p className="notice">Deep capture position and Time/div are browser-local.</p>
+      ) : scope.horizontal.mode !== TimebaseMode.Main ? (
         <p className="notice">Direct waveform pan is disabled outside Main mode.</p>
       ) : null}
     </section>

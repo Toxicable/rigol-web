@@ -32,6 +32,8 @@ interface DesiredViewport extends DeepViewportRequest {
   visibleEndSample: number;
 }
 
+const ALL_CHANNELS = [Channel.Ch1, Channel.Ch2, Channel.Ch3, Channel.Ch4] as const;
+
 function isNewerSequence(next: number, current: number): boolean {
   const difference = (next - current) >>> 0;
   return difference !== 0 && difference < 0x80000000;
@@ -78,6 +80,7 @@ export function timeRangeToSampleRange(
 
 export class WaveformController {
   private readonly liveFrames = new Map<Channel, DecodedWaveformFrame>();
+  private readonly enabledLiveChannels = new Set<Channel>(ALL_CHANNELS);
   private readonly deepFrames = new Map<Channel, DecodedWaveformFrame>();
   private readonly desiredViewports = new Map<Channel, DesiredViewport>();
   private readonly pendingViewports = new Map<Channel, { requestId: number }>();
@@ -104,6 +107,31 @@ export class WaveformController {
     }
     this.displayMode = mode;
     this.notify();
+  }
+
+  public setLiveChannels(channels: readonly { channel: Channel; enabled: boolean }[]): void {
+    const nextEnabled = new Set<Channel>();
+    for (const channel of channels) {
+      if (channel.enabled) {
+        nextEnabled.add(channel.channel);
+      }
+    }
+
+    let dataChanged = false;
+    for (const channel of ALL_CHANNELS) {
+      if (!nextEnabled.has(channel) && this.liveFrames.delete(channel)) {
+        dataChanged = true;
+      }
+    }
+
+    this.enabledLiveChannels.clear();
+    for (const channel of nextEnabled) {
+      this.enabledLiveChannels.add(channel);
+    }
+
+    if (dataChanged && this.displayMode === WaveformDisplayMode.Live) {
+      this.notify();
+    }
   }
 
   public setDeepCapture(captureId: number): void {
@@ -140,6 +168,7 @@ export class WaveformController {
   public resetSession(): void {
     const hadLiveFrames = this.liveFrames.size !== 0;
     this.liveFrames.clear();
+    this.enabledLiveChannels.clear();
     const hadDeepState =
       this.displayMode !== WaveformDisplayMode.Live ||
       this.captureId !== 0 ||
@@ -160,6 +189,9 @@ export class WaveformController {
 
   public acceptFrame(frame: DecodedWaveformFrame): boolean {
     if (frame.kind === WaveformKind.Live) {
+      if (!this.enabledLiveChannels.has(frame.channel)) {
+        return false;
+      }
       const current = this.liveFrames.get(frame.channel);
       if (current !== undefined && !isNewerSequence(frame.sequence, current.sequence)) {
         return false;
