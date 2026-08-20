@@ -1,3 +1,8 @@
+export interface HorizontalRange {
+  xMin: number;
+  xMax: number;
+}
+
 export function horizontalPositionFromDrag(
   startPosition: number,
   deltaX: number,
@@ -9,6 +14,23 @@ export function horizontalPositionFromDrag(
   }
 
   return startPosition - deltaX * ((10 * horizontalScale) / plotWidth);
+}
+
+export function horizontalRangeFromDrag(
+  startRange: HorizontalRange,
+  deltaX: number,
+  plotWidth: number,
+): HorizontalRange {
+  const span = startRange.xMax - startRange.xMin;
+  if (!(plotWidth > 0) || !(span > 0)) {
+    throw new Error("Plot width and horizontal range must be positive");
+  }
+
+  const delta = deltaX * (span / plotWidth);
+  return {
+    xMin: startRange.xMin - delta,
+    xMax: startRange.xMax - delta,
+  };
 }
 
 export function channelOffsetFromDrag(
