@@ -1,4 +1,4 @@
-import type { MeasurementSpec } from "../shared/scope-types.js";
+import { ScopeRunState, type MeasurementSpec } from "../shared/scope-types.js";
 import {
   AcquisitionAction,
   MessageType,
@@ -104,6 +104,7 @@ export class ScopeWebSocketClient {
 
   public connect(): void {
     this.disposed = false;
+    this.waveforms.resetSession();
     useScopeStore.getState().setConnecting();
     const socket = this.socketFactory(this.urlFactory());
     socket.binaryType = "arraybuffer";
@@ -119,6 +120,7 @@ export class ScopeWebSocketClient {
         return;
       }
       this.socket = null;
+      this.waveforms.resetSession();
       const reason = event.reason || "WebSocket disconnected";
       useScopeStore.getState().setTransportDisconnected(reason);
       this.rejectPending(new Error(reason));
@@ -133,6 +135,7 @@ export class ScopeWebSocketClient {
     this.disposed = true;
     this.socket?.close(1000, "Client disposed");
     this.socket = null;
+    this.waveforms.resetSession();
     this.rejectPending(new Error("WebSocket client disposed"));
   }
 
@@ -165,6 +168,9 @@ export class ScopeWebSocketClient {
   }
 
   public acquisition(action: AcquisitionAction): Promise<void> {
+    if (action === AcquisitionAction.Run || action === AcquisitionAction.Single) {
+      this.retireDeepCapture();
+    }
     const requestId = this.nextRequestId();
     const message: AcquisitionActionMessage = {
       type: MessageType.AcquisitionAction,
@@ -303,19 +309,23 @@ export class ScopeWebSocketClient {
             `Protocol version mismatch: server ${message.protocolVersion}, browser ${PROTOCOL_VERSION}`,
           );
         }
+        this.waveforms.resetSession();
         store.setScopeConnected(message.info, message.state);
+        this.reconcileRunState(message.state.runState);
         return;
 
       case MessageType.ScopeState:
         store.replaceScope(message.state);
+        this.reconcileRunState(message.state.runState);
         return;
 
       case MessageType.ScopeDisconnected:
+        this.waveforms.resetSession();
         store.setScopeDisconnected(message.reason);
         return;
 
       case MessageType.DeepCaptureReady:
-        store.setDeepReady(message.captureId, [...message.channels]);
+        store.setDeepReady(message.captureId, message.channels);
         this.waveforms.setDeepCapture(message.captureId);
         this.resolvePending(message.requestId, message);
         return;
@@ -334,6 +344,17 @@ export class ScopeWebSocketClient {
         this.rejectRequest(message);
         return;
     }
+  }
+
+  private reconcileRunState(runState: ScopeRunState): void {
+    if (runState !== ScopeRunState.Stopped) {
+      this.retireDeepCapture();
+    }
+  }
+
+  private retireDeepCapture(): void {
+    this.waveforms.retireDeepCapture();
+    useScopeStore.getState().clearDeepCapture();
   }
 
   private sendCommand(
