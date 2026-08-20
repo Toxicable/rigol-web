@@ -9,6 +9,7 @@
   "scripts": {
     "dev:web": "vite",
     "dev:server": "tsx watch src/server/server.ts",
+    "start": "node dist/server/server/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.server.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "build": "pnpm build:server && pnpm build:web",
