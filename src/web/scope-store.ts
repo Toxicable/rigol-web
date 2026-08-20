@@ -12,6 +12,7 @@ import {
   ControlKind,
   type ControlChange,
   type DeepCaptureChannelInfo,
+  type NonEmptyArray,
 } from "../shared/websocket-protocol.js";
 
 export enum BrowserConnectionKind {
@@ -43,7 +44,7 @@ export type DeepCaptureState =
   | {
       kind: DeepCaptureKind.Ready;
       captureId: number;
-      channels: DeepCaptureChannelInfo[];
+      channels: NonEmptyArray<DeepCaptureChannelInfo>;
     };
 
 export interface ScopeStoreState {
@@ -61,7 +62,10 @@ export interface ScopeStoreState {
   setMeasurementSpecs(specs: MeasurementSpec[]): void;
   setMeasurementValues(values: MeasurementValue[]): void;
   setDeepCapturing(requestId: number): void;
-  setDeepReady(captureId: number, channels: DeepCaptureChannelInfo[]): void;
+  setDeepReady(
+    captureId: number,
+    channels: NonEmptyArray<DeepCaptureChannelInfo>,
+  ): void;
   clearDeepCapture(): void;
   setError(error: string | null): void;
 }
@@ -131,27 +135,41 @@ export function applyControlToScope(
   }
 }
 
+const noDeepCapture = (): DeepCaptureState => ({ kind: DeepCaptureKind.None });
+
 export const useScopeStore = create<ScopeStoreState>((set) => ({
   connection: { kind: BrowserConnectionKind.Connecting },
   measurementSpecs: [],
   measurementValues: [],
-  deepCapture: { kind: DeepCaptureKind.None },
+  deepCapture: noDeepCapture(),
   lastError: null,
 
   setConnecting: () =>
-    set({ connection: { kind: BrowserConnectionKind.Connecting } }),
+    set({
+      connection: { kind: BrowserConnectionKind.Connecting },
+      deepCapture: noDeepCapture(),
+      measurementValues: [],
+    }),
 
   setTransportDisconnected: (reason) =>
     set({
       connection: { kind: BrowserConnectionKind.TransportDisconnected, reason },
+      deepCapture: noDeepCapture(),
+      measurementValues: [],
     }),
 
   setScopeDisconnected: (reason) =>
-    set({ connection: { kind: BrowserConnectionKind.ScopeDisconnected, reason } }),
+    set({
+      connection: { kind: BrowserConnectionKind.ScopeDisconnected, reason },
+      deepCapture: noDeepCapture(),
+      measurementValues: [],
+    }),
 
   setScopeConnected: (info, scope) =>
     set({
       connection: { kind: BrowserConnectionKind.ScopeConnected, info, scope },
+      deepCapture: noDeepCapture(),
+      measurementValues: [],
       lastError: null,
     }),
 
@@ -184,6 +202,6 @@ export const useScopeStore = create<ScopeStoreState>((set) => ({
     set({ deepCapture: { kind: DeepCaptureKind.Capturing, requestId } }),
   setDeepReady: (captureId, channels) =>
     set({ deepCapture: { kind: DeepCaptureKind.Ready, captureId, channels } }),
-  clearDeepCapture: () => set({ deepCapture: { kind: DeepCaptureKind.None } }),
+  clearDeepCapture: () => set({ deepCapture: noDeepCapture() }),
   setError: (lastError) => set({ lastError }),
 }));
