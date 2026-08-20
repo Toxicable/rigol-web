@@ -111,4 +111,34 @@ describe("scope store", () => {
       expect(connection.scope.trigger.level).toBe(1.25);
     }
   });
+
+  it("retires deep capture metadata at scope-session boundaries", () => {
+    useScopeStore.getState().setDeepReady(9, [
+      {
+        channel: Channel.Ch1,
+        unit: ChannelUnit.Volts,
+        sampleCount: 1000,
+        xIncrement: 1e-6,
+        xOrigin: 0,
+        xReference: 0,
+      },
+    ]);
+    expect(useScopeStore.getState().deepCapture.kind).toBe(DeepCaptureKind.Ready);
+
+    useScopeStore.getState().setTransportDisconnected("lost");
+    expect(useScopeStore.getState().deepCapture).toEqual({ kind: DeepCaptureKind.None });
+
+    useScopeStore.getState().setDeepReady(10, [
+      {
+        channel: Channel.Ch2,
+        unit: ChannelUnit.Volts,
+        sampleCount: 1000,
+        xIncrement: 1e-6,
+        xOrigin: 0,
+        xReference: 0,
+      },
+    ]);
+    useScopeStore.getState().setScopeConnected(INFO, scope());
+    expect(useScopeStore.getState().deepCapture).toEqual({ kind: DeepCaptureKind.None });
+  });
 });
