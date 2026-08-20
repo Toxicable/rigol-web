@@ -88,12 +88,17 @@ export class LiveWaveformService {
   private async runLoop(): Promise<void> {
     while (this.liveWanted && this.freshWanted) {
       this.freshWanted = false;
+      let shouldContinue: boolean;
       try {
-        await this.acquireCycle();
+        shouldContinue = await this.acquireCycle();
       } catch (error) {
         this.reportError(error);
+        shouldContinue = true;
       }
 
+      if (!shouldContinue) {
+        return;
+      }
       if (this.liveWanted) {
         this.freshWanted = true;
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -101,33 +106,34 @@ export class LiveWaveformService {
     }
   }
 
-  private async acquireCycle(): Promise<void> {
+  private async acquireCycle(): Promise<boolean> {
     const state = this.getScopeState();
     if (state.runState === ScopeRunState.Stopped) {
-      return;
+      return false;
     }
 
     const enabledChannels = state.channels
       .filter((channelState) => channelState.enabled)
       .map((channelState) => channelState.channel);
     if (enabledChannels.length === 0) {
-      return;
+      return false;
     }
 
     for (const channel of enabledChannels) {
       if (!this.liveWanted) {
-        return;
+        return false;
       }
       const waveform = await this.driver.readLiveWaveform(channel, this.pointCount);
       if (!this.liveWanted) {
-        return;
+        return false;
       }
       if (waveform.channel !== channel) {
-        throw new Error(`Driver returned CH${waveform.channel} while reading CH${channel}`);
+        throw new Error($`Driver returned CH${waveform.channel} while reading CH${channel}`);
       }
       this.publishWaveform(waveform);
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
+    return true;
   }
 
   private publishWaveform(waveform: Dho804Waveform): void {
