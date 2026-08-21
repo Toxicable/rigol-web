@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+deploy.conf
 node_modules
 dist
 coverage
