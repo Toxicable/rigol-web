@@ -208,9 +208,15 @@ describe("Dm858eDriver", () => {
     ]);
   });
 
-  it("parses scientific readings and drops the documented no-data sentinel", async () => {
+  it("distinguishes the bare no-data sentinel from an overload reading", async () => {
     const transport = new ScriptedTransport();
-    respond(transport, "DATA:LAST?", "-5.07000000E-01 VDC", "9.90000000E+37");
+    respond(
+      transport,
+      "DATA:LAST?",
+      "-5.07000000E-01 VDC",
+      "9.90000000E+37",
+      "9.90000000E+37 VDC",
+    );
     const driver = scriptedDriver(transport);
 
     await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 4)).resolves.toEqual({
@@ -219,7 +225,12 @@ describe("Dm858eDriver", () => {
       value: -0.507,
       unit: DmmUnit.Volts,
     });
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.Resistance2Wire, 5)).resolves.toBeNull();
+    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 5)).resolves.toBeNull();
+    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 6)).resolves.toEqual({
+      kind: DmmReadingKind.Overload,
+      sequence: 6,
+      unit: DmmUnit.Volts,
+    });
   });
 
   it("normalizes Fahrenheit temperature readings to Celsius", async () => {
