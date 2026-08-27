@@ -63,6 +63,7 @@ interface Dho804CoalesceKeys {
   horizontalScale: ScpiCoalesceKey;
   horizontalPosition: ScpiCoalesceKey;
   triggerLevel: ScpiCoalesceKey;
+  liveWaveform: ScpiCoalesceKey;
 }
 
 const channels = [Channel.Ch1, Channel.Ch2, Channel.Ch3, Channel.Ch4] as const;
@@ -388,6 +389,7 @@ export class Dho804Driver {
 
     return this.scheduler.scheduleLatest(
       ScpiPriority.Waveform,
+      this.coalesceKeys.liveWaveform,
       ScpiOperationKind.BinaryTransfer,
       async (transport, recorder) => {
         await this.ensureWaveformSetup(transport, channel, "NORM", "BYTE", pointCount);
@@ -529,6 +531,7 @@ function createDho804CoalesceKeys(): Dho804CoalesceKeys {
     horizontalScale: Symbol("DHO804 horizontal scale"),
     horizontalPosition: Symbol("DHO804 horizontal position"),
     triggerLevel: Symbol("DHO804 trigger level"),
+    liveWaveform: Symbol("DHO804 live waveform"),
   };
 }
 
