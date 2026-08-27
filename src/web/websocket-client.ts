@@ -1,3 +1,5 @@
+import type { DmmControlChange } from "../shared/dmm-types.js";
+import { SupportedInstrument } from "../shared/instrument-types.js";
 import { ScopeRunState, type MeasurementSpec } from "../shared/scope-types.js";
 import {
   AcquisitionAction,
@@ -10,12 +12,17 @@ import {
   type ControlSetMessage,
   type DeepCaptureReadyMessage,
   type DeepCaptureRequestMessage,
+  type DmmControlSetMessage,
+  type DmmLifecycleMessage,
+  type InstrumentSubscribeMessage,
+  type InstrumentUnsubscribeMessage,
   type InteractionCommitMessage,
   type InteractiveControl,
   type InteractionUpdateMessage,
   type MeasurementReadMessage,
   type MeasurementResultMessage,
   type NonEmptyArray,
+  type ProtocolHelloAckMessage,
   type ScpiExecuteMessage,
   type ScpiResultMessage,
   type ServerJsonMessage,
@@ -44,7 +51,20 @@ export interface WebSocketLike {
   close(code?: number, reason?: string): void;
 }
 
+export enum BrowserTransportKind {
+  Connecting = 1,
+  Connected = 2,
+  Disconnected = 3,
+}
+
+export type BrowserTransportState =
+  | { kind: BrowserTransportKind.Connecting }
+  | { kind: BrowserTransportKind.Connected }
+  | { kind: BrowserTransportKind.Disconnected; reason: string };
+
 type SocketFactory = (url: string) => WebSocketLike;
+type DmmMessageListener = (message: DmmLifecycleMessage) => void;
+type TransportStateListener = (state: BrowserTransportState) => void;
 
 interface PendingRequest {
   resolve: (message: ServerJsonMessage) => void;
@@ -74,9 +94,14 @@ function asServerMessage(value: unknown): ServerJsonMessage {
   }
 
   switch (type) {
+    case MessageType.ProtocolHello:
     case MessageType.ScopeConnected:
     case MessageType.ScopeState:
     case MessageType.ScopeDisconnected:
+    case MessageType.DmmConnected:
+    case MessageType.DmmState:
+    case MessageType.DmmDisconnected:
+    case MessageType.DmmReading:
     case MessageType.CommandCompleted:
     case MessageType.CommandFailed:
     case MessageType.ScpiResult:
@@ -92,9 +117,14 @@ export class ScopeWebSocketClient {
   private socket: WebSocketLike | null = null;
   private requestId = 0;
   private readonly pending = new Map<number, PendingRequest>();
+  private readonly subscriptions = new Set<SupportedInstrument>();
+  private readonly dmmListeners = new Set<DmmMessageListener>();
+  private readonly transportListeners = new Set<TransportStateListener>();
+  private transportState: BrowserTransportState = { kind: BrowserTransportKind.Connecting };
   private disposed = false;
   private binaryErrors = 0;
   private measurementInFlight = false;
+  private protocolReady = false;
 
   public constructor(
     private readonly waveforms: WaveformController,
@@ -104,8 +134,10 @@ export class ScopeWebSocketClient {
 
   public connect(): void {
     this.disposed = false;
+    this.protocolReady = false;
     this.waveforms.resetSession();
     useScopeStore.getState().setConnecting();
+    this.setTransportState({ kind: BrowserTransportKind.Connecting });
     const socket = this.socketFactory(this.urlFactory());
     socket.binaryType = "arraybuffer";
     socket.onopen = () => {
@@ -113,16 +145,20 @@ export class ScopeWebSocketClient {
     };
     socket.onmessage = (event) => this.handleMessage(event.data);
     socket.onerror = () => {
-      useScopeStore.getState().setError("WebSocket transport error");
+      const reason = "WebSocket transport error";
+      useScopeStore.getState().setError(reason);
+      this.setTransportState({ kind: BrowserTransportKind.Disconnected, reason });
     };
     socket.onclose = (event) => {
       if (this.socket !== socket) {
         return;
       }
       this.socket = null;
+      this.protocolReady = false;
       this.waveforms.resetSession();
       const reason = event.reason || "WebSocket disconnected";
       useScopeStore.getState().setTransportDisconnected(reason);
+      this.setTransportState({ kind: BrowserTransportKind.Disconnected, reason });
       this.rejectPending(new Error(reason));
       if (!this.disposed) {
         window.setTimeout(() => this.connect(), 500);
@@ -133,16 +169,72 @@ export class ScopeWebSocketClient {
 
   public dispose(): void {
     this.disposed = true;
+    this.protocolReady = false;
+    this.subscriptions.clear();
+    this.dmmListeners.clear();
+    this.transportListeners.clear();
     this.socket?.close(1000, "Client disposed");
     this.socket = null;
     this.waveforms.resetSession();
     this.rejectPending(new Error("WebSocket client disposed"));
   }
 
+  public subscribeInstrument(instrument: SupportedInstrument): void {
+    if (this.subscriptions.has(instrument)) {
+      return;
+    }
+    this.subscriptions.add(instrument);
+    if (instrument === SupportedInstrument.Dho804) {
+      useScopeStore.getState().setConnecting();
+    }
+    if (this.socket?.readyState === OPEN && this.protocolReady) {
+      this.sendInstrumentSubscribe(instrument);
+    }
+  }
+
+  public unsubscribeInstrument(instrument: SupportedInstrument): void {
+    if (!this.subscriptions.delete(instrument)) {
+      return;
+    }
+    if (this.socket?.readyState === OPEN && this.protocolReady) {
+      const message: InstrumentUnsubscribeMessage = {
+        type: MessageType.InstrumentUnsubscribe,
+        instrument,
+      };
+      this.send(message);
+    }
+    if (instrument === SupportedInstrument.Dho804) {
+      this.waveforms.resetSession();
+      useScopeStore.getState().clearDeepCapture();
+      useScopeStore.getState().setScopeDisconnected("Scope route inactive");
+    }
+  }
+
+  public onDmmMessage(listener: DmmMessageListener): () => void {
+    this.dmmListeners.add(listener);
+    return () => this.dmmListeners.delete(listener);
+  }
+
+  public onTransportState(listener: TransportStateListener): () => void {
+    listener(this.transportState);
+    this.transportListeners.add(listener);
+    return () => this.transportListeners.delete(listener);
+  }
+
   public setControl(control: ControlChange): Promise<void> {
     const requestId = this.nextRequestId();
     const message: ControlSetMessage = {
       type: MessageType.ControlSet,
+      requestId,
+      control,
+    };
+    return this.sendCommand(message);
+  }
+
+  public setDmmControl(control: DmmControlChange): Promise<void> {
+    const requestId = this.nextRequestId();
+    const message: DmmControlSetMessage = {
+      type: MessageType.DmmControlSet,
       requestId,
       control,
     };
@@ -210,11 +302,15 @@ export class ScopeWebSocketClient {
     return requestId;
   }
 
-  public async executeScpi(command: string): Promise<string> {
+  public async executeScpi(
+    instrument: SupportedInstrument,
+    command: string,
+  ): Promise<string> {
     const requestId = this.nextRequestId();
     const message: ScpiExecuteMessage = {
       type: MessageType.ScpiExecute,
       requestId,
+      instrument,
       command,
     };
     const response = await this.sendRequest(message);
@@ -276,6 +372,14 @@ export class ScopeWebSocketClient {
     return () => window.clearInterval(timer);
   }
 
+  private sendInstrumentSubscribe(instrument: SupportedInstrument): void {
+    const message: InstrumentSubscribeMessage = {
+      type: MessageType.InstrumentSubscribe,
+      instrument,
+    };
+    this.send(message);
+  }
+
   private handleMessage(data: string | ArrayBuffer): void {
     if (typeof data !== "string") {
       try {
@@ -303,12 +407,30 @@ export class ScopeWebSocketClient {
   private handleJson(message: ServerJsonMessage): void {
     const store = useScopeStore.getState();
     switch (message.type) {
-      case MessageType.ScopeConnected:
+      case MessageType.ProtocolHello: {
         if (message.protocolVersion !== PROTOCOL_VERSION) {
-          throw new Error(
-            `Protocol version mismatch: server ${message.protocolVersion}, browser ${PROTOCOL_VERSION}`,
-          );
+          const reason = `Protocol version mismatch: server ${message.protocolVersion}, browser ${PROTOCOL_VERSION}`;
+          store.setTransportDisconnected(reason);
+          this.setTransportState({ kind: BrowserTransportKind.Disconnected, reason });
+          this.socket?.close(1002, reason);
+          return;
         }
+
+        this.protocolReady = true;
+        const ack: ProtocolHelloAckMessage = {
+          type: MessageType.ProtocolHelloAck,
+          protocolVersion: PROTOCOL_VERSION,
+        };
+        this.send(ack);
+        this.setTransportState({ kind: BrowserTransportKind.Connected });
+        for (const instrument of this.subscriptions) {
+          this.sendInstrumentSubscribe(instrument);
+        }
+        return;
+      }
+
+      case MessageType.ScopeConnected:
+        this.requireProtocolVersion(message.protocolVersion);
         this.waveforms.resetSession();
         store.setScopeConnected(message.info, message.state);
         this.reconcileRunState(message.state.runState);
@@ -322,6 +444,17 @@ export class ScopeWebSocketClient {
       case MessageType.ScopeDisconnected:
         this.waveforms.resetSession();
         store.setScopeDisconnected(message.reason);
+        return;
+
+      case MessageType.DmmConnected:
+        this.requireProtocolVersion(message.protocolVersion);
+        this.notifyDmm(message);
+        return;
+
+      case MessageType.DmmState:
+      case MessageType.DmmDisconnected:
+      case MessageType.DmmReading:
+        this.notifyDmm(message);
         return;
 
       case MessageType.DeepCaptureReady:
@@ -346,6 +479,27 @@ export class ScopeWebSocketClient {
     }
   }
 
+  private requireProtocolVersion(protocolVersion: number): void {
+    if (protocolVersion !== PROTOCOL_VERSION) {
+      throw new Error(
+        `Protocol version mismatch: server ${protocolVersion}, browser ${PROTOCOL_VERSION}`,
+      );
+    }
+  }
+
+  private notifyDmm(message: DmmLifecycleMessage): void {
+    for (const listener of this.dmmListeners) {
+      listener(message);
+    }
+  }
+
+  private setTransportState(state: BrowserTransportState): void {
+    this.transportState = state;
+    for (const listener of this.transportListeners) {
+      listener(state);
+    }
+  }
+
   private reconcileRunState(runState: ScopeRunState): void {
     if (runState !== ScopeRunState.Stopped) {
       this.retireDeepCapture();
@@ -358,7 +512,11 @@ export class ScopeWebSocketClient {
   }
 
   private sendCommand(
-    message: ControlSetMessage | InteractionCommitMessage | AcquisitionActionMessage,
+    message:
+      | ControlSetMessage
+      | InteractionCommitMessage
+      | AcquisitionActionMessage
+      | DmmControlSetMessage,
   ): Promise<void> {
     return this.sendRequest(message).then((response) => {
       if (response.type !== MessageType.CommandCompleted) {
@@ -374,7 +532,8 @@ export class ScopeWebSocketClient {
       | AcquisitionActionMessage
       | DeepCaptureRequestMessage
       | ScpiExecuteMessage
-      | MeasurementReadMessage,
+      | MeasurementReadMessage
+      | DmmControlSetMessage,
   ): Promise<ServerJsonMessage> {
     return new Promise((resolve, reject) => {
       this.pending.set(message.requestId, { resolve, reject });
@@ -391,6 +550,9 @@ export class ScopeWebSocketClient {
     const socket = this.socket;
     if (socket === null || socket.readyState !== OPEN) {
       throw new Error("WebSocket is not connected");
+    }
+    if (!this.protocolReady) {
+      throw new Error("WebSocket protocol handshake is not complete");
     }
     socket.send(JSON.stringify(message));
   }

@@ -2,24 +2,66 @@
 
 ## Overview
 
-Rigol Web uses one persistent WebSocket connection between the browser and server.
+Rigol Web uses one persistent WebSocket connection between each browser tab and the server.
 
-The protocol is intentionally application-specific rather than a generic RPC framework.
+Protocol version 2 supports exactly two instrument identities:
+
+```ts
+export enum SupportedInstrument {
+  Dho804 = 1,
+  Dm858e = 2,
+}
+```
+
+The protocol is application-specific, not a generic RPC or plugin protocol.
 
 Use:
 
-- JSON for control, state, lifecycle, measurement and error messages
-- binary frames for waveform sample payloads
+- JSON for protocol handshake, subscriptions, lifecycle, state, readings, control, results and errors
+- binary frames only for DHO804 waveform sample payloads
 
-HTTP is only needed for application assets and simple endpoints such as `/health`.
+Protocol discriminants and fixed values use numeric TypeScript enums. Object field names remain descriptive.
 
-Protocol discriminants and fixed protocol values use actual numeric TypeScript enums. Property names remain descriptive.
+## Protocol version
 
-TypeScript conventions are documented in `typescript-practices.md`. The authoritative connected-scope model is documented in `scope-model.md`. The byte-for-byte waveform format is documented in `waveform-protocol.md`.
+```ts
+export const PROTOCOL_VERSION = 2;
+```
+
+Version 2 is a breaking change from the original scope-only protocol because:
+
+- instrument lifecycle is subscription-gated
+- raw SCPI requires an explicit instrument target
+- DM858E lifecycle/control/readout messages exist
+- browser/server compatibility is checked before instrument traffic
+
+Do not renumber existing message values when adding new messages.
+
+## Application-level hello
+
+The server sends a version hello immediately after accepting `/ws`:
+
+```ts
+interface ProtocolHelloMessage {
+  type: MessageType.ProtocolHello; // 25
+  protocolVersion: number;
+}
+```
+
+The browser must require exact equality with `PROTOCOL_VERSION` and reply:
+
+```ts
+interface ProtocolHelloAckMessage {
+  type: MessageType.ProtocolHelloAck; // 26
+  protocolVersion: number;
+}
+```
+
+The server rejects non-handshake application messages until a valid acknowledgement arrives.
+
+A mismatch closes the socket clearly. This handshake happens before instrument subscription, so an old browser bundle cannot silently wait for scope lifecycle messages that the new server only sends after subscription.
 
 ## Message types
-
-Assign protocol enum values explicitly and keep them stable once used on the wire.
 
 ```ts
 export enum MessageType {
@@ -41,20 +83,52 @@ export enum MessageType {
   ScpiResult = 22,
   MeasurementResult = 23,
   DeepCaptureReady = 24,
+  ProtocolHello = 25,
+  ProtocolHelloAck = 26,
+
+  InstrumentSubscribe = 30,
+  InstrumentUnsubscribe = 31,
+
+  DmmConnected = 40,
+  DmmState = 41,
+  DmmDisconnected = 42,
+  DmmReading = 43,
+
+  DmmControlSet = 50,
 }
 ```
 
-Do not renumber existing values when adding future message kinds.
+## Instrument subscriptions
 
-Do not use string discriminants such as `"interaction.update"` or `"scope.state"` on the wire.
+After the hello handshake the browser explicitly subscribes to the instrument owned by its current route:
 
-## State delivery
+```ts
+interface InstrumentSubscribeMessage {
+  type: MessageType.InstrumentSubscribe;
+  instrument: SupportedInstrument;
+}
 
-The server sends complete authoritative `ScopeState` snapshots rather than `Partial<ScopeState>` patches.
+interface InstrumentUnsubscribeMessage {
+  type: MessageType.InstrumentUnsubscribe;
+  instrument: SupportedInstrument;
+}
+```
 
-The state object is small, the application runs on a local network, and full snapshots avoid patch-merging ambiguity and optional-field-heavy types.
+These messages do not use request IDs. The observable result is the corresponding instrument lifecycle stream.
 
-`ScopeState` and `ScopeInfo` are defined by `scope-model.md`; the protocol imports those shared types rather than recreating them.
+Server behaviour:
+
+- only subscribed browser sessions receive that instrument's lifecycle/state/data
+- scope commands require a DHO804 subscription
+- DMM commands require a DM858E subscription
+- `ScpiExecute` requires a subscription to its explicit target
+- closing the browser WebSocket releases all subscriptions owned by that session
+
+Multiple tabs may subscribe to the same instrument and share its one active server runtime.
+
+## Scope lifecycle
+
+DHO804 lifecycle remains separate from DMM lifecycle:
 
 ```ts
 type ScopeLifecycleMessage =
@@ -74,11 +148,51 @@ type ScopeLifecycleMessage =
     };
 ```
 
-`ScopeConnected` is not sent until identity has been verified as DHO804 and a complete initial `ScopeState` has been read.
+`ScopeConnected` is not published until DHO804 identity is verified and a complete initial `ScopeState` has been read.
 
-## Control kinds
+The server sends complete authoritative `ScopeState` snapshots rather than partial patches.
 
-Control kinds are numeric enums rather than string property paths:
+## DMM lifecycle and readings
+
+Shared DMM domain types live in `src/shared/dmm-types.ts`.
+
+Lifecycle/data messages are:
+
+```ts
+type DmmLifecycleMessage =
+  | {
+      type: MessageType.DmmConnected;
+      protocolVersion: number;
+      info: DmmInfo;
+      state: DmmState;
+    }
+  | {
+      type: MessageType.DmmState;
+      state: DmmState;
+    }
+  | {
+      type: MessageType.DmmDisconnected;
+      reason: string;
+    }
+  | {
+      type: MessageType.DmmReading;
+      reading: DmmPrimaryReading;
+    };
+```
+
+`DmmState` and `DmmPrimaryReading` remain separate. The latest reading is dynamic data, not a field inside the authoritative configuration/state snapshot.
+
+The current shared DMM state covers:
+
+- measurement function
+- Auto/fixed range
+- Slow/Medium/Fast acquisition rate
+
+Primary readings carry a sequence, typed unit and either a finite value or overload state.
+
+## DHO804 controls
+
+Scope control kinds remain numeric:
 
 ```ts
 export enum ControlKind {
@@ -94,112 +208,38 @@ export enum ControlKind {
 }
 ```
 
-The initial `TriggerType` control exists so the UI can explicitly select Edge trigger after the physical scope or another SCPI client has selected another trigger type. Version 1 only needs to accept `TriggerType.Edge` as a writable trigger type even though `ScopeState` can report the other DHO804 trigger types.
+Use the typed `ControlChange` union from shared code rather than arbitrary property paths.
 
-## Control payloads
-
-Use explicit discriminated unions. Do not use arbitrary string paths such as `channels.0.offset` and do not use an untyped `value: unknown`.
+Discrete changes:
 
 ```ts
-export type ControlChange =
-  | {
-      kind: ControlKind.ChannelEnabled;
-      channel: Channel;
-      value: boolean;
-    }
-  | {
-      kind: ControlKind.ChannelScale;
-      channel: Channel;
-      value: number;
-    }
-  | {
-      kind: ControlKind.ChannelOffset;
-      channel: Channel;
-      value: number;
-    }
-  | {
-      kind: ControlKind.HorizontalScale;
-      value: number;
-    }
-  | {
-      kind: ControlKind.HorizontalPosition;
-      value: number;
-    }
-  | {
-      kind: ControlKind.TriggerLevel;
-      value: number;
-    }
-  | {
-      kind: ControlKind.TriggerType;
-      value: TriggerType;
-    }
-  | {
-      kind: ControlKind.TriggerSource;
-      value: Channel;
-    }
-  | {
-      kind: ControlKind.TriggerSlope;
-      value: EdgeSlope;
-    };
-```
-
-All numeric physical values use the units defined in `scope-model.md`.
-
-`InteractiveControl` is the subset that can produce continuous updates:
-
-```ts
-export type InteractiveControl =
-  | Extract<ControlChange, { kind: ControlKind.ChannelScale }>
-  | Extract<ControlChange, { kind: ControlKind.ChannelOffset }>
-  | Extract<ControlChange, { kind: ControlKind.HorizontalScale }>
-  | Extract<ControlChange, { kind: ControlKind.HorizontalPosition }>
-  | Extract<ControlChange, { kind: ControlKind.TriggerLevel }>;
-```
-
-## Discrete control changes
-
-Ordinary controls and direct numeric-entry changes use request IDs so completion or failure can be associated with the originating operation.
-
-```ts
-export interface ControlSetMessage {
+interface ControlSetMessage {
   type: MessageType.ControlSet;
   requestId: number;
   control: ControlChange;
 }
 ```
 
-A `ControlSet` for a normally interactive numeric field means a discrete/direct change rather than a pointer-drag stream.
-
-## Continuous interactions
-
-Intermediate drag updates are intentionally disposable and coalescible.
-
-They do not need a request ID or acknowledgement for every intermediate value.
+Continuous interaction updates are disposable and carry no request ID:
 
 ```ts
-export interface InteractionUpdateMessage {
+interface InteractionUpdateMessage {
   type: MessageType.InteractionUpdate;
   control: InteractiveControl;
 }
 ```
 
-The final value is sent separately as an interaction commit:
+Final interaction commits carry a request ID:
 
 ```ts
-export interface InteractionCommitMessage {
+interface InteractionCommitMessage {
   type: MessageType.InteractionCommit;
   requestId: number;
   control: InteractiveControl;
 }
 ```
 
-The server schedules the committed value at highest priority and performs authoritative readback afterwards.
-
-The browser should not wait for completion before updating the local visual position.
-
-## Acquisition actions
-
-Use a numeric enum for the action itself:
+## DHO804 acquisition actions
 
 ```ts
 export enum AcquisitionAction {
@@ -208,56 +248,99 @@ export enum AcquisitionAction {
   Single = 3,
 }
 
-export interface AcquisitionActionMessage {
+interface AcquisitionActionMessage {
   type: MessageType.AcquisitionAction;
   requestId: number;
   action: AcquisitionAction;
 }
 ```
 
-These map to the DHO804 root `:RUN`, `:STOP` and `:SINGle` commands. They are actions, not direct writes to `ScopeRunState`.
+These are DHO804-only and require a DHO804 subscription.
 
-## Measurements
+## DMM controls
 
-Measurements are explicit request/response work and are not members of `ScopeState`.
-
-The shared `MeasurementKind`, `MeasurementSpec` and `MeasurementValue` types are defined in `scope-model.md`.
+DMM control kinds are independent of scope control kinds:
 
 ```ts
-export interface MeasurementReadMessage {
+export enum DmmControlKind {
+  Function = 1,
+  Range = 2,
+  AcquisitionRate = 3,
+}
+```
+
+The browser sends:
+
+```ts
+interface DmmControlSetMessage {
+  type: MessageType.DmmControlSet;
+  requestId: number;
+  control: DmmControlChange;
+}
+```
+
+The exact DM858E SCPI mapping belongs to the backend driver; the wire protocol carries typed domain values, not Rigol response strings.
+
+## DHO804 measurements
+
+Measurements remain explicit request/result data outside `ScopeState`:
+
+```ts
+interface MeasurementReadMessage {
   type: MessageType.MeasurementRead;
   requestId: number;
-  measurements: MeasurementSpec[];
+  measurements: NonEmptyArray<MeasurementSpec>;
 }
 
-export interface MeasurementResultMessage {
+interface MeasurementResultMessage {
   type: MessageType.MeasurementResult;
   requestId: number;
   values: MeasurementValue[];
 }
 ```
 
-A measurement request must contain at least one item. The server returns values in the same order as the request.
+Requests must be non-empty. Values are returned in request order. Any failed requested measurement fails the request rather than returning a partial optional result.
 
-The frontend can issue a low-rate recurring request containing only the measurements currently displayed. Start conservatively at approximately 1 Hz and benchmark before increasing the rate. These reads are less important than interactive control and should not delay it.
+## Raw SCPI
 
-If any requested measurement fails, return `CommandFailed` for the request rather than a partially valid result containing optional/missing values.
-
-## Deep capture
-
-A deep capture request asks the server to capture RAW memory for the channels that are currently enabled on the DHO804.
+Raw SCPI is explicitly instrument-targeted:
 
 ```ts
-export interface DeepCaptureRequestMessage {
+interface ScpiExecuteMessage {
+  type: MessageType.ScpiExecute;
+  requestId: number;
+  instrument: SupportedInstrument;
+  command: string;
+}
+
+interface ScpiResultMessage {
+  type: MessageType.ScpiResult;
+  requestId: number;
+  response: string;
+}
+```
+
+There is no implicit DHO804 default in the browser client or SCPI console component.
+
+The gateway routes the request through the selected instrument's normal scheduler. Raw SCPI never bypasses transaction serialization.
+
+For a successful command with no text response, `response` is the empty string.
+
+If a raw query produces a binary block while the console only supports text, the transport must still consume the complete block safely before reporting a clear console failure.
+
+## DHO804 deep capture
+
+```ts
+interface DeepCaptureRequestMessage {
   type: MessageType.DeepCaptureRequest;
   requestId: number;
 }
 ```
 
-On success the server returns:
+On success:
 
 ```ts
-export interface DeepCaptureChannelInfo {
+interface DeepCaptureChannelInfo {
   channel: Channel;
   unit: ChannelUnit;
   sampleCount: number;
@@ -266,34 +349,22 @@ export interface DeepCaptureChannelInfo {
   xReference: number;
 }
 
-export interface DeepCaptureReadyMessage {
+interface DeepCaptureReadyMessage {
   type: MessageType.DeepCaptureReady;
   requestId: number;
   captureId: number;
-  channels: DeepCaptureChannelInfo[];
+  channels: NonEmptyArray<DeepCaptureChannelInfo>;
 }
 ```
 
-`captureId` is positive. `channels` is non-empty and contains only channels actually retained in the completed capture.
+`captureId` is positive and `channels` is non-empty.
 
-Axis/unit metadata is included here deliberately. It lets the browser immediately convert its desired visible time range into source sample indices before receiving the first deep viewport binary frame; without it the browser would not yet know the capture's source-index/time mapping.
+## DHO804 deep viewport requests
 
-For each channel:
-
-```ts
-x = xOrigin + (sampleIndex - xReference) * xIncrement;
-```
-
-A deep capture is explicit and may take noticeable time. Do not pretend it is preemptible once a native RAW scheduled operation is in progress.
-
-The browser then asks for display-sized views of that retained capture.
-
-## Deep viewport requests
-
-Deep viewport requests use zero-based, half-open source sample ranges:
+Viewport ranges are zero-based and half-open:
 
 ```ts
-export interface WaveformViewportRequestMessage {
+interface WaveformViewportRequestMessage {
   type: MessageType.WaveformViewportRequest;
   requestId: number;
   captureId: number;
@@ -304,18 +375,16 @@ export interface WaveformViewportRequestMessage {
 }
 ```
 
-The successful response is a `WaveformKind.DeepViewport` binary frame described in `waveform-protocol.md`.
+Success is a `WaveformKind.DeepViewport` binary frame described in `waveform-protocol.md`.
 
-A failed request receives `CommandFailed` with the same `requestId`.
-
-A newer viewport request supersedes an older viewport response that is no longer useful to the browser.
+A newer request supersedes an older pending viewport for the same channel.
 
 ## Command completion
 
-Messages with a `requestId` receive a completion, a typed result, or a failure response.
+Messages with request IDs receive either a typed result, completion or failure:
 
 ```ts
-export type CommandResult =
+type CommandResult =
   | {
       type: MessageType.CommandCompleted;
       requestId: number;
@@ -327,41 +396,11 @@ export type CommandResult =
     };
 ```
 
-Use `CommandCompleted` for successful commands that have no richer response payload.
+Use typed result messages for measurements, deep-capture completion and raw SCPI responses.
 
-Use the typed result message for measurements, deep-capture completion and SCPI console responses.
+## DHO804 binary waveforms
 
-The UI should remain optimistic where appropriate and should not generally block interaction waiting for `CommandCompleted`.
-
-## Raw SCPI console
-
-The SCPI console uses explicit request/response messages and is not a bypass around the scheduler.
-
-```ts
-export interface ScpiExecuteMessage {
-  type: MessageType.ScpiExecute;
-  requestId: number;
-  command: string;
-}
-
-export interface ScpiResultMessage {
-  type: MessageType.ScpiResult;
-  requestId: number;
-  response: string;
-}
-```
-
-For a command with no text response, `response` is the empty string. It remains required.
-
-Raw console commands still pass through the normal serialized SCPI path so they cannot corrupt query/response framing.
-
-Version 1 of the console is for commands and text queries. If a raw console query produces a binary block, the transport must still consume that **complete** binary response safely and then the console request fails clearly. Never attempt to parse a binary block as newline-delimited text just because the console does not expose binary results.
-
-Native waveform reads belong to the waveform services.
-
-## Live waveforms
-
-Live waveform samples are sent as binary frames using:
+Binary waveform frames are separate from `ServerJsonMessage` and use the fixed format in `waveform-protocol.md`.
 
 ```ts
 export enum WaveformKind {
@@ -370,16 +409,17 @@ export enum WaveformKind {
 }
 ```
 
-The exact 64-byte header and indexed Float32 payload are defined in `waveform-protocol.md`.
-
-Live waveform frames are disposable. When backpressure occurs, prefer the newest available frame.
+Live frames are sent only to DHO804-subscribed sessions and are disposable under backpressure.
 
 ## Client message union
 
 Conceptually:
 
 ```ts
-export type ClientMessage =
+type ClientMessage =
+  | ProtocolHelloAckMessage
+  | InstrumentSubscribeMessage
+  | InstrumentUnsubscribeMessage
   | ControlSetMessage
   | InteractionUpdateMessage
   | InteractionCommitMessage
@@ -387,92 +427,60 @@ export type ClientMessage =
   | DeepCaptureRequestMessage
   | WaveformViewportRequestMessage
   | ScpiExecuteMessage
-  | MeasurementReadMessage;
+  | MeasurementReadMessage
+  | DmmControlSetMessage;
 ```
 
-## Server message union
+## Server JSON union
 
 Conceptually:
 
 ```ts
-export type ServerJsonMessage =
+type ServerJsonMessage =
+  | ProtocolHelloMessage
   | ScopeLifecycleMessage
+  | DmmLifecycleMessage
   | CommandResult
   | ScpiResultMessage
   | MeasurementResultMessage
   | DeepCaptureReadyMessage;
 ```
 
-Binary waveform frames are handled separately from `ServerJsonMessage`.
-
-## Protocol representation
-
-Numeric enums reduce repeated string values without making the protocol opaque.
-
-Keep descriptive object keys:
-
-```json
-{
-  "type": 11,
-  "control": {
-    "kind": 3,
-    "channel": 1,
-    "value": 0.42
-  }
-}
-```
-
-Do not compress ordinary JSON protocol messages into positional arrays merely to save a few additional bytes.
-
-## Protocol versioning
-
-Define `PROTOCOL_VERSION = 1` in shared code.
-
-`ScopeConnected.protocolVersion` carries that value.
-
-Do not build a complex negotiation system initially. If browser and server protocol versions are incompatible, fail clearly rather than guessing.
-
 ## JSON validation
 
-WebSocket input is untrusted transport data even on a local network and must be structurally validated before it reaches application code.
+Validate WebSocket JSON structurally before application dispatch.
 
-Do not add a heavy runtime schema framework merely for this. Small explicit type/field checks are sufficient for the initial protocol.
+Reject at least:
 
-Validation should reject:
-
-- unknown message type values
+- unknown message types
+- application traffic before handshake
+- mismatched protocol version
+- unsupported instrument identity
 - missing required fields
-- non-finite numeric control values
-- enum values outside their defined numeric range
+- non-finite numeric controls
+- out-of-range enum values
 - request IDs that are not non-negative integers
-- invalid deep viewport ranges
+- invalid viewport ranges
 - empty measurement requests
+- invalid DMM fixed ranges such as zero/negative/non-finite values
 
-Fail the request clearly. Do not convert malformed input into partially populated application objects.
+Malformed data must not become partially populated application objects.
 
 ## Backpressure
 
-Control, state and error messages are more important than stale live waveform frames.
+JSON lifecycle/control/error traffic is more important than stale DHO804 live waveform frames.
 
-Do not allow a slow browser to create an unbounded outgoing waveform queue.
-
-Prefer:
-
-- bounded output buffering
-- stale waveform replacement
-- preservation of JSON control/state/error messages
-
-The exact waveform replacement rules are documented in `waveform-protocol.md`.
+Do not allow a slow browser to create an unbounded waveform queue. Prefer latest-frame replacement while preserving JSON traffic.
 
 ## Non-goals
 
-Do not introduce, unless a concrete future requirement appears:
+Do not add without a concrete requirement:
 
-- GraphQL
 - generic RPC
+- GraphQL
 - REST control endpoints
-- authentication/session ownership machinery
-- subscriptions per scope feature
-- partial-patch protocols for `ScopeState`
-
-The protocol should remain explicit, typed and small.
+- arbitrary instrument discovery/selection
+- generic plugin protocols
+- per-feature subscriptions inside one instrument
+- partial-patch protocols for `ScopeState` or `DmmState`
+- exclusive browser ownership/locking of an instrument
