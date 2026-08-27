@@ -171,6 +171,10 @@ class FakeDm858eServer {
       return;
     }
 
+    if (command === "DATA:LAST?" && this.blockReadings) {
+      return;
+    }
+
     const response = this.responseFor(command, connection.index);
     if (response !== undefined) {
       connection.socket.write(`${response}\n`);
@@ -196,7 +200,7 @@ class FakeDm858eServer {
       return this.nplc.toExponential(8).toUpperCase();
     }
     if (command === "DATA:LAST?") {
-      return this.blockReadings ? undefined : "-1.25000000E-01 VDC";
+      return "-1.25000000E-01 VDC";
     }
     if (command === "*OPT?") {
       return "NONE";
@@ -252,7 +256,7 @@ function configureResponse(functionToken: string, range: number, nplc: number): 
 }
 
 describe("DmmRuntime integration", () => {
-  it("publishes initial state/readings and applies controls with readback", async () => {
+  it("publishes initial state/readings and applies function/range/rate controls with readback", async () => {
     const fake = new FakeDm858eServer();
     const port = await fake.start();
     const connected: ConnectedDmmConnection[] = [];
@@ -291,22 +295,36 @@ describe("DmmRuntime integration", () => {
       });
 
       await runtime.setControl({
+        kind: DmmControlKind.Function,
+        value: DmmMeasurementFunction.Resistance4Wire,
+      });
+      await waitFor(() => states.find((state) => (
+        state.function === DmmMeasurementFunction.Resistance4Wire
+      )));
+
+      await runtime.setControl({
         kind: DmmControlKind.Range,
         value: { mode: DmmRangeMode.Fixed, value: 100 },
       });
       await waitFor(() => states.find((state) => (
-        state.range.mode === DmmRangeMode.Fixed && state.range.value === 100
+        state.function === DmmMeasurementFunction.Resistance4Wire &&
+        state.range.mode === DmmRangeMode.Fixed &&
+        state.range.value === 100
       )));
 
       await runtime.setControl({
         kind: DmmControlKind.AcquisitionRate,
         value: DmmAcquisitionRate.Fast,
       });
-      await waitFor(() => states.find((state) => state.acquisitionRate === DmmAcquisitionRate.Fast));
+      await waitFor(() => states.find((state) => (
+        state.function === DmmMeasurementFunction.Resistance4Wire &&
+        state.acquisitionRate === DmmAcquisitionRate.Fast
+      )));
 
       await expect(runtime.executeRawScpi("*OPT?")).resolves.toBe("NONE");
-      expect(fake.connections[0]?.commands).toContain("SENSe:VOLTage:DC:RANGe 100");
-      expect(fake.connections[0]?.commands).toContain("SENSe:VOLTage:DC:NPLC 0.4");
+      expect(fake.connections[0]?.commands).toContain("SENSe:FUNCtion \"FRESistance\"");
+      expect(fake.connections[0]?.commands).toContain("SENSe:FRESistance:RANGe 100");
+      expect(fake.connections[0]?.commands).toContain("SENSe:FRESistance:NPLC 0.4");
       expect(fake.connections[0]?.commands).toContain("*OPT?");
     } finally {
       await runtime.stop();
