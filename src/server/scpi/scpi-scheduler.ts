@@ -1,4 +1,3 @@
-import type { Channel } from "../../shared/scope-types.js";
 import type { ScpiTransport } from "./scpi-transport.js";
 
 export enum ScpiPriority {
@@ -9,35 +8,16 @@ export enum ScpiPriority {
   Background = 4,
 }
 
-export enum ScpiCoalesceKind {
-  ChannelScale = 1,
-  ChannelOffset = 2,
-  HorizontalScale = 3,
-  HorizontalPosition = 4,
-  TriggerLevel = 5,
-}
-
-export type ScpiCoalesceKey =
-  | {
-      kind: ScpiCoalesceKind.ChannelScale | ScpiCoalesceKind.ChannelOffset;
-      channel: Channel;
-    }
-  | {
-      kind:
-        | ScpiCoalesceKind.HorizontalScale
-        | ScpiCoalesceKind.HorizontalPosition
-        | ScpiCoalesceKind.TriggerLevel;
-    };
+export type ScpiCoalesceKey = symbol;
 
 export enum ScpiOperationKind {
   Identity = 1,
   StateRead = 2,
   Write = 3,
-  RunAction = 4,
+  Action = 4,
   Measurement = 5,
   RawScpi = 6,
-  LiveWaveform = 7,
-  RawWaveform = 8,
+  BinaryTransfer = 7,
 }
 
 export interface ScpiOperationMetric {
@@ -50,7 +30,7 @@ export interface ScpiOperationMetric {
 
 export interface ScpiSchedulerCounters {
   coalescedInteractiveCount: number;
-  supersededLiveCount: number;
+  supersededLatestCount: number;
 }
 
 export interface ScpiOperationRecorder {
@@ -72,8 +52,8 @@ interface QueuedOperation {
   operation: ScpiOperation<unknown>;
   queuedAt: number;
   waiters: Waiter[];
-  coalesceKey: string | null;
-  live: boolean;
+  coalesceKey: ScpiCoalesceKey | null;
+  latest: boolean;
 }
 
 const priorityValues = [
@@ -92,7 +72,7 @@ export class ScpiScheduler {
   private stopped = false;
   private readonly metrics: ScpiOperationMetric[] = [];
   private coalescedInteractiveCount = 0;
-  private supersededLiveCount = 0;
+  private supersededLatestCount = 0;
 
   public constructor(private readonly transport: ScpiTransport) {}
 
@@ -107,7 +87,7 @@ export class ScpiScheduler {
   ): Promise<T> {
     return this.enqueue(
       { priority: ScpiPriority.Interactive, kind, execute },
-      serializeCoalesceKey(key),
+      key,
       false,
     );
   }
@@ -117,8 +97,7 @@ export class ScpiScheduler {
     key: ScpiCoalesceKey | null,
     execute: ScpiOperation<T>["execute"],
   ): Promise<T> {
-    const serializedKey = key === null ? null : serializeCoalesceKey(key);
-    const staleWaiters = serializedKey === null ? [] : this.removePendingInteractive(serializedKey);
+    const staleWaiters = key === null ? [] : this.removePendingInteractive(key);
     return this.enqueue(
       { priority: ScpiPriority.Immediate, kind, execute },
       null,
@@ -127,8 +106,12 @@ export class ScpiScheduler {
     );
   }
 
-  public scheduleLive<T>(kind: ScpiOperationKind, execute: ScpiOperation<T>["execute"]): Promise<T> {
-    return this.enqueue({ priority: ScpiPriority.Waveform, kind, execute }, null, true);
+  public scheduleLatest<T>(
+    priority: ScpiPriority,
+    kind: ScpiOperationKind,
+    execute: ScpiOperation<T>["execute"],
+  ): Promise<T> {
+    return this.enqueue({ priority, kind, execute }, null, true);
   }
 
   public getMetrics(): readonly ScpiOperationMetric[] {
@@ -138,7 +121,7 @@ export class ScpiScheduler {
   public getCounters(): ScpiSchedulerCounters {
     return {
       coalescedInteractiveCount: this.coalescedInteractiveCount,
-      supersededLiveCount: this.supersededLiveCount,
+      supersededLatestCount: this.supersededLatestCount,
     };
   }
 
@@ -149,8 +132,8 @@ export class ScpiScheduler {
 
   private enqueue<T>(
     operation: ScpiOperation<T>,
-    coalesceKey: string | null,
-    live: boolean,
+    coalesceKey: ScpiCoalesceKey | null,
+    latest: boolean,
     inheritedWaiters: Waiter[] = [],
   ): Promise<T> {
     if (this.stopped) {
@@ -169,7 +152,7 @@ export class ScpiScheduler {
         queuedAt: performance.now(),
         waiters: [...inheritedWaiters, waiter],
         coalesceKey,
-        live,
+        latest,
       };
 
       if (coalesceKey !== null) {
@@ -187,16 +170,16 @@ export class ScpiScheduler {
         }
       }
 
-      if (live) {
-        const existingIndex = queue.findIndex((candidate) => candidate.live);
+      if (latest) {
+        const existingIndex = queue.findIndex((candidate) => candidate.latest);
         if (existingIndex >= 0) {
           const existing = queue[existingIndex];
           if (existing === undefined) {
-            throw new Error("Invalid SCPI scheduler live queue state");
+            throw new Error("Invalid SCPI scheduler latest queue state");
           }
           queued.waiters.unshift(...existing.waiters);
           queue.splice(existingIndex, 1, queued);
-          this.supersededLiveCount += 1;
+          this.supersededLatestCount += 1;
           this.requestPump();
           return;
         }
@@ -280,7 +263,7 @@ export class ScpiScheduler {
     return queue;
   }
 
-  private removePendingInteractive(key: string): Waiter[] {
+  private removePendingInteractive(key: ScpiCoalesceKey): Waiter[] {
     const queue = this.queueFor(ScpiPriority.Interactive);
     const index = queue.findIndex((candidate) => candidate.coalesceKey === key);
     if (index < 0) {
@@ -305,14 +288,4 @@ export class ScpiScheduler {
       }
     }
   }
-}
-
-function serializeCoalesceKey(key: ScpiCoalesceKey): string {
-  if (
-    key.kind === ScpiCoalesceKind.ChannelScale ||
-    key.kind === ScpiCoalesceKind.ChannelOffset
-  ) {
-    return `${key.kind}:${key.channel}`;
-  }
-  return String(key.kind);
 }
