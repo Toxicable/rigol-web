@@ -4,9 +4,14 @@ Status: initial planning
 
 ## Goal
 
-Add the Rigol DM858E to Rigol Web as a second instrument UI while reusing the existing SCPI transport/scheduling foundation.
+Add the Rigol DM858E to Rigol Web as a second instrument UI.
 
-Do not turn the project into a generic arbitrary-instrument framework. The supported devices are explicitly the existing DHO804 and the new DM858E.
+Before adding the DMM route/runtime, refactor the existing SCPI layer into a genuinely shared instrument foundation. Do not make the scope implementation itself generic; only extract the pieces that are actually common to SCPI instruments.
+
+Supported devices remain explicit:
+
+- Rigol DHO804
+- Rigol DM858E
 
 Reference material:
 
@@ -14,112 +19,109 @@ Reference material:
 - `Toxicable/toxic-boards/docs/lab-gear/rigol-dm858-ui-issues.md`
 - Rigol DM858 Series Programming Guide / User Guide
 
+## Phase 1: SCPI foundation refactor
+
+Do this before adding DM858E-specific UI or runtime code.
+
+### Keep generic/shared
+
+`ScpiTransport` is already mostly instrument-agnostic and should remain the common TCP/SCPI framing layer.
+
+`ScpiScheduler` should become fully instrument-agnostic:
+
+- remove scope types from the scheduler
+- remove scope-specific `ScpiCoalesceKind` values
+- accept an opaque caller-provided coalescing key
+- retain priority scheduling, coalescing, superseding, metrics and transport serialization
+- keep binary/text response handling generic
+
+Scope code then owns scope-specific scheduler keys such as channel scale/offset, horizontal scale/position and trigger level.
+
+DMM code will own its own keys such as range, function or rate where coalescing is useful.
+
+Also extract/share any browser/server request-correlation or raw-SCPI plumbing that is currently scope-specific but is actually identical for both instruments.
+
+The raw SCPI console must always go through the selected instrument's scheduler.
+
+### Keep device-specific
+
+Do not create a generic instrument state model or generic driver API merely because both devices use SCPI.
+
+Keep these separate:
+
+- `src/server/scope/**`
+- `src/server/dmm/**`
+- `src/shared/scope-types.ts`
+- new `src/shared/dmm-types.ts`
+- scope store/client facade
+- DMM store/client facade
+- DHO804 SCPI command mapping
+- DM858E SCPI command mapping
+
+The shared boundary is transport/scheduling/session plumbing, not measurement semantics.
+
 ## Route and shell
 
-Use a real React router. Adding a routing dependency is acceptable and has no hardware cost.
+Use a real React router.
 
 Routes:
 
 - `/` -> DHO804
 - `/dm858e` -> DM858E
 
-Add a small persistent instrument switcher in the app shell:
+Add a persistent instrument switcher:
 
 - DHO804
 - DM858E
 
-Production static serving must fall back to `index.html` for application routes such as `/dm858e` while still returning real 404s for missing static assets.
+Production static serving must fall back to `index.html` for application routes while still returning real 404s for missing static assets.
 
 ## Instrument registration and activation lifecycle
 
-Both supported instruments are registered with the server at startup, but registration does not open their SCPI transport.
+Both instruments are registered with the server at startup, but registration does not open their SCPI transport.
 
-Each registered instrument has its own configuration and runtime:
+Each instrument owns its own independent SCPI session:
 
-- DHO804 -> its own `ScpiTransport` + `ScpiScheduler` + scope runtime
-- DM858E -> its own `ScpiTransport` + `ScpiScheduler` + DMM runtime
+- DHO804 -> `ScpiTransport` + `ScpiScheduler` + scope runtime
+- DM858E -> `ScpiTransport` + `ScpiScheduler` + DMM runtime
 
 The browser route controls activation:
 
-1. entering an instrument route subscribes the browser session to that instrument
-2. the first active subscriber starts that instrument runtime and SCPI transport
+1. entering an instrument route subscribes that browser session to the instrument
+2. the first subscriber starts that instrument runtime and SCPI transport
 3. leaving the route unsubscribes that browser session
-4. the last active subscriber stops that instrument runtime and closes its SCPI transport
+4. the last subscriber stops that runtime and closes its SCPI transport
 
-This means navigating from `/` to `/dm858e` normally stops the DHO804 transport and starts the DM858E transport.
+Use per-instrument subscription/reference counts rather than a global `activeInstrument` singleton so multiple tabs cannot shut down each other's sessions.
 
-Use subscription/reference-count semantics rather than a global `activeInstrument` singleton. That preserves the route-driven start/stop behaviour while allowing two browser tabs to use different instruments, or the same instrument, without one tab unexpectedly shutting down another tab's transport.
+Browser disconnect releases its subscriptions automatically.
 
-Browser disconnect must automatically release all subscriptions owned by that browser session.
-
-A fast route change must not leave a stale pending start/stop operation able to resurrect the wrong runtime. Runtime start/stop needs explicit lifecycle state and idempotent transitions.
+Runtime start/stop must be idempotent and safe against rapid route changes so stale asynchronous lifecycle work cannot reopen an instrument after its final subscriber has left.
 
 ## Browser WebSocket lifecycle
 
 Keep one browser/server WebSocket connection for the application shell.
 
-Do not reconnect the browser WebSocket merely because the React route changes. Route components subscribe/unsubscribe instrument runtimes over the existing socket.
+Route changes do not reconnect the browser WebSocket. Route components subscribe/unsubscribe instrument runtimes over the existing socket.
 
-This keeps browser request correlation and error handling shared while allowing the instrument-side TCP/SCPI connection to be started and stopped independently.
+The protocol should gain explicit instrument subscription messages plus DMM-specific messages. Generic request completion/failure and raw-SCPI result handling can be shared.
 
-The protocol should gain explicit instrument subscription messages, for example conceptually:
-
-- subscribe DHO804
-- unsubscribe DHO804
-- subscribe DM858E
-- unsubscribe DM858E
-
-The exact wire names remain to be designed with the protocol update.
-
-Scope-specific commands must only be accepted while that browser session is subscribed to the scope. DMM-specific commands must only be accepted while subscribed to the DMM.
+Scope commands are accepted only from sessions subscribed to the scope. DMM commands are accepted only from sessions subscribed to the DMM.
 
 ## Server configuration
 
-Configuration becomes explicit per registered instrument, for example:
+Use explicit configuration per registered instrument, for example:
 
 - `RIGOL_SCOPE_HOST`
 - `RIGOL_SCOPE_PORT`
 - `RIGOL_DMM_HOST`
 - `RIGOL_DMM_PORT`
 
-This should be a hard cut from the current single `RIGOL_HOST` / `RIGOL_PORT` surface when implementation begins.
-
-The registry owns configuration/runtime lookup; it does not collapse the two device domains into one generic state model.
-
-## What should be shared
-
-### Keep shared
-
-`ScpiTransport` is already instrument-agnostic and should remain shared.
-
-`ScpiScheduler` is mostly reusable. Generalize only the scope-specific coalescing boundary:
-
-- the scheduler should accept an opaque caller-provided coalescing key
-- scope code owns scope-specific keys such as channel scale/offset
-- DMM code owns DMM-specific keys such as range/rate/function
-
-Do not move scope or DMM command construction into the scheduler.
-
-A small shared WebSocket request/correlation layer is also worth extracting if it avoids duplicating request IDs, pending promises and error handling.
-
-Instrument subscription/ref-count management can also be shared at the server shell level.
-
-### Keep separate
-
-Keep domain state and command mapping separate:
-
-- `src/server/scope/**`
-- `src/server/dmm/**`
-- `src/shared/scope-types.ts`
-- new `src/shared/dmm-types.ts`
-- existing `scope-store.ts`
-- new `dmm-store.ts`
-
-Do not force DMM state into `ScopeState` or create one huge all-instrument state union.
+This should be a hard cut from the existing single `RIGOL_HOST` / `RIGOL_PORT` configuration when implementation begins.
 
 ## DM858E backend shape
 
-Initial server modules:
+Initial modules:
 
 ```text
 src/server/dmm/dm858e-driver.ts
@@ -128,67 +130,41 @@ src/server/dmm/dmm-state-store.ts
 src/server/dmm/dmm-poller.ts
 ```
 
-The DM858E driver owns exact SCPI commands and parsing.
+The driver owns exact DM858E SCPI commands and parsing.
 
 The runtime owns:
 
-- transport connection/reconnect lifecycle while activated
+- transport lifecycle while route-subscribed
 - identity validation
 - authoritative DMM state
 - reading acquisition
-- host-side statistics/logging state
 - browser publication
 
-When the final route subscription disappears, ordinary live acquisition and polling stop and the SCPI transport closes.
+When the final route subscriber leaves, acquisition/polling stops and the SCPI transport closes.
 
-Logging is a special case: if server-owned logging is active, the DMM runtime must remain active even with zero UI-route subscribers. A running logging job therefore counts as an activation lease until it is stopped.
+Do not add background logging lifecycle exceptions yet.
 
-Exact SCPI acquisition strategy needs to be benchmarked on the physical DM858E. Do not assume repeated single `READ?` queries are the best way to reach the useful reading rate; buffered/triggered acquisition may be better.
+Exact SCPI acquisition strategy must be verified against the Programming Guide and benchmarked on the physical DM858E. Do not assume repeated `READ?` is the optimal sustained acquisition path.
 
-## Browser protocol
+## Primary DM858E screen
 
-Keep the existing single browser WebSocket, but add explicit DMM messages rather than mutating the scope messages.
+The main screen should behave like a good bench DMM rather than a settings dashboard.
 
-Likely shared lifecycle messages:
+Show prominently:
 
-- instrument subscribed / unsubscribed
-- command completed / failed
-- raw SCPI result
-
-Likely DMM lifecycle/data messages:
-
-- connected / disconnected
-- state snapshot
-- current reading / reading batch
-- control set
-- acquisition configuration
-- logging start/stop
-
-The browser should keep a separate DMM store and DMM client facade.
-
-## Primary DMM screen
-
-### Top/main reading area
-
-The first screen should behave like a good bench DMM, not like a settings dashboard.
-
-Show:
-
-- very large primary reading
+- large stable primary reading
 - unit
 - selected function
 - active range / Auto
 - acquisition mode/resolution
-- optional secondary reading when enabled
+- optional secondary reading
 - connection state
 
-Use fixed-width/tabular numerals and a stable layout so changing values do not make the reading jump horizontally.
-
-The local DM858 UI has owner-reported moving/jumping numeric rendering, so this is an explicit web-UI improvement target.
+Use tabular/fixed-width numerals and stable layout geometry so changing readings do not visibly shift horizontally.
 
 ### Function selection
 
-Fast-access function controls for the DM858E-supported measurement families:
+Fast-access controls for:
 
 - DC voltage
 - AC voltage
@@ -202,31 +178,29 @@ Fast-access function controls for the DM858E-supported measurement families:
 - capacitance
 - temperature / sensor
 
-Secondary-measurement options must be limited to combinations actually supported by the DM858E programming model; do not infer arbitrary combinations from the fact that the meter can display two measurements.
+Secondary-measurement choices must match combinations actually supported by the DM858E programming model.
 
-### Right-side measurement controls
+### Measurement controls
 
-Context-sensitive controls for the selected function:
+Context-sensitive controls for:
 
 - Auto or fixed range
 - rate/resolution
 - trigger source
 - samples per trigger
-- relevant function-specific options
+- function-specific settings
 
-Make the rate/resolution tradeoff explicit:
+Make the documented rate/resolution relationship explicit:
 
 - Slow = 5.5 digits
 - Medium/Fast = 4.5 digits
-- DM858E maximum specified rate is 80 readings/s
-
-Do not label Fast as a 5.5-digit 80 readings/s mode.
+- DM858E maximum specified rate = 80 readings/s
 
 ## Host-side analysis
 
-A major reason for the web UI is to avoid the meter UI's artificial restrictions.
+Host-side analysis is useful because it avoids limitations in the meter's own UI.
 
-Implement statistics over the streamed readings in Rigol Web rather than relying on the meter's math screen:
+Initial analysis can include:
 
 - min
 - max
@@ -234,68 +208,45 @@ Implement statistics over the streamed readings in Rigol Web rather than relying
 - standard deviation
 - sample count
 - elapsed time
-
-This keeps statistics available while the instrument itself is in Auto range. Rigol's built-in math/statistics functions are disabled in Auto range.
-
-The host should also own:
-
 - trend plot
-- limit checking
-- reading history visible in the current session
+- limits
 
-The plot refresh rate should be independent from the instrument reading rate. A fast acquisition stream does not require repainting the graph for every sample.
+Statistics should operate on the streamed readings rather than relying on the DM858E's built-in math screen, so they can remain available while the instrument is in Auto range.
 
-## Logging
+Plot refresh rate should be independent from instrument acquisition rate.
 
-Host-side logging is more useful than treating the DM858E's internal 20,000-reading storage as the primary workflow.
-
-Initial logging UI:
-
-- start / stop
-- elapsed time
-- reading count
-- current sample rate
-- export CSV
-
-Logging is server-owned so it can survive route changes, browser reloads and closing the browser tab. An active logging session holds the DMM runtime/transport open even when `/dm858e` has no active browser subscribers.
-
-Persistent session/file format can be decided separately; do not add a database just to get the first DMM route working.
-
-## Raw SCPI console
-
-Reuse the existing console UI, but bind it to the instrument associated with the current route.
-
-The console must never bypass the instrument's scheduler.
+No persistent/background logging is required in the current scope.
 
 ## First implementation slices
 
-1. Add the router, persistent instrument shell and `/dm858e` route.
-2. Add server instrument registration plus browser-session subscribe/unsubscribe/ref-count lifecycle.
-3. Split server configuration into scope and DMM endpoints.
-4. Generalize only the SCPI scheduler's scope-specific coalescing key.
-5. Move existing scope runtime start/stop under route subscription ownership.
-6. Add DM858E connection, `*IDN?`, state model and one primary reading.
+1. Refactor `ScpiScheduler` and related SCPI plumbing so the shared layer contains no scope-domain types or keys.
+2. Keep the DHO804 working entirely through that refactored shared SCPI layer; run existing tests before adding DMM code.
+3. Add the router, persistent instrument shell and `/dm858e` route.
+4. Add server instrument registration plus browser-session subscribe/unsubscribe/ref-count lifecycle.
+5. Split server configuration into scope and DMM endpoints and move scope runtime start/stop under subscription ownership.
+6. Add DM858E `*IDN?`, state model and one primary reading.
 7. Add function/range/rate controls.
-8. Add host-side stats and trend plot.
-9. Add server-owned logging/export with a logging activation lease.
-10. Add trigger/sample configuration, secondary measurement and sensor workflows.
-11. Benchmark real DM858E SCPI acquisition throughput and adjust acquisition strategy.
+8. Add host-side statistics and trend plot.
+9. Add trigger/sample configuration, secondary measurement and sensor workflows.
+10. Benchmark real DM858E SCPI acquisition throughput and adjust acquisition strategy.
 
 ## Non-goals for the first pass
 
+- persistent/background logging
 - generic VISA abstraction
 - arbitrary instrument discovery
-- multi-user tenancy
 - generic plug-in driver framework
-- reimplementing every DM858E front-panel menu before basic reading/control/logging works
+- generic cross-instrument state model
+- multi-user tenancy
+- reimplementing every DM858E front-panel menu before basic reading/control works
 
 ## Open verification items
 
-Before locking the exact control model, verify against the current Programming Guide and then the physical unit:
+Before locking the exact DMM control model, verify against the current Programming Guide and then the physical unit:
 
-- SCPI port and connection behaviour used by the DM858E LAN interface
+- SCPI port and LAN connection behaviour
 - exact function/range/rate command/response forms
 - allowed secondary measurement combinations
 - best sustained reading acquisition strategy over LAN
-- behaviour when controls are changed from the physical front panel during host streaming
-- whether any meter state needs a validation poll versus event/readback-only reconciliation
+- behaviour when front-panel controls change during host streaming
+- which DMM state benefits from polling versus explicit readback
