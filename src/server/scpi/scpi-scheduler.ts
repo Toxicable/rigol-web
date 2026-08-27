@@ -53,7 +53,7 @@ interface QueuedOperation {
   queuedAt: number;
   waiters: Waiter[];
   coalesceKey: ScpiCoalesceKey | null;
-  latest: boolean;
+  latestKey: ScpiCoalesceKey | null;
 }
 
 const priorityValues = [
@@ -77,7 +77,7 @@ export class ScpiScheduler {
   public constructor(private readonly transport: ScpiTransport) {}
 
   public schedule<T>(operation: ScpiOperation<T>): Promise<T> {
-    return this.enqueue(operation, null, false);
+    return this.enqueue(operation, null, null);
   }
 
   public scheduleInteractive<T>(
@@ -88,7 +88,7 @@ export class ScpiScheduler {
     return this.enqueue(
       { priority: ScpiPriority.Interactive, kind, execute },
       key,
-      false,
+      null,
     );
   }
 
@@ -101,17 +101,18 @@ export class ScpiScheduler {
     return this.enqueue(
       { priority: ScpiPriority.Immediate, kind, execute },
       null,
-      false,
+      null,
       staleWaiters,
     );
   }
 
   public scheduleLatest<T>(
     priority: ScpiPriority,
+    key: ScpiCoalesceKey,
     kind: ScpiOperationKind,
     execute: ScpiOperation<T>["execute"],
   ): Promise<T> {
-    return this.enqueue({ priority, kind, execute }, null, true);
+    return this.enqueue({ priority, kind, execute }, null, key);
   }
 
   public getMetrics(): readonly ScpiOperationMetric[] {
@@ -133,7 +134,7 @@ export class ScpiScheduler {
   private enqueue<T>(
     operation: ScpiOperation<T>,
     coalesceKey: ScpiCoalesceKey | null,
-    latest: boolean,
+    latestKey: ScpiCoalesceKey | null,
     inheritedWaiters: Waiter[] = [],
   ): Promise<T> {
     if (this.stopped) {
@@ -152,7 +153,7 @@ export class ScpiScheduler {
         queuedAt: performance.now(),
         waiters: [...inheritedWaiters, waiter],
         coalesceKey,
-        latest,
+        latestKey,
       };
 
       if (coalesceKey !== null) {
@@ -170,8 +171,8 @@ export class ScpiScheduler {
         }
       }
 
-      if (latest) {
-        const existingIndex = queue.findIndex((candidate) => candidate.latest);
+      if (latestKey !== null) {
+        const existingIndex = queue.findIndex((candidate) => candidate.latestKey === latestKey);
         if (existingIndex >= 0) {
           const existing = queue[existingIndex];
           if (existing === undefined) {
