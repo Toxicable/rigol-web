@@ -1,7 +1,7 @@
+import type { DmmPrimaryReading } from "../../shared/dmm-types.js";
 import { ScpiPriority } from "../scpi/scpi-scheduler.js";
 import type { Dm858eDriver } from "./dm858e-driver.js";
 import type { DmmStateStore } from "./dmm-state-store.js";
-import type { DmmPrimaryReading } from "../../shared/dmm-types.js";
 
 const DEFAULT_READING_INTERVAL_MS = 100;
 const DEFAULT_STATE_INTERVAL_MS = 500;
@@ -82,11 +82,13 @@ export class DmmPoller {
           this.sequence,
           ScpiPriority.Background,
         );
-        this.sequence += 1;
         if (!this.running) {
           break;
         }
-        this.publishReading(reading);
+        if (reading !== null) {
+          this.sequence += 1;
+          this.publishReading(reading);
+        }
       } catch (error) {
         if (this.running) {
           this.reportError(error);
