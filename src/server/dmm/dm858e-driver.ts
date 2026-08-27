@@ -193,8 +193,17 @@ export class Dm858eDriver {
     );
     const value = parseLeadingFiniteNumber(response, "DM858E primary reading");
 
-    if (Math.abs(value) >= noDataSentinel) {
+    if (isBareNoDataResponse(response)) {
       return null;
+    }
+
+    const unit = unitForFunction(measurementFunction);
+    if (Math.abs(value) >= noDataSentinel) {
+      return {
+        kind: DmmReadingKind.Overload,
+        sequence,
+        unit,
+      };
     }
 
     return {
@@ -203,7 +212,7 @@ export class Dm858eDriver {
       value: measurementFunction === DmmMeasurementFunction.Temperature
         ? temperatureToCelsius(value, this.temperatureUnit)
         : value,
-      unit: unitForFunction(measurementFunction),
+      unit,
     };
   }
 
@@ -570,6 +579,14 @@ function parseLeadingFiniteNumber(value: string, name: string): number {
     throw new Error(`Invalid ${name}: ${value}`);
   }
   return parsed;
+}
+
+function isBareNoDataResponse(value: string): boolean {
+  const trimmed = value.trim();
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?$/.test(trimmed)) {
+    return false;
+  }
+  return Math.abs(Number(trimmed)) >= noDataSentinel;
 }
 
 function parseBoolean(value: string): boolean {
