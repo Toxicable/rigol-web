@@ -13,19 +13,17 @@ The browser keeps one application-level WebSocket alive while navigating between
 
 - TypeScript
 - React
+- React Router
 - Vite
 - Zustand for instrument/application state
 - uPlot for DHO804 waveform rendering
 - one persistent WebSocket to the Rigol Web server
-- native History API routing for the two fixed routes
-
-A routing dependency is unnecessary for two static routes.
 
 ## Application shell and routing
 
-`App` owns the persistent `ScopeWebSocketClient` instance and route shell.
+`BrowserRouter` is mounted at the application root. `App` owns the persistent `ScopeWebSocketClient` instance and renders route elements through `Routes`/`Route`, with `NavLink` for the instrument switcher.
 
-Navigation between `/` and `/dm858e` uses `history.pushState` plus `popstate`, so route changes do not recreate the WebSocket. Normal modified-link behaviour remains available because only ordinary primary-button navigation is intercepted.
+The WebSocket client is created above the route elements, so navigation between `/` and `/dm858e` does not recreate it.
 
 Each route owns its instrument subscription:
 
@@ -38,6 +36,8 @@ DM858E route unmount  -> unsubscribe DM858E
 ```
 
 The server reference-counts subscriptions across browser sessions, so one tab leaving a route does not stop an instrument still used by another tab.
+
+Production static serving must return `index.html` for the known application routes so direct navigation/refresh works with `BrowserRouter`, while missing asset paths still return normal 404s.
 
 ## Shared browser transport state
 
@@ -281,7 +281,7 @@ Workstream D owns the finished meter UI under `src/web/dmm/**` and `src/web/comp
 
 The foundation already provides:
 
-- `/dm858e` route mount/unmount lifecycle
+- `/dm858e` React Router route and mount/unmount lifecycle
 - shared transport state
 - DMM lifecycle/data listener boundary
 - typed DMM state/control/reading contracts
