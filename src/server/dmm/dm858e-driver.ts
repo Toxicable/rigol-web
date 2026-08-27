@@ -35,6 +35,8 @@ interface ReadRangeResult {
   readonly effectiveRange?: number;
 }
 
+type TemperatureUnit = "C" | "F" | "K";
+
 const dcVoltageRanges = [0.1, 1, 10, 100, 1_000] as const;
 const acVoltageRanges = [0.1, 1, 10, 100, 750] as const;
 const currentRanges = [1e-4, 1e-3, 1e-2, 1e-1, 1, 3] as const;
@@ -44,6 +46,8 @@ const frequencyVoltageRanges = [0.1, 1, 10, 100, 750] as const;
 const noDataSentinel = 9.9e37;
 
 export class Dm858eDriver {
+  private temperatureUnit: TemperatureUnit = "C";
+
   public constructor(private readonly scheduler: ScpiScheduler) {}
 
   public async identify(): Promise<DmmInfo> {
@@ -77,20 +81,32 @@ export class Dm858eDriver {
     previousRate: DmmAcquisitionRate = DmmAcquisitionRate.Slow,
     priority: ScpiPriority = ScpiPriority.Normal,
   ): Promise<DmmState> {
-    const configuration = parseConfiguration(await this.queryText("CONFigure?", priority));
-    const rangeResult = await this.readRange(configuration.function, priority);
-    const acquisitionRate = await this.readAcquisitionRate(
-      configuration,
-      rangeResult.effectiveRange,
-      previousRate,
+    return this.scheduler.schedule({
       priority,
-    );
+      kind: ScpiOperationKind.StateRead,
+      execute: async (transport) => {
+        const configuration = parseConfiguration(await transport.queryText("CONFigure?"));
+        const rangeResult = await readRange(transport, configuration.function);
+        const acquisitionRate = await readAcquisitionRate(
+          transport,
+          configuration,
+          rangeResult.effectiveRange,
+          previousRate,
+        );
 
-    return {
-      function: configuration.function,
-      range: rangeResult.range,
-      acquisitionRate,
-    };
+        if (configuration.function === DmmMeasurementFunction.Temperature) {
+          this.temperatureUnit = parseTemperatureUnit(
+            await transport.queryText("UNIT:TEMPerature?"),
+          );
+        }
+
+        return {
+          function: configuration.function,
+          range: rangeResult.range,
+          acquisitionRate,
+        };
+      },
+    });
   }
 
   public async setFunction(value: DmmMeasurementFunction): Promise<void> {
@@ -165,7 +181,7 @@ export class Dm858eDriver {
     measurementFunction: DmmMeasurementFunction,
     sequence: number,
     priority: ScpiPriority = ScpiPriority.Normal,
-  ): Promise<DmmPrimaryReading> {
+  ): Promise<DmmPrimaryReading | null> {
     if (!Number.isSafeInteger(sequence) || sequence < 0) {
       throw new Error("DMM reading sequence must be a non-negative safe integer");
     }
@@ -176,21 +192,18 @@ export class Dm858eDriver {
       ScpiOperationKind.Measurement,
     );
     const value = parseLeadingFiniteNumber(response, "DM858E primary reading");
-    const unit = unitForFunction(measurementFunction);
 
     if (Math.abs(value) >= noDataSentinel) {
-      return {
-        kind: DmmReadingKind.Overload,
-        sequence,
-        unit,
-      };
+      return null;
     }
 
     return {
       kind: DmmReadingKind.Value,
       sequence,
-      value,
-      unit,
+      value: measurementFunction === DmmMeasurementFunction.Temperature
+        ? temperatureToCelsius(value, this.temperatureUnit)
+        : value,
+      unit: unitForFunction(measurementFunction),
     };
   }
 
@@ -219,66 +232,6 @@ export class Dm858eDriver {
       },
     });
     return "";
-  }
-
-  private async readRange(
-    measurementFunction: DmmMeasurementFunction,
-    priority: ScpiPriority,
-  ): Promise<ReadRangeResult> {
-    const spec = rangeSpec(measurementFunction);
-    if (spec === null) {
-      return { range: { mode: DmmRangeMode.Auto } };
-    }
-
-    const auto = parseBoolean(await this.queryText(`${spec.command}:AUTO?`, priority));
-    const effectiveRange = parsePositiveNumber(
-      await this.queryText(`${spec.command}?`, priority),
-      `${functionName(measurementFunction)} range`,
-    );
-
-    if (auto) {
-      return {
-        range: { mode: DmmRangeMode.Auto },
-        effectiveRange,
-      };
-    }
-
-    return {
-      range: {
-        mode: DmmRangeMode.Fixed,
-        value: effectiveRange,
-      },
-      effectiveRange,
-    };
-  }
-
-  private async readAcquisitionRate(
-    configuration: ParsedConfiguration,
-    effectiveRange: number | undefined,
-    previousRate: DmmAcquisitionRate,
-    priority: ScpiPriority,
-  ): Promise<DmmAcquisitionRate> {
-    const nplcCommand = nplcCommandFor(configuration.function);
-    if (nplcCommand !== null) {
-      return rateFromPlc(
-        parsePositiveNumber(
-          await this.queryText(`${nplcCommand}?`, priority),
-          `${functionName(configuration.function)} integration time`,
-        ),
-      );
-    }
-
-    if (
-      configuration.function === DmmMeasurementFunction.AcVoltage ||
-      configuration.function === DmmMeasurementFunction.AcCurrent
-    ) {
-      const range = configuration.range ?? effectiveRange;
-      if (range !== undefined && configuration.resolution !== undefined) {
-        return rateFromResolution(range, configuration.resolution);
-      }
-    }
-
-    return previousRate;
   }
 
   private async queryText(
@@ -311,6 +264,66 @@ export class Dm858eDriver {
   }
 }
 
+async function readRange(
+  transport: ScpiTransport,
+  measurementFunction: DmmMeasurementFunction,
+): Promise<ReadRangeResult> {
+  const spec = rangeSpec(measurementFunction);
+  if (spec === null) {
+    return { range: { mode: DmmRangeMode.Auto } };
+  }
+
+  const auto = parseBoolean(await transport.queryText(`${spec.command}:AUTO?`));
+  const effectiveRange = parsePositiveNumber(
+    await transport.queryText(`${spec.command}?`),
+    `${functionName(measurementFunction)} range`,
+  );
+
+  if (auto) {
+    return {
+      range: { mode: DmmRangeMode.Auto },
+      effectiveRange,
+    };
+  }
+
+  return {
+    range: {
+      mode: DmmRangeMode.Fixed,
+      value: effectiveRange,
+    },
+    effectiveRange,
+  };
+}
+
+async function readAcquisitionRate(
+  transport: ScpiTransport,
+  configuration: ParsedConfiguration,
+  effectiveRange: number | undefined,
+  previousRate: DmmAcquisitionRate,
+): Promise<DmmAcquisitionRate> {
+  const nplcCommand = nplcCommandFor(configuration.function);
+  if (nplcCommand !== null) {
+    return rateFromPlc(
+      parsePositiveNumber(
+        await transport.queryText(`${nplcCommand}?`),
+        `${functionName(configuration.function)} integration time`,
+      ),
+    );
+  }
+
+  if (
+    configuration.function === DmmMeasurementFunction.AcVoltage ||
+    configuration.function === DmmMeasurementFunction.AcCurrent
+  ) {
+    const range = configuration.range ?? effectiveRange;
+    if (range !== undefined && configuration.resolution !== undefined) {
+      return rateFromResolution(range, configuration.resolution);
+    }
+  }
+
+  return previousRate;
+}
+
 function parseConfiguration(value: string): ParsedConfiguration {
   const trimmed = value.trim();
   const separator = trimmed.search(/\s/);
@@ -324,22 +337,27 @@ function parseConfiguration(value: string): ParsedConfiguration {
   const parameters = trimmed.slice(separator).trim().split(",").map((part) => part.trim());
   const range = optionalPositiveNumber(parameters[0]);
   const resolution = optionalPositiveNumber(parameters[1]);
-  const result: ParsedConfiguration = { function: measurementFunction };
 
-  if (range !== undefined) {
-    Object.assign(result, { range });
+  if (range === undefined && resolution === undefined) {
+    return { function: measurementFunction };
   }
-  if (resolution !== undefined) {
-    Object.assign(result, { resolution });
+  if (resolution === undefined) {
+    return { function: measurementFunction, range };
   }
-  return result;
+  if (range === undefined) {
+    return { function: measurementFunction, resolution };
+  }
+  return { function: measurementFunction, range, resolution };
 }
 
 function parseFunctionToken(value: string): DmmMeasurementFunction {
-  switch (value.trim().toUpperCase()) {
-    case "VOLT": return DmmMeasurementFunction.DcVoltage;
+  const token = value.trim().replace(/^"|"$/g, "").toUpperCase();
+  switch (token) {
+    case "VOLT":
+    case "VOLT:DC": return DmmMeasurementFunction.DcVoltage;
     case "VOLT:AC": return DmmMeasurementFunction.AcVoltage;
-    case "CURR": return DmmMeasurementFunction.DcCurrent;
+    case "CURR":
+    case "CURR:DC": return DmmMeasurementFunction.DcCurrent;
     case "CURR:AC": return DmmMeasurementFunction.AcCurrent;
     case "RES": return DmmMeasurementFunction.Resistance2Wire;
     case "FRES": return DmmMeasurementFunction.Resistance4Wire;
@@ -567,8 +585,35 @@ function parseBoolean(value: string): boolean {
   }
 }
 
+function parseTemperatureUnit(value: string): TemperatureUnit {
+  switch (value.trim().replace(/^"|"$/g, "").toUpperCase()) {
+    case "C":
+    case "CEL":
+    case "CELSIUS":
+      return "C";
+    case "F":
+    case "FAR":
+    case "FAHRENHEIT":
+      return "F";
+    case "K":
+    case "KEL":
+    case "KELVIN":
+      return "K";
+    default:
+      throw new Error(`Invalid DM858E temperature unit: ${value}`);
+  }
+}
+
+function temperatureToCelsius(value: number, unit: TemperatureUnit): number {
+  switch (unit) {
+    case "C": return value;
+    case "F": return (value - 32) * (5 / 9);
+    case "K": return value - 273.15;
+  }
+}
+
 function nearlyEqual(left: number, right: number): boolean {
-  const scale = Math.max(1, Math.abs(left), Math.abs(right));
+  const scale = Math.max(Math.abs(left), Math.abs(right), Number.MIN_VALUE);
   return Math.abs(left - right) <= scale * 1e-9;
 }
 
