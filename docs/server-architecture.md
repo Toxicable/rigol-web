@@ -43,6 +43,7 @@ Responsibilities:
 - release all subscriptions when a browser WebSocket closes
 - serialize activation/deactivation transitions so rapid route changes cannot leave runtime state inverted
 - roll back a subscription if runtime activation rejects, so the same browser can retry cleanly
+- mark the registry inactive before awaiting idempotent runtime deactivation, so a failed `stop()` remains retryable on a later subscription
 
 This is a small lifecycle registry, not a generic plugin framework or dependency-injection container.
 
