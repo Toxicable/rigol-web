@@ -31,6 +31,7 @@ import {
 import {
   ControlKind,
   MessageType,
+  PROTOCOL_VERSION,
   WaveformKind,
   type DeepCaptureReadyMessage,
   type ServerJsonMessage,
@@ -290,7 +291,16 @@ async function createTestServer(
 async function connect(server: TestServer & { port: number }): Promise<WebSocket> {
   const client = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
   server.clients.push(client);
+  const hello = waitForJson(client, (message) => message.type === MessageType.ProtocolHello);
   await once(client, "open");
+  expect(await hello).toEqual({
+    type: MessageType.ProtocolHello,
+    protocolVersion: PROTOCOL_VERSION,
+  });
+  client.send(JSON.stringify({
+    type: MessageType.ProtocolHelloAck,
+    protocolVersion: PROTOCOL_VERSION,
+  }));
   return client;
 }
 
@@ -307,6 +317,24 @@ async function subscribe(
 }
 
 describe("WebSocketGateway", () => {
+  it("requires the v2 handshake before application messages", async () => {
+    const server = await createTestServer();
+    const client = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
+    server.clients.push(client);
+    const hello = waitForJson(client, (message) => message.type === MessageType.ProtocolHello);
+    await once(client, "open");
+    await hello;
+
+    const closed = once(client, "close");
+    client.send(JSON.stringify({
+      type: MessageType.InstrumentSubscribe,
+      instrument: SupportedInstrument.Dho804,
+    }));
+    const [code] = await closed;
+    expect(code).toBe(1002);
+    expect(server.scopeStart).not.toHaveBeenCalled();
+  });
+
   it("publishes lifecycle/state only after route subscription and shares one runtime", async () => {
     const server = await createTestServer();
     const first = await connect(server);
@@ -568,6 +596,7 @@ describe("WebSocketGateway", () => {
     } as unknown as WebSocket;
     const client = {
       socket,
+      protocolReady: true,
       subscriptions: new Set([SupportedInstrument.Dho804]),
       pendingLiveFrames: new Map<Channel, Uint8Array>(),
       liveSendInFlight: false,
