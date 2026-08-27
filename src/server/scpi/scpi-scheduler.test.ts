@@ -83,22 +83,52 @@ describe("ScpiScheduler", () => {
     expect(order).toEqual(["commit"]);
   });
 
-  it("retains at most one pending latest operation per priority", async () => {
+  it("retains at most one pending latest operation for the same key", async () => {
     const scheduler = new ScpiScheduler(fakeTransport());
     const gate = deferred();
     const order: number[] = [];
+    const key = Symbol("latest-stream");
     const running = scheduler.scheduleLatest(
       ScpiPriority.Waveform,
+      key,
       ScpiOperationKind.BinaryTransfer,
       async () => gate.promise,
     );
     await new Promise((resolve) => setImmediate(resolve));
-    const a = scheduler.scheduleLatest(ScpiPriority.Waveform, ScpiOperationKind.BinaryTransfer, async () => { order.push(1); });
-    const b = scheduler.scheduleLatest(ScpiPriority.Waveform, ScpiOperationKind.BinaryTransfer, async () => { order.push(2); });
+    const a = scheduler.scheduleLatest(ScpiPriority.Waveform, key, ScpiOperationKind.BinaryTransfer, async () => { order.push(1); });
+    const b = scheduler.scheduleLatest(ScpiPriority.Waveform, key, ScpiOperationKind.BinaryTransfer, async () => { order.push(2); });
     gate.resolve();
     await Promise.all([running, a, b]);
     expect(order).toEqual([2]);
     expect(scheduler.getCounters().supersededLatestCount).toBe(1);
+  });
+
+  it("does not supersede latest work with a different key", async () => {
+    const scheduler = new ScpiScheduler(fakeTransport());
+    const gate = deferred();
+    const order: string[] = [];
+    const running = scheduler.schedule({
+      priority: ScpiPriority.Normal,
+      kind: ScpiOperationKind.Write,
+      execute: async () => gate.promise,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    const first = scheduler.scheduleLatest(
+      ScpiPriority.Waveform,
+      Symbol("stream-a"),
+      ScpiOperationKind.BinaryTransfer,
+      async () => { order.push("a"); },
+    );
+    const second = scheduler.scheduleLatest(
+      ScpiPriority.Waveform,
+      Symbol("stream-b"),
+      ScpiOperationKind.BinaryTransfer,
+      async () => { order.push("b"); },
+    );
+    gate.resolve();
+    await Promise.all([running, first, second]);
+    expect(order).toEqual(["a", "b"]);
+    expect(scheduler.getCounters().supersededLatestCount).toBe(0);
   });
 
   it("does not interleave higher priority work inside an in-flight exclusive transaction", async () => {
