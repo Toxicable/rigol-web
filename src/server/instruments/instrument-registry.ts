@@ -149,8 +149,8 @@ export class InstrumentRegistry {
         await entry.runtime.start();
         entry.running = true;
       } else if (!shouldRun && entry.running) {
-        await entry.runtime.stop();
         entry.running = false;
+        await entry.runtime.stop();
       }
 
       if (revision === entry.revision) {
