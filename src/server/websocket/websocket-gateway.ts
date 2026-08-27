@@ -265,7 +265,7 @@ function readControl(value: unknown): ControlChange {
       };
     case ControlKind.TriggerType:
       if (value.value !== TriggerType.Edge) {
-        throw new Error("Version 1 only accepts TriggerType.Edge");
+        throw new Error("Only TriggerType.Edge is writable");
       }
       return { kind: ControlKind.TriggerType, value: TriggerType.Edge };
     case ControlKind.TriggerSource:
@@ -625,7 +625,7 @@ export class WebSocketGateway {
     }
 
     for (const client of this.clients.values()) {
-      if (client.subscriptions.has(SupportedInstrument.Dho804)) {
+      if (client.protocolReady && client.subscriptions.has(SupportedInstrument.Dho804)) {
         this.queueLiveFrame(client, header.channel, frame);
       }
     }
@@ -858,8 +858,6 @@ export class WebSocketGateway {
           this.sendCompleted(client, message.requestId);
           return;
         }
-        case MessageType.ProtocolHelloAck:
-          return;
       }
     } catch (error) {
       if (message.type === MessageType.InteractionUpdate) {
