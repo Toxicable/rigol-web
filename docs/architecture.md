@@ -55,11 +55,11 @@ Selected stack:
 
 - Node.js + TypeScript server
 - React + TypeScript frontend
+- React Router for the two instrument routes
 - Vite
 - Zustand for application/instrument state
 - uPlot for DHO804 waveform rendering
 - one persistent WebSocket between each browser tab and the server
-- native History API routing for the two fixed routes
 
 HTTP serves the frontend and simple infrastructure endpoints such as `/health`.
 
@@ -70,7 +70,7 @@ The fixed routes are:
 - `/` — DHO804
 - `/dm858e` — DM858E
 
-Changing routes does not recreate the application-level WebSocket. The route component subscribes to the instrument it owns and unsubscribes when it unmounts.
+`BrowserRouter` owns browser navigation and the application shell keeps the WebSocket client above the route elements, so changing routes does not recreate the application-level WebSocket. The route component subscribes to the instrument it owns and unsubscribes when it unmounts.
 
 Direct navigation to `/dm858e` is served through the production SPA fallback. Missing static assets still return `404` rather than being rewritten to `index.html`.
 
@@ -88,7 +88,7 @@ For each supported instrument:
 
 The lifecycle registry is explicit and contains exactly the DHO804 and DM858E registrations. It is not a plugin framework.
 
-Activation/deactivation transitions are serialized. Subscription state must remain transactional: a failed runtime activation must not leave a phantom subscriber that prevents a later retry.
+Activation/deactivation transitions are serialized. Subscription state must remain transactional and retryable: a failed runtime activation must not leave a phantom subscriber, and a failed runtime deactivation must not leave the registry believing an uncertain runtime is definitely still active. Runtime `start()`/`stop()` implementations are idempotent so the registry can safely retry reconciliation after failures.
 
 ## Shared SCPI foundation
 
