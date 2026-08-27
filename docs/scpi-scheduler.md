@@ -15,7 +15,7 @@ The scheduler should:
 - preserve SCPI request/response ordering
 - prioritise interactive work over background work
 - coalesce stale continuous-control writes
-- supersede stale latest-value work such as live waveform requests
+- supersede stale keyed latest-value work such as live waveform requests
 - keep multi-transaction operations atomic once selected
 - expose basic operation timing and byte-count metrics
 - fail pending work when the transport becomes unusable
@@ -95,9 +95,9 @@ When the scheduler becomes idle:
 
 There is only one scheduled operation executing against a scheduler's transport at a time.
 
-## Interactive coalescing
+## Caller-owned keys
 
-The scheduler accepts an opaque caller-owned `ScpiCoalesceKey`.
+The scheduler accepts an opaque caller-owned `ScpiCoalesceKey` for work that can be coalesced or superseded.
 
 Current representation:
 
@@ -105,11 +105,13 @@ Current representation:
 export type ScpiCoalesceKey = symbol;
 ```
 
-The scheduler compares keys only by identity. It does not serialize them and cannot interpret them as channel scale, trigger level, DMM range or any other instrument concept.
+The scheduler compares keys only by identity. It does not serialize them and cannot interpret them as channel scale, trigger level, DMM range, waveform stream or any other instrument concept.
 
-Callers create and retain stable symbols for controls that should coalesce. Different symbols never collide even when they have the same description.
+Callers create and retain stable symbols for work that belongs to the same semantic stream. Different symbols never collide even when they have the same description, so separate runtimes and unrelated workloads cannot accidentally supersede each other.
 
-The DHO804 driver, for example, owns distinct symbols for:
+## Interactive coalescing
+
+The DHO804 driver owns distinct symbols for:
 
 - each channel scale
 - each channel offset
@@ -117,7 +119,7 @@ The DHO804 driver, for example, owns distinct symbols for:
 - horizontal position
 - trigger level
 
-For each key there may be one operation currently executing and at most one pending desired value. New pending work for the same key replaces the older pending operation while preserving all waiters.
+For each interactive key there may be one operation currently executing and at most one pending desired value. New pending work for the same key replaces the older pending operation while preserving all waiters.
 
 ## Final interaction value
 
@@ -129,11 +131,11 @@ This preserves the existing rule that the final interaction value cannot be lost
 
 ## Generic latest-work supersession
 
-`ScpiScheduler.scheduleLatest(priority, kind, execute)` keeps at most one pending latest-work operation in that priority queue.
+`ScpiScheduler.scheduleLatest(priority, key, kind, execute)` keeps at most one pending latest-work operation for the same opaque key.
 
-This is generic scheduler policy rather than waveform knowledge. The DHO804 currently uses it for live waveform acquisition at P3. A future runtime may use it for a different disposable/latest-value workload without pretending that workload is a waveform.
+This is generic scheduler policy rather than waveform knowledge. The DHO804 owns a live-waveform key and uses it for live waveform acquisition at P3. A future runtime may use separate keys for different disposable/latest-value workloads without pretending those workloads are waveforms or allowing them to collide.
 
-Already-running work is never cancelled by this mechanism.
+Different latest-work keys at the same priority remain independent. Already-running work is never cancelled by this mechanism.
 
 ## Operation kinds
 
@@ -159,7 +161,7 @@ The DHO804 approximately 1 Hz state validator runs individual P4 queries rather 
 
 ## Scope live waveform scheduling
 
-The DHO804 uses `scheduleLatest(ScpiPriority.Waveform, ScpiOperationKind.BinaryTransfer, ...)` for recurring live waveform reads.
+The DHO804 uses a driver-owned live-waveform key with `scheduleLatest(ScpiPriority.Waveform, key, ScpiOperationKind.BinaryTransfer, ...)` for recurring live waveform reads.
 
 One single-channel live read remains one atomic scheduled operation containing any required waveform setup, data transfer and associated metadata reads. A four-channel refresh is not one exclusive operation; each channel read returns to the scheduler separately.
 
