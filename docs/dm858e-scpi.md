@@ -96,7 +96,7 @@ The first backend uses `DATA:LAST?` for the live primary value.
 
 This is intentional: `READ?` starts a measurement group and waits for the requested trigger/results, while `DATA:LAST?` asks for the last performed measurement. Using `DATA:LAST?` therefore avoids silently changing the meter's front-panel trigger workflow just to refresh the browser display.
 
-The Programming Guide explicitly says `DATA:LAST?` returns `9.90000000E+37` when **no measurement data is available**. The backend treats that response as no reading to publish. It is not mapped to `DmmReadingKind.Overload`; the exact DM858E overrange response is left for physical-instrument verification in integration rather than inferred from the no-data sentinel.
+The Programming Guide defines the normal `DATA:LAST?` return as measurement data plus measurement function, and separately defines the bare numeric response `9.90000000E+37` when **no measurement data is available**. The backend therefore suppresses only a bare sentinel response. A sentinel-sized reading that also carries the normal measurement-function suffix is represented as `DmmReadingKind.Overload` so an overrange/open-circuit condition does not leave the browser displaying an earlier valid reading. The exact real-instrument suffix spellings for every function remain part of physical integration verification.
 
 The initial poll cadence is deliberately conservative and simple:
 
@@ -117,7 +117,7 @@ The physical DM858E integration stream must verify at minimum:
 
 - LAN SCPI port/connection behavior;
 - exact real-instrument response spelling for every supported state query;
-- actual overrange/error reading forms;
+- exact `DATA:LAST?` function suffixes and overload/open-circuit forms for every supported measurement function;
 - `DATA:LAST?` duplicate/update behavior at Slow/Medium/Fast rates;
 - sustained acquisition throughput and whether a buffered/triggered strategy materially improves it;
 - front-panel changes while the browser is subscribed;
