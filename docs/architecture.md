@@ -2,24 +2,38 @@
 
 ## Purpose
 
-Rigol Web is a local web interface for a Rigol DHO804 oscilloscope.
+Rigol Web is a local web interface for two fixed Rigol bench instruments:
 
-The goal is to provide a faster, clearer and more flexible interface than the scope UI while retaining direct access to native scope capabilities through SCPI.
+- DHO804 oscilloscope
+- DM858E digital multimeter
 
-This is a personal project. The initial design should not be distorted by requirements for commercial deployment, arbitrary instruments, hostile multi-user environments or hypothetical future hardware.
+The goal is a faster, clearer browser interface while retaining direct access to native instrument capabilities through SCPI.
+
+This remains a personal project. Supporting the second known instrument does **not** turn Rigol Web into a generic instrument framework. Add abstractions only where the DHO804 and DM858E have real shared behaviour.
 
 Project-level implementation principles are documented in `development-practices.md`. TypeScript-specific conventions are documented separately in `typescript-practices.md`.
 
 ## Target hardware
 
-Initial target:
+Current targets:
 
-- Rigol DHO804 only
-- Ethernet connection
-- Raw SCPI over a persistent TCP connection
-- Behaviour based on the Rigol DHO800/DHO900 Programming Guide and DHO800 User Guide
+- Rigol DHO804
+- Rigol DM858E
+- Ethernet connection for both
+- raw SCPI over a persistent TCP connection while an instrument is active
+- DHO804 behaviour based on the Rigol DHO800/DHO900 Programming Guide and DHO800 User Guide
+- DM858E behaviour based on the current Rigol DM858 Series Programming Guide
 
-Support for other instruments can be considered later. Do not build a generic instrument framework now.
+No browser-side arbitrary host/model selection is planned. Server configuration names the two endpoints explicitly.
+
+Required server configuration:
+
+```text
+RIGOL_SCOPE_HOST
+RIGOL_SCOPE_PORT
+RIGOL_DMM_HOST
+RIGOL_DMM_PORT
+```
 
 ## Technology
 
@@ -28,13 +42,13 @@ The application is entirely TypeScript.
 ```text
 Browser
    |
-   | WebSocket
+   | one persistent WebSocket
    v
 Rigol Web server
    |
-   | persistent TCP / SCPI
-   v
-Rigol DHO804
+   +---- DHO804 runtime ---- SCPI/TCP ---- DHO804
+   |
+   `---- DM858E runtime ---- SCPI/TCP ---- DM858E
 ```
 
 Selected stack:
@@ -42,17 +56,58 @@ Selected stack:
 - Node.js + TypeScript server
 - React + TypeScript frontend
 - Vite
-- Zustand for application/scope state
-- uPlot for waveform rendering
-- one WebSocket connection between browser and server
+- Zustand for application/instrument state
+- uPlot for DHO804 waveform rendering
+- one persistent WebSocket between each browser tab and the server
+- native History API routing for the two fixed routes
 
-HTTP is only needed to serve the frontend and simple infrastructure endpoints such as health checks.
+HTTP serves the frontend and simple infrastructure endpoints such as `/health`.
 
-Frontend details are documented in `frontend.md`.
+## Routes and browser lifetime
 
-## Server structure
+The fixed routes are:
 
-The server uses explicit layers with one path to the instrument:
+- `/` — DHO804
+- `/dm858e` — DM858E
+
+Changing routes does not recreate the application-level WebSocket. The route component subscribes to the instrument it owns and unsubscribes when it unmounts.
+
+Direct navigation to `/dm858e` is served through the production SPA fallback. Missing static assets still return `404` rather than being rewritten to `index.html`.
+
+## Instrument activation
+
+Instrument TCP/SCPI sessions are subscription-owned rather than process-owned.
+
+For each supported instrument:
+
+1. the first subscribed browser session activates its runtime
+2. additional subscribers share the same physical instrument/runtime
+3. unsubscribing one of several sessions does not stop the runtime
+4. the last unsubscribe stops the runtime and closes its instrument session
+5. closing a browser WebSocket releases all subscriptions owned by that browser session
+
+The lifecycle registry is explicit and contains exactly the DHO804 and DM858E registrations. It is not a plugin framework.
+
+Activation/deactivation transitions are serialized. Subscription state must remain transactional: a failed runtime activation must not leave a phantom subscriber that prevents a later retry.
+
+## Shared SCPI foundation
+
+Each active physical instrument owns its own `ScpiTransport` and `ScpiScheduler` instance. The transport/scheduler implementation is shared; socket state and queues are not shared between instruments.
+
+The scheduler preserves:
+
+- query/response ownership
+- one complete SCPI transaction at a time per instrument
+- binary transfer atomicity
+- priority scheduling
+- coalescing/supersession where the owning runtime uses it
+- clear rejection when the transport becomes unusable
+
+No instrument-specific SCPI command knowledge belongs in the generic transport or scheduler.
+
+## DHO804 server path
+
+The DHO804 path remains concrete:
 
 ```text
 WebSocketGateway
@@ -75,136 +130,114 @@ DHO804
 
 Polling and waveform services use the same driver/scheduler path. Nothing writes directly to the scope socket outside the SCPI transport/scheduler boundary.
 
-Detailed module ownership and lifecycle are documented in `server-architecture.md`.
+The DHO804 runtime is dormant while no browser route is subscribed. Once active, reconnection behaviour remains the existing simple fresh-session retry loop.
 
-## Scope connection
+## DM858E server path
 
-The server maintains one persistent TCP connection to the DHO804.
+The DM858E backend uses the same transport/scheduler foundation but separate meter-specific state and driver types:
 
-All SCPI operations pass through the dedicated scheduler/transport layer.
+```text
+WebSocketGateway
+   |
+   v
+Dmm runtime/controller boundary
+   |
+   v
+Dm858eDriver
+   |
+   v
+ScpiScheduler
+   |
+   v
+ScpiTransport
+   |
+   v
+DM858E
+```
 
-Reasons:
+The DM858E driver/runtime is implemented in the backend workstream. The multi-instrument foundation defines the activation and browser protocol boundaries without inventing DM858E SCPI commands.
 
-- SCPI query responses must remain associated with the correct request
-- binary waveform transfers must remain atomic
-- interactive operations need priority over background work
-- continuous controls need coalescing
-- polling must not interfere with interaction
+## Browser connection and protocol handshake
 
-The scheduler is documented separately in `scpi-scheduler.md`.
+Each browser tab uses one persistent WebSocket at `/ws`.
 
-Connection handling should remain simple. If socket or SCPI framing integrity is lost, fail visibly and recreate the connection rather than trying to salvage an uncertain stream or replay stale work.
+Protocol version 2 begins with an application-level handshake before instrument traffic:
 
-## Browser connection
+```text
+server -> ProtocolHello(version)
+browser -> ProtocolHelloAck(version)
+```
 
-The browser uses one persistent WebSocket connection to the server.
+The server rejects application messages before a successful hello acknowledgement. A version mismatch closes the socket clearly instead of allowing an old browser bundle to wait silently for lifecycle messages it will never receive.
+
+After the handshake, the browser sends explicit instrument subscriptions. Lifecycle/state/waveform publications are sent only to sessions subscribed to that instrument.
 
 The WebSocket carries:
 
-- commands
-- scope state
-- measurements
-- errors
-- SCPI console requests/responses
-- live waveform data
-- deep-capture viewport data
+- protocol handshake
+- instrument subscribe/unsubscribe
+- DHO804 controls/state/measurements
+- DM858E controls/state/readings
+- errors and command completion
+- instrument-targeted raw SCPI console requests/responses
+- DHO804 live waveform data
+- DHO804 deep-capture viewport data
 
-Use JSON for control/state/lifecycle messages and binary WebSocket frames for waveform samples.
+Use JSON for control/state/lifecycle messages and binary WebSocket frames for DHO804 waveform samples.
 
-Fixed protocol values and discriminants use numeric TypeScript enums rather than repeated string values. Object field names remain descriptive.
+Fixed protocol values and discriminants use numeric TypeScript enums. Object field names remain descriptive.
 
-WebSocket compression should be disabled initially. This runs on a local network, so responsiveness and low latency matter more than reducing bandwidth.
+WebSocket compression remains disabled initially because this is a local-network latency-sensitive application.
 
-The server sends complete authoritative `ScopeState` snapshots rather than partial patches.
+See `websocket-protocol.md` and `waveform-protocol.md`.
 
-The JSON protocol is documented in `websocket-protocol.md`. The binary waveform layout is documented in `waveform-protocol.md`.
+## Browser transport state
 
-## Scope state
+WebSocket transport state is an application-level concern separate from either instrument lifecycle.
 
-The physical oscilloscope is the authoritative source of state.
+The browser exposes shared transport states:
 
-The server maintains a cached model of important scope state, including at least:
+- Connecting
+- Connected (protocol handshake complete)
+- Disconnected with reason
 
-- channel enable state
-- channel coupling and amplitude unit
-- channel vertical scale
-- channel vertical offset
-- probe ratio
-- horizontal scale
-- horizontal position
-- sample rate
-- memory depth
-- trigger type
-- trigger source
-- trigger level
-- trigger slope
-- acquisition state
+Both instrument UIs must invalidate a previously connected presentation when the browser/server transport is lost. A stale DMM reading must never remain visually indistinguishable from a live connected reading merely because no later DMM lifecycle message can arrive.
 
-The concrete DHO804 types, SCPI mappings and Rigol-specific response parsing rules are documented in `scope-model.md`.
+## Raw SCPI
 
-Web interactions update the UI optimistically so controls feel immediate.
+Raw SCPI is explicitly instrument-targeted end to end. Browser APIs and protocol messages require a `SupportedInstrument`; there is no implicit DHO804 default.
 
-Ordinary discrete operations may be read back immediately where useful. Continuous interactions are not read back on every intermediate value.
+Raw commands still pass through the selected instrument's normal scheduler. Nothing bypasses transaction serialization.
 
-## State validation
+## DHO804 state
 
-Important scope state is polled at approximately 1 Hz.
+The physical oscilloscope is authoritative for scope state.
 
-The poll exists primarily to detect:
+The server maintains a complete cached `ScopeState`, including channel, horizontal, acquisition and trigger state. The browser receives complete authoritative snapshots rather than partial patches.
 
-- changes made with the physical scope controls
-- changes from another SCPI client
-- drift between cached and real scope state
+Web interactions may update presentation optimistically. Continuous controls use the existing coalesced fast path and reconcile from authoritative focused readback after commit.
 
-Polling is not the primary propagation path for changes made by Rigol Web.
+Important scope state is validated periodically, approximately 1 Hz, to detect front-panel changes and other drift.
 
-Properties currently being manipulated interactively must not be overwritten by stale poll results. After an interaction completes, the final value is explicitly read back and reconciled.
+The concrete DHO804 types and SCPI mappings are documented in `scope-model.md`.
 
-## Interaction model
+## DM858E state
 
-Continuous controls are performance-critical.
+DM858E browser/server contracts are separate from `ScopeState`.
 
-Examples:
+Shared DMM types cover:
 
-- vertical offset
-- trigger level
-- horizontal position
-- vertical/horizontal scale when gesture driven
+- measurement function
+- Auto/fixed range
+- Slow/Medium/Fast acquisition rate
+- primary reading value/overload and unit
+- typed DMM control changes
 
-During interaction:
+The physical DM858E remains authoritative. Exact SCPI mapping and state reconciliation belong to the DM858E backend workstream.
 
-1. the browser updates its local display immediately
-2. the browser sends the desired value over the WebSocket
-3. the server scheduler coalesces equivalent pending operations
-4. the latest useful value is sent to the scope as soon as the SCPI connection is available
+## DHO804 waveform acquisition
 
-Intermediate values may be discarded if the scope cannot consume them quickly enough.
-
-There should be no arbitrary fixed-rate throttle unless measurement shows one is required.
-
-When the interaction ends, the final value must be sent with highest priority, then read back from the scope and reconciled.
-
-## Frontend data flow
-
-Application/scope state and waveform data use separate paths.
-
-```text
-WebSocket
-   |
-   +---- JSON state/control ----> Zustand ----> React UI
-   |
-   +---- binary waveform ------> waveform layer ----> uPlot
-```
-
-Waveform samples do not live in React or Zustand state.
-
-A uPlot instance is created once for a waveform view and updated imperatively as data arrives.
-
-See `frontend.md`.
-
-## Waveform acquisition
-
-The application deliberately separates live display acquisition from deep acquisition.
+The application separates live display acquisition from deep acquisition.
 
 ### Live display
 
@@ -213,10 +246,8 @@ While running:
 - use the DHO waveform NORMAL/screen path
 - keep waveform reads small
 - optimise for transaction latency
-- send live samples directly to the browser as binary frames
+- send live samples directly to subscribed DHO804 browser sessions as binary frames
 - stale waveform frames may be discarded
-
-The live display is for responsiveness, not complete acquisition memory.
 
 ### Deep acquisition
 
@@ -224,96 +255,69 @@ When stopped or after a single acquisition:
 
 - use RAW waveform acquisition
 - retrieve the full acquisition into server memory
-- treat the transfer from the DHO804 as an explicit long-running operation
 - keep the full capture server-side
-- downsample on the server for the requested browser viewport
+- downsample on the server for requested browser viewports
 - use min/max bucketing rather than every-Nth-sample decimation
-- return display-resolution binary waveform windows to the browser
-- overscan viewport responses so small pans remain local and immediate
+- return display-resolution binary waveform windows
+- overscan viewport responses so small pans remain local
 
-The browser should not receive tens of millions of samples merely to discard most of them before rendering.
+Panning and zooming a retained deep capture must not cause another DHO804 read.
 
-Panning and zooming within an already acquired deep capture must not require another read from the DHO804.
+See `waveforms.md` and `waveform-protocol.md`.
 
-See `waveforms.md`.
+## Waveform representation and backpressure
 
-## Waveform representation
+Native DHO804 waveform codes and IEEE/TMC block representation stop at the DHO804 driver boundary. The server publishes normalized amplitude data.
 
-The DHO804's native waveform codes and TMC/IEEE block format stop at the DHO804 driver boundary.
+Live waveform data is disposable. Under browser backpressure:
 
-The server normalizes waveform samples into numeric amplitude values before sending browser frames. Deep captures are stored as per-channel `Float32Array`s in the current channel amplitude unit, which keeps the rest of the application independent from Rigol native WORD encoding details.
+- replace stale live frames with newer frames
+- preserve JSON control/state/error messages
+- do not build an unbounded waveform queue
 
-The browser binary frame uses fixed-size indexed Float32 records. Each record carries the original source sample index and amplitude value, allowing the same format to represent both sequential live samples and min/max-downsampled deep points.
-
-The frame also carries X increment/origin/reference and channel amplitude unit, so the browser can derive real X values without receiving native Rigol Y code-scaling fields.
-
-See `waveform-protocol.md`.
-
-## Backpressure
-
-Live waveform data is disposable.
-
-If the browser cannot keep up:
-
-- drop stale waveform frames
-- prefer the newest waveform
-- never discard control, state or error messages merely to preserve old waveform data
-
-The live stream represents current state, not an event log.
+Waveform data remains outside React/Zustand state.
 
 ## Measurements
 
-Measurement results are dynamic data and do not live inside `ScopeState`.
+DHO804 measurements are dynamic request/result data and are not members of `ScopeState`.
 
-The browser requests only the measurements it is currently displaying. Start with a low refresh rate around 1 Hz and benchmark before increasing it. Measurement queries must not delay interactive scope controls.
+DM858E primary readings likewise use their own reading messages rather than being inserted into scope state or a generic mixed instrument object.
 
-The initial shared measurement set and exact SCPI mapping are documented in `scope-model.md`.
+## Failure philosophy
 
-## Version 1 scope
+Prefer simple visible failure over elaborate recovery.
 
-Initial functionality:
+If SCPI socket/framing integrity is lost:
 
-- connect to DHO804
-- connection/status information
-- live waveform display
-- CH1-CH4 enable/disable
-- vertical scale
-- vertical offset
-- horizontal scale
-- horizontal position
-- Run / Stop / Single
-- basic edge trigger configuration
-- basic measurements
-- raw SCPI console
-- deep waveform retrieval and server-side viewport downsampling while stopped
+- fail affected work clearly
+- discard stale queued work
+- close the uncertain instrument session
+- create a fresh session only while that runtime remains activated by subscriptions
+- never replay stale commands after reconnect
 
-More of the DHO804 command set can be added incrementally after the interaction model performs well.
+Do not add persistent command queues, circuit breakers or per-command retry machinery without measured need.
 
 ## Architecture documents
 
-- `architecture.md` - overall decisions
-- `development-practices.md` - general project implementation principles
-- `typescript-practices.md` - TypeScript type, enum and naming conventions
-- `scope-model.md` - DHO804 domain types and exact SCPI state/control mapping
-- `server-architecture.md` - server module ownership, dependency direction and lifecycle
-- `scpi-scheduler.md` - SCPI priority, coalescing and latency behaviour
-- `frontend.md` - React/Zustand/uPlot data flow and interaction model
-- `waveforms.md` - live/deep waveform ownership, downsampling and viewport caching
-- `websocket-protocol.md` - JSON browser/server message model
-- `waveform-protocol.md` - binary waveform frame layout
-- `testing.md` - fake layers, unit/integration tests and real-scope benchmarks
+- `architecture.md` — overall decisions
+- `development-practices.md` — project implementation principles
+- `typescript-practices.md` — TypeScript conventions
+- `scope-model.md` — DHO804 domain model and SCPI mapping
+- `server-architecture.md` — server ownership and lifecycle
+- `scpi-scheduler.md` — generic scheduler semantics
+- `frontend.md` — browser routing/state/data flow
+- `waveforms.md` — DHO804 live/deep waveform ownership
+- `websocket-protocol.md` — JSON browser/server protocol
+- `waveform-protocol.md` — DHO804 binary waveform layout
+- `testing.md` — fake layers, integration tests and hardware benchmarks
+- `workstreams/dm858e-*.md` — staged DM858E implementation handoffs
 
 ## References
 
-Primary specification/reference material:
+Primary device specifications:
 
 - Rigol DHO800/DHO900 Programming Guide
 - Rigol DHO800 User Guide
+- Rigol DM858 Series Programming Guide
 
-Useful implementation references:
-
-- ngscopeclient / scopehal Rigol driver
-- SCPI-Instrument-Control web gateway
-- SCPI-Web-Interface
-
-The Rigol manuals define expected device behaviour. Open-source projects are implementation references, not specifications.
+Open-source projects may be useful implementation references, but the Rigol manuals define expected device behaviour.
