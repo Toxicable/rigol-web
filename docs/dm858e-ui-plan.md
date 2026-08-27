@@ -16,27 +16,66 @@ Reference material:
 
 ## Route and shell
 
-Keep the existing scope UI at `/` and add the DMM at `/dm858e`.
+Use a real React router. Adding a routing dependency is acceptable and has no hardware cost.
+
+Routes:
+
+- `/` -> DHO804
+- `/dm858e` -> DM858E
 
 Add a small persistent instrument switcher in the app shell:
 
 - DHO804
 - DM858E
 
-Do not add a routing dependency yet. A small pathname switch is enough for two fixed routes.
+Production static serving must fall back to `index.html` for application routes such as `/dm858e` while still returning real 404s for missing static assets.
 
-Production static serving must explicitly serve `index.html` for `/dm858e`; the current built-web handler otherwise treats it as a file path and returns 404.
+## Instrument registration and activation lifecycle
 
-## Server ownership
+Both supported instruments are registered with the server at startup, but registration does not open their SCPI transport.
 
-The server must own two completely independent instrument connections:
+Each registered instrument has its own configuration and runtime:
 
-- DHO804 runtime -> its own `ScpiTransport` + `ScpiScheduler`
-- DM858E runtime -> its own `ScpiTransport` + `ScpiScheduler`
+- DHO804 -> its own `ScpiTransport` + `ScpiScheduler` + scope runtime
+- DM858E -> its own `ScpiTransport` + `ScpiScheduler` + DMM runtime
 
-Do not share a scheduler or TCP stream between instruments.
+The browser route controls activation:
 
-Configuration should become explicit per instrument, for example:
+1. entering an instrument route subscribes the browser session to that instrument
+2. the first active subscriber starts that instrument runtime and SCPI transport
+3. leaving the route unsubscribes that browser session
+4. the last active subscriber stops that instrument runtime and closes its SCPI transport
+
+This means navigating from `/` to `/dm858e` normally stops the DHO804 transport and starts the DM858E transport.
+
+Use subscription/reference-count semantics rather than a global `activeInstrument` singleton. That preserves the route-driven start/stop behaviour while allowing two browser tabs to use different instruments, or the same instrument, without one tab unexpectedly shutting down another tab's transport.
+
+Browser disconnect must automatically release all subscriptions owned by that browser session.
+
+A fast route change must not leave a stale pending start/stop operation able to resurrect the wrong runtime. Runtime start/stop needs explicit lifecycle state and idempotent transitions.
+
+## Browser WebSocket lifecycle
+
+Keep one browser/server WebSocket connection for the application shell.
+
+Do not reconnect the browser WebSocket merely because the React route changes. Route components subscribe/unsubscribe instrument runtimes over the existing socket.
+
+This keeps browser request correlation and error handling shared while allowing the instrument-side TCP/SCPI connection to be started and stopped independently.
+
+The protocol should gain explicit instrument subscription messages, for example conceptually:
+
+- subscribe DHO804
+- unsubscribe DHO804
+- subscribe DM858E
+- unsubscribe DM858E
+
+The exact wire names remain to be designed with the protocol update.
+
+Scope-specific commands must only be accepted while that browser session is subscribed to the scope. DMM-specific commands must only be accepted while subscribed to the DMM.
+
+## Server configuration
+
+Configuration becomes explicit per registered instrument, for example:
 
 - `RIGOL_SCOPE_HOST`
 - `RIGOL_SCOPE_PORT`
@@ -44,6 +83,8 @@ Configuration should become explicit per instrument, for example:
 - `RIGOL_DMM_PORT`
 
 This should be a hard cut from the current single `RIGOL_HOST` / `RIGOL_PORT` surface when implementation begins.
+
+The registry owns configuration/runtime lookup; it does not collapse the two device domains into one generic state model.
 
 ## What should be shared
 
@@ -60,6 +101,8 @@ This should be a hard cut from the current single `RIGOL_HOST` / `RIGOL_PORT` su
 Do not move scope or DMM command construction into the scheduler.
 
 A small shared WebSocket request/correlation layer is also worth extracting if it avoids duplicating request IDs, pending promises and error handling.
+
+Instrument subscription/ref-count management can also be shared at the server shell level.
 
 ### Keep separate
 
@@ -89,18 +132,28 @@ The DM858E driver owns exact SCPI commands and parsing.
 
 The runtime owns:
 
-- connection/reconnect lifecycle
+- transport connection/reconnect lifecycle while activated
 - identity validation
 - authoritative DMM state
 - reading acquisition
 - host-side statistics/logging state
 - browser publication
 
+When the final route subscription disappears, ordinary live acquisition and polling stop and the SCPI transport closes.
+
+Logging is a special case: if server-owned logging is active, the DMM runtime must remain active even with zero UI-route subscribers. A running logging job therefore counts as an activation lease until it is stopped.
+
 Exact SCPI acquisition strategy needs to be benchmarked on the physical DM858E. Do not assume repeated single `READ?` queries are the best way to reach the useful reading rate; buffered/triggered acquisition may be better.
 
 ## Browser protocol
 
-Keep the existing single browser WebSocket if practical, but add explicit DMM messages rather than mutating the scope messages.
+Keep the existing single browser WebSocket, but add explicit DMM messages rather than mutating the scope messages.
+
+Likely shared lifecycle messages:
+
+- instrument subscribed / unsubscribed
+- command completed / failed
+- raw SCPI result
 
 Likely DMM lifecycle/data messages:
 
@@ -110,11 +163,8 @@ Likely DMM lifecycle/data messages:
 - control set
 - acquisition configuration
 - logging start/stop
-- raw SCPI request/result
 
-Generic command success/failure handling can remain shared.
-
-The browser should keep a separate DMM store and a DMM client facade.
+The browser should keep a separate DMM store and DMM client facade.
 
 ## Primary DMM screen
 
@@ -207,27 +257,29 @@ Initial logging UI:
 - current sample rate
 - export CSV
 
-Prefer server-owned logging so logging continues if the browser tab is reloaded or closed.
+Logging is server-owned so it can survive route changes, browser reloads and closing the browser tab. An active logging session holds the DMM runtime/transport open even when `/dm858e` has no active browser subscribers.
 
 Persistent session/file format can be decided separately; do not add a database just to get the first DMM route working.
 
 ## Raw SCPI console
 
-Reuse the existing console UI, but bind it to the currently selected instrument runtime.
+Reuse the existing console UI, but bind it to the instrument associated with the current route.
 
 The console must never bypass the instrument's scheduler.
 
 ## First implementation slices
 
-1. Route shell and instrument switcher.
-2. Split server configuration into scope and DMM endpoints.
-3. Generalize only the SCPI scheduler's scope-specific coalescing key.
-4. Add DM858E connection, `*IDN?`, state model and one primary reading.
-5. Add function/range/rate controls.
-6. Add host-side stats and trend plot.
-7. Add server-owned logging/export.
-8. Add trigger/sample configuration, secondary measurement and sensor workflows.
-9. Benchmark real DM858E SCPI acquisition throughput and adjust acquisition strategy.
+1. Add the router, persistent instrument shell and `/dm858e` route.
+2. Add server instrument registration plus browser-session subscribe/unsubscribe/ref-count lifecycle.
+3. Split server configuration into scope and DMM endpoints.
+4. Generalize only the SCPI scheduler's scope-specific coalescing key.
+5. Move existing scope runtime start/stop under route subscription ownership.
+6. Add DM858E connection, `*IDN?`, state model and one primary reading.
+7. Add function/range/rate controls.
+8. Add host-side stats and trend plot.
+9. Add server-owned logging/export with a logging activation lease.
+10. Add trigger/sample configuration, secondary measurement and sensor workflows.
+11. Benchmark real DM858E SCPI acquisition throughput and adjust acquisition strategy.
 
 ## Non-goals for the first pass
 
