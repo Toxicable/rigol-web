@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
 
 const DEFAULT_WEB_ROOT = resolve(process.cwd(), "dist/web");
+const SPA_ROUTES = new Set(["/", "/dm858e", "/dm858e/"]);
 
 function contentType(path: string): string {
   switch (extname(path).toLowerCase()) {
@@ -46,7 +47,9 @@ async function serveBuiltWeb(
     return;
   }
 
-  const relativePath = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+  const relativePath = SPA_ROUTES.has(pathname)
+    ? "index.html"
+    : pathname.replace(/^\/+/, "");
   const filePath = resolve(webRoot, relativePath);
   const rootPrefix = webRoot.endsWith(sep) ? webRoot : `${webRoot}${sep}`;
   if (filePath !== webRoot && !filePath.startsWith(rootPrefix)) {
