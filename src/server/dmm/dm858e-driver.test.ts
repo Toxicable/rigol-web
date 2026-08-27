@@ -9,7 +9,6 @@ import {
 } from "../../shared/dmm-types.js";
 import {
   ScpiOperationKind,
-  ScpiPriority,
   type ScpiOperation,
   type ScpiOperationRecorder,
   type ScpiScheduler,
@@ -165,6 +164,17 @@ describe("Dm858eDriver", () => {
     expect(transport.commands).toEqual([]);
   });
 
+  it("distinguishes adjacent low capacitance ranges", async () => {
+    const transport = new ScriptedTransport();
+    const driver = scriptedDriver(transport);
+
+    await expect(driver.setRange(DmmMeasurementFunction.Capacitance, {
+      mode: DmmRangeMode.Fixed,
+      value: 2e-9,
+    })).rejects.toThrow(/Unsupported capacitance range/);
+    expect(transport.commands).toEqual([]);
+  });
+
   it("maps Slow Medium Fast to the documented NPLC values", async () => {
     const transport = new ScriptedTransport();
     const driver = scriptedDriver(transport);
@@ -198,7 +208,7 @@ describe("Dm858eDriver", () => {
     ]);
   });
 
-  it("parses scientific readings, units, and the documented sentinel", async () => {
+  it("parses scientific readings and drops the documented no-data sentinel", async () => {
     const transport = new ScriptedTransport();
     respond(transport, "DATA:LAST?", "-5.07000000E-01 VDC", "9.90000000E+37");
     const driver = scriptedDriver(transport);
@@ -209,10 +219,26 @@ describe("Dm858eDriver", () => {
       value: -0.507,
       unit: DmmUnit.Volts,
     });
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.Resistance2Wire, 5)).resolves.toEqual({
-      kind: DmmReadingKind.Overload,
-      sequence: 5,
-      unit: DmmUnit.Ohms,
+    await expect(driver.readPrimaryReading(DmmMeasurementFunction.Resistance2Wire, 5)).resolves.toBeNull();
+  });
+
+  it("normalizes Fahrenheit temperature readings to Celsius", async () => {
+    const transport = new ScriptedTransport();
+    respond(transport, "CONFigure?", "TEMP FRTD,385");
+    respond(transport, "UNIT:TEMPerature?", "F");
+    respond(transport, "DATA:LAST?", "2.12000000E+02");
+    const driver = scriptedDriver(transport);
+
+    await expect(driver.readDmmState()).resolves.toEqual({
+      function: DmmMeasurementFunction.Temperature,
+      range: { mode: DmmRangeMode.Auto },
+      acquisitionRate: DmmAcquisitionRate.Slow,
+    });
+    await expect(driver.readPrimaryReading(DmmMeasurementFunction.Temperature, 8)).resolves.toEqual({
+      kind: DmmReadingKind.Value,
+      sequence: 8,
+      value: 100,
+      unit: DmmUnit.Celsius,
     });
   });
 
