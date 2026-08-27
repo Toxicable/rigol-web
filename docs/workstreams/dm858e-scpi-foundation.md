@@ -8,7 +8,7 @@ Complete this stream before any DM858E route, runtime or UI work. The purpose is
 
 ## Implementation status
 
-Implementation is in progress on `dm858e-generic-scpi-foundation`.
+Implementation is code-complete on `dm858e-generic-scpi-foundation`, with the full repository validation gate still outstanding.
 
 Implemented:
 
@@ -22,13 +22,20 @@ Implemented:
 - scheduler documentation was updated to the generic contract
 - `ScpiTransport` was left unchanged because no DHO804 dependency prevents DM858E reuse
 
-Validation still required before this stream is complete:
+Validation completed in the available execution environment:
+
+- isolated `ScpiScheduler` compilation with the repo's strict TypeScript options: PASS
+- executable scheduler checks for same-key coalescing, distinct-key isolation, P0 supersession, keyed latest-work supersession, priority ordering and stop rejection: PASS
+
+Full repository validation still required before this stream is complete:
 
 ```text
 pnpm typecheck
 pnpm test
 pnpm build
 ```
+
+The current execution environment cannot fetch the repository dependency tree and this repository has no PR-triggered GitHub Actions workflow, so those commands have not been run here.
 
 No DM858E runtime, route, UI, instrument registry or logging work is included in this stream.
 
