@@ -1,4 +1,11 @@
 import type {
+  DmmControlChange,
+  DmmInfo,
+  DmmPrimaryReading,
+  DmmState,
+} from "./dmm-types.js";
+import type { SupportedInstrument } from "./instrument-types.js";
+import type {
   Channel,
   ChannelUnit,
   EdgeSlope,
@@ -32,6 +39,16 @@ export enum MessageType {
   ScpiResult = 22,
   MeasurementResult = 23,
   DeepCaptureReady = 24,
+
+  InstrumentSubscribe = 30,
+  InstrumentUnsubscribe = 31,
+
+  DmmConnected = 40,
+  DmmState = 41,
+  DmmDisconnected = 42,
+  DmmReading = 43,
+
+  DmmControlSet = 50,
 }
 
 export enum AcquisitionAction {
@@ -105,6 +122,16 @@ export type InteractiveControl =
   | Extract<ControlChange, { kind: ControlKind.HorizontalPosition }>
   | Extract<ControlChange, { kind: ControlKind.TriggerLevel }>;
 
+export interface InstrumentSubscribeMessage {
+  type: MessageType.InstrumentSubscribe;
+  instrument: SupportedInstrument;
+}
+
+export interface InstrumentUnsubscribeMessage {
+  type: MessageType.InstrumentUnsubscribe;
+  instrument: SupportedInstrument;
+}
+
 export interface ControlSetMessage {
   type: MessageType.ControlSet;
   requestId: number;
@@ -174,6 +201,7 @@ export interface WaveformViewportRequestMessage {
 export interface ScpiExecuteMessage {
   type: MessageType.ScpiExecute;
   requestId: number;
+  instrument: SupportedInstrument;
   command: string;
 }
 
@@ -205,6 +233,40 @@ export type ScopeLifecycleMessage =
   | ScopeStateMessage
   | ScopeDisconnectedMessage;
 
+export interface DmmConnectedMessage {
+  type: MessageType.DmmConnected;
+  protocolVersion: number;
+  info: DmmInfo;
+  state: DmmState;
+}
+
+export interface DmmStateMessage {
+  type: MessageType.DmmState;
+  state: DmmState;
+}
+
+export interface DmmDisconnectedMessage {
+  type: MessageType.DmmDisconnected;
+  reason: string;
+}
+
+export interface DmmReadingMessage {
+  type: MessageType.DmmReading;
+  reading: DmmPrimaryReading;
+}
+
+export interface DmmControlSetMessage {
+  type: MessageType.DmmControlSet;
+  requestId: number;
+  control: DmmControlChange;
+}
+
+export type DmmLifecycleMessage =
+  | DmmConnectedMessage
+  | DmmStateMessage
+  | DmmDisconnectedMessage
+  | DmmReadingMessage;
+
 export interface CommandCompletedMessage {
   type: MessageType.CommandCompleted;
   requestId: number;
@@ -219,6 +281,8 @@ export interface CommandFailedMessage {
 export type CommandResult = CommandCompletedMessage | CommandFailedMessage;
 
 export type ClientMessage =
+  | InstrumentSubscribeMessage
+  | InstrumentUnsubscribeMessage
   | ControlSetMessage
   | InteractionUpdateMessage
   | InteractionCommitMessage
@@ -226,10 +290,12 @@ export type ClientMessage =
   | DeepCaptureRequestMessage
   | WaveformViewportRequestMessage
   | ScpiExecuteMessage
-  | MeasurementReadMessage;
+  | MeasurementReadMessage
+  | DmmControlSetMessage;
 
 export type ServerJsonMessage =
   | ScopeLifecycleMessage
+  | DmmLifecycleMessage
   | CommandResult
   | ScpiResultMessage
   | MeasurementResultMessage
