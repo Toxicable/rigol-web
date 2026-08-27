@@ -16,7 +16,7 @@ import type {
   TriggerType,
 } from "./scope-types.js";
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 export type NonEmptyArray<T> = [T, ...T[]];
 
@@ -39,6 +39,8 @@ export enum MessageType {
   ScpiResult = 22,
   MeasurementResult = 23,
   DeepCaptureReady = 24,
+  ProtocolHello = 25,
+  ProtocolHelloAck = 26,
 
   InstrumentSubscribe = 30,
   InstrumentUnsubscribe = 31,
@@ -121,6 +123,16 @@ export type InteractiveControl =
   | Extract<ControlChange, { kind: ControlKind.HorizontalScale }>
   | Extract<ControlChange, { kind: ControlKind.HorizontalPosition }>
   | Extract<ControlChange, { kind: ControlKind.TriggerLevel }>;
+
+export interface ProtocolHelloMessage {
+  type: MessageType.ProtocolHello;
+  protocolVersion: number;
+}
+
+export interface ProtocolHelloAckMessage {
+  type: MessageType.ProtocolHelloAck;
+  protocolVersion: number;
+}
 
 export interface InstrumentSubscribeMessage {
   type: MessageType.InstrumentSubscribe;
@@ -281,6 +293,7 @@ export interface CommandFailedMessage {
 export type CommandResult = CommandCompletedMessage | CommandFailedMessage;
 
 export type ClientMessage =
+  | ProtocolHelloAckMessage
   | InstrumentSubscribeMessage
   | InstrumentUnsubscribeMessage
   | ControlSetMessage
@@ -294,6 +307,7 @@ export type ClientMessage =
   | DmmControlSetMessage;
 
 export type ServerJsonMessage =
+  | ProtocolHelloMessage
   | ScopeLifecycleMessage
   | DmmLifecycleMessage
   | CommandResult
