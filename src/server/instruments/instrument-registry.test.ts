@@ -50,6 +50,25 @@ describe("InstrumentRegistry", () => {
     expect(scopeRuntime.stop).toHaveBeenCalledOnce();
   });
 
+  it("rolls back a subscriber when activation fails and allows retry", async () => {
+    const scopeRuntime = runtime();
+    scopeRuntime.start
+      .mockRejectedValueOnce(new Error("scope unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const instruments = registry(scopeRuntime);
+    const session = {};
+
+    await expect(
+      instruments.subscribe(session, SupportedInstrument.Dho804),
+    ).rejects.toThrow("scope unavailable");
+    expect(instruments.isSubscribed(session, SupportedInstrument.Dho804)).toBe(false);
+
+    await instruments.subscribe(session, SupportedInstrument.Dho804);
+
+    expect(scopeRuntime.start).toHaveBeenCalledTimes(2);
+    expect(instruments.isSubscribed(session, SupportedInstrument.Dho804)).toBe(true);
+  });
+
   it("releases all subscriptions owned by a disconnected browser session", async () => {
     const scopeRuntime = runtime();
     const dmmRuntime = runtime();
