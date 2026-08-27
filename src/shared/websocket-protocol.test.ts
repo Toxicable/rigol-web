@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { DmmControlKind } from "./dmm-types.js";
+import { SupportedInstrument } from "./instrument-types.js";
 import {
   AcquisitionAction,
   ControlKind,
@@ -13,7 +15,7 @@ describe("websocket protocol constants", () => {
     expect(PROTOCOL_VERSION).toBe(1);
   });
 
-  it("keeps message type values stable", () => {
+  it("keeps existing message type values stable and assigns instrument ranges", () => {
     expect([
       MessageType.ScopeConnected,
       MessageType.ScopeState,
@@ -32,6 +34,20 @@ describe("websocket protocol constants", () => {
       MessageType.MeasurementResult,
       MessageType.DeepCaptureReady,
     ]).toEqual([1, 2, 3, 10, 11, 12, 13, 14, 15, 16, 17, 20, 21, 22, 23, 24]);
+
+    expect([
+      MessageType.InstrumentSubscribe,
+      MessageType.InstrumentUnsubscribe,
+      MessageType.DmmConnected,
+      MessageType.DmmState,
+      MessageType.DmmDisconnected,
+      MessageType.DmmReading,
+      MessageType.DmmControlSet,
+    ]).toEqual([30, 31, 40, 41, 42, 43, 50]);
+  });
+
+  it("keeps instrument identities explicit and stable", () => {
+    expect([SupportedInstrument.Dho804, SupportedInstrument.Dm858e]).toEqual([1, 2]);
   });
 
   it("keeps control values stable", () => {
@@ -46,6 +62,11 @@ describe("websocket protocol constants", () => {
       ControlKind.TriggerSource,
       ControlKind.TriggerSlope,
     ]).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect([
+      DmmControlKind.Function,
+      DmmControlKind.Range,
+      DmmControlKind.AcquisitionRate,
+    ]).toEqual([1, 2, 3]);
   });
 
   it("keeps acquisition action and waveform kind values stable", () => {
