@@ -132,6 +132,11 @@ export class ScopeRuntime {
     }
 
     this.running = false;
+    this.disconnectedReason = "Scope runtime inactive";
+    this.publishConnection({
+      kind: ServerScopeConnectionKind.Disconnected,
+      reason: this.disconnectedReason,
+    });
     this.wakeRetryDelay();
     this.initializingTransport?.disconnect();
     this.session?.failure.fail(new Error("Scope runtime stopped"));
@@ -141,11 +146,6 @@ export class ScopeRuntime {
       await loop;
     }
     this.loopPromise = null;
-    this.disconnectedReason = "Scope runtime inactive";
-    this.publishConnection({
-      kind: ServerScopeConnectionKind.Disconnected,
-      reason: this.disconnectedReason,
-    });
   }
 
   public async requestDeepCapture(requestId: number): Promise<DeepCaptureReadyMessage> {
