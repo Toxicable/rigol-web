@@ -1,6 +1,6 @@
 import { useState, type ChangeEvent, type KeyboardEvent } from "react";
 
-import { SupportedInstrument } from "../../shared/instrument-types.js";
+import type { SupportedInstrument } from "../../shared/instrument-types.js";
 import type { ScopeWebSocketClient } from "../websocket-client.js";
 
 interface ScpiEntry {
@@ -12,13 +12,10 @@ interface ScpiEntry {
 
 interface ScpiConsoleProps {
   client: ScopeWebSocketClient;
-  instrument?: SupportedInstrument;
+  instrument: SupportedInstrument;
 }
 
-export function ScpiConsole({
-  client,
-  instrument = SupportedInstrument.Dho804,
-}: ScpiConsoleProps) {
+export function ScpiConsole({ client, instrument }: ScpiConsoleProps) {
   const [command, setCommand] = useState("");
   const [history, setHistory] = useState<ScpiEntry[]>([]);
   const [nextId, setNextId] = useState(0);
@@ -34,7 +31,7 @@ export function ScpiConsole({
     const id = nextId;
     setNextId(id + 1);
     try {
-      const response = await client.executeScpi(trimmed, instrument);
+      const response = await client.executeScpi(instrument, trimmed);
       setHistory((current) => [...current, { id, command: trimmed, response, failed: false }]);
     } catch (error) {
       setHistory((current) => [
