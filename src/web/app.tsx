@@ -1,26 +1,12 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type MouseEvent as ReactMouseEvent,
-} from "react";
+import { useEffect, useMemo, useRef } from "react";
+import { NavLink, Route, Routes } from "react-router-dom";
 
 import { DmmRoute } from "./dmm/dmm-route.js";
 import { ScopeRoute } from "./scope-route.js";
 import { ScopeWebSocketClient } from "./websocket-client.js";
 import { WaveformController } from "./waveform/waveform-controller.js";
 
-type AppRoute = "/" | "/dm858e";
-
-function currentRoute(): AppRoute {
-  return window.location.pathname === "/dm858e" || window.location.pathname === "/dm858e/"
-    ? "/dm858e"
-    : "/";
-}
-
 export function App() {
-  const [route, setRoute] = useState<AppRoute>(currentRoute);
   const clientRef = useRef<ScopeWebSocketClient | null>(null);
   const controller = useMemo(
     () =>
@@ -44,56 +30,30 @@ export function App() {
     return () => client.dispose();
   }, [client]);
 
-  useEffect(() => {
-    const onPopState = () => setRoute(currentRoute());
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, []);
-
-  const navigate = (event: ReactMouseEvent<HTMLAnchorElement>, nextRoute: AppRoute) => {
-    if (
-      event.button !== 0 ||
-      event.metaKey ||
-      event.ctrlKey ||
-      event.shiftKey ||
-      event.altKey
-    ) {
-      return;
-    }
-    event.preventDefault();
-    if (nextRoute === route) {
-      return;
-    }
-    window.history.pushState(null, "", nextRoute);
-    setRoute(nextRoute);
-  };
-
   return (
     <main className="app-shell">
       <header className="instrument-shell">
         <strong>Rigol Web</strong>
         <nav className="instrument-switcher" aria-label="Instrument">
-          <a
-            href="/"
-            className={route === "/" ? "instrument-link active" : "instrument-link"}
-            onClick={(event) => navigate(event, "/")}
+          <NavLink
+            to="/"
+            end
+            className={({ isActive }) => isActive ? "instrument-link active" : "instrument-link"}
           >
             DHO804
-          </a>
-          <a
-            href="/dm858e"
-            className={route === "/dm858e" ? "instrument-link active" : "instrument-link"}
-            onClick={(event) => navigate(event, "/dm858e")}
+          </NavLink>
+          <NavLink
+            to="/dm858e"
+            className={({ isActive }) => isActive ? "instrument-link active" : "instrument-link"}
           >
             DM858E
-          </a>
+          </NavLink>
         </nav>
       </header>
-      {route === "/dm858e" ? (
-        <DmmRoute client={client} />
-      ) : (
-        <ScopeRoute client={client} controller={controller} />
-      )}
+      <Routes>
+        <Route path="/" element={<ScopeRoute client={client} controller={controller} />} />
+        <Route path="/dm858e" element={<DmmRoute client={client} />} />
+      </Routes>
     </main>
   );
 }
