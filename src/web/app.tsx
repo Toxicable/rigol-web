@@ -1,18 +1,12 @@
 import { useEffect, useMemo, useRef } from "react";
+import { NavLink, Route, Routes } from "react-router-dom";
 
-import { BrowserConnectionKind, useScopeStore } from "./scope-store.js";
+import { DmmRoute } from "./dmm/dmm-route.js";
+import { ScopeRoute } from "./scope-route.js";
 import { ScopeWebSocketClient } from "./websocket-client.js";
 import { WaveformController } from "./waveform/waveform-controller.js";
-import { WaveformPlot } from "./waveform/waveform-plot.js";
-import { ChannelControls } from "./components/channel-controls.js";
-import { HorizontalControls } from "./components/horizontal-controls.js";
-import { MeasurementPanel } from "./components/measurement-panel.js";
-import { ScopeToolbar } from "./components/scope-toolbar.js";
-import { ScpiConsole } from "./components/scpi-console.js";
-import { TriggerControls } from "./components/trigger-controls.js";
 
 export function App() {
-  const connection = useScopeStore((state) => state.connection);
   const clientRef = useRef<ScopeWebSocketClient | null>(null);
   const controller = useMemo(
     () =>
@@ -36,42 +30,30 @@ export function App() {
     return () => client.dispose();
   }, [client]);
 
-  useEffect(() => {
-    if (connection.kind === BrowserConnectionKind.ScopeConnected) {
-      controller.setLiveChannels(connection.scope.channels);
-    }
-  }, [connection, controller]);
-
   return (
     <main className="app-shell">
-      <ScopeToolbar client={client} />
-      {connection.kind === BrowserConnectionKind.ScopeConnected ? (
-        <>
-          <div className="scope-layout">
-            <section className="waveform-panel">
-              <WaveformPlot
-                scope={connection.scope}
-                controller={controller}
-                client={client}
-              />
-            </section>
-            <aside className="control-stack">
-              <ChannelControls channels={connection.scope.channels} client={client} />
-              <HorizontalControls scope={connection.scope} client={client} />
-              <TriggerControls scope={connection.scope} client={client} />
-            </aside>
-          </div>
-          <div className="bottom-grid">
-            <MeasurementPanel scope={connection.scope} client={client} />
-            <ScpiConsole client={client} />
-          </div>
-        </>
-      ) : (
-        <section className="empty-state">
-          <h1>Rigol Web</h1>
-          <p>Waiting for the scope connection.</p>
-        </section>
-      )}
+      <header className="instrument-shell">
+        <strong>Rigol Web</strong>
+        <nav className="instrument-switcher" aria-label="Instrument">
+          <NavLink
+            to="/"
+            end
+            className={({ isActive }) => isActive ? "instrument-link active" : "instrument-link"}
+          >
+            DHO804
+          </NavLink>
+          <NavLink
+            to="/dm858e"
+            className={({ isActive }) => isActive ? "instrument-link active" : "instrument-link"}
+          >
+            DM858E
+          </NavLink>
+        </nav>
+      </header>
+      <Routes>
+        <Route path="/" element={<ScopeRoute client={client} controller={controller} />} />
+        <Route path="/dm858e" element={<DmmRoute client={client} />} />
+      </Routes>
     </main>
   );
 }
