@@ -87,14 +87,14 @@ export class ScopeRuntime {
   private initializingTransport: ScpiTransport | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryResolve: (() => void) | null = null;
-  private disconnectedReason = "Scope connection pending";
+  private disconnectedReason = "Scope runtime inactive";
 
   public constructor(options: ScopeRuntimeOptions) {
     if (options.host.trim().length === 0) {
-      throw new Error("RIGOL_HOST must be a non-empty string");
+      throw new Error("RIGOL_SCOPE_HOST must be a non-empty string");
     }
     if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65_535) {
-      throw new Error("RIGOL_PORT must be an integer from 1 through 65535");
+      throw new Error("RIGOL_SCOPE_PORT must be an integer from 1 through 65535");
     }
     const reconnectDelayMs = options.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS;
     if (!Number.isFinite(reconnectDelayMs) || reconnectDelayMs < 0) {
@@ -118,6 +118,11 @@ export class ScopeRuntime {
       return;
     }
     this.running = true;
+    this.disconnectedReason = "Scope connection pending";
+    this.publishConnection({
+      kind: ServerScopeConnectionKind.Disconnected,
+      reason: this.disconnectedReason,
+    });
     this.loopPromise = this.runLoop();
   }
 
@@ -136,6 +141,11 @@ export class ScopeRuntime {
       await loop;
     }
     this.loopPromise = null;
+    this.disconnectedReason = "Scope runtime inactive";
+    this.publishConnection({
+      kind: ServerScopeConnectionKind.Disconnected,
+      reason: this.disconnectedReason,
+    });
   }
 
   public async requestDeepCapture(requestId: number): Promise<DeepCaptureReadyMessage> {
