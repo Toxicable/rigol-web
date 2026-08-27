@@ -1,5 +1,9 @@
 # DM858E C — Backend / Driver
 
+Status: **In progress — draft PR #9 (`dm858e-backend`)**.
+
+Implementation/specification notes: `../dm858e-scpi.md`.
+
 ## Audience
 
 This workstream starts after `dm858e-instrument-foundation.md` is complete and merged. It may proceed in parallel with `dm858e-frontend.md`.
