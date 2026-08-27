@@ -6,6 +6,32 @@ This is a self-contained implementation handoff for the first DM858E workstream.
 
 Complete this stream before any DM858E route, runtime or UI work. The purpose is to make the existing SCPI foundation genuinely reusable by both supported instruments without changing DHO804 behaviour.
 
+## Implementation status
+
+Implementation is in progress on `dm858e-generic-scpi-foundation`.
+
+Implemented:
+
+- `ScpiScheduler` no longer imports scope domain types
+- coalescing uses opaque caller-owned `symbol` keys
+- DHO804 owns the keys for its interactive controls and live waveform stream
+- immediate commits still supersede pending interactive work with the same key
+- disposable/latest work is generic and keyed, so unrelated streams cannot collide
+- waveform-only operation metric kinds were replaced with generic `Action` and `BinaryTransfer` categories
+- scheduler and DHO804 tests were migrated directly to the new API
+- scheduler documentation was updated to the generic contract
+- `ScpiTransport` was left unchanged because no DHO804 dependency prevents DM858E reuse
+
+Validation still required before this stream is complete:
+
+```text
+pnpm typecheck
+pnpm test
+pnpm build
+```
+
+No DM858E runtime, route, UI, instrument registry or logging work is included in this stream.
+
 ## Read before changing code
 
 - `docs/architecture.md`
