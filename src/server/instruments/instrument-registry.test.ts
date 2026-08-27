@@ -69,6 +69,24 @@ describe("InstrumentRegistry", () => {
     expect(instruments.isSubscribed(session, SupportedInstrument.Dho804)).toBe(true);
   });
 
+  it("allows reactivation after deactivation fails", async () => {
+    const scopeRuntime = runtime();
+    scopeRuntime.stop.mockRejectedValueOnce(new Error("cleanup failed"));
+    const instruments = registry(scopeRuntime);
+    const session = {};
+
+    await instruments.subscribe(session, SupportedInstrument.Dho804);
+    await expect(
+      instruments.unsubscribe(session, SupportedInstrument.Dho804),
+    ).rejects.toThrow("cleanup failed");
+    expect(instruments.isSubscribed(session, SupportedInstrument.Dho804)).toBe(false);
+
+    await instruments.subscribe(session, SupportedInstrument.Dho804);
+
+    expect(scopeRuntime.start).toHaveBeenCalledTimes(2);
+    expect(instruments.isSubscribed(session, SupportedInstrument.Dho804)).toBe(true);
+  });
+
   it("releases all subscriptions owned by a disconnected browser session", async () => {
     const scopeRuntime = runtime();
     const dmmRuntime = runtime();
