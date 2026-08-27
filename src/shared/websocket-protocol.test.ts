@@ -12,7 +12,7 @@ import {
 
 describe("websocket protocol constants", () => {
   it("keeps protocol version stable", () => {
-    expect(PROTOCOL_VERSION).toBe(1);
+    expect(PROTOCOL_VERSION).toBe(2);
   });
 
   it("keeps existing message type values stable and assigns instrument ranges", () => {
@@ -36,6 +36,8 @@ describe("websocket protocol constants", () => {
     ]).toEqual([1, 2, 3, 10, 11, 12, 13, 14, 15, 16, 17, 20, 21, 22, 23, 24]);
 
     expect([
+      MessageType.ProtocolHello,
+      MessageType.ProtocolHelloAck,
       MessageType.InstrumentSubscribe,
       MessageType.InstrumentUnsubscribe,
       MessageType.DmmConnected,
@@ -43,7 +45,7 @@ describe("websocket protocol constants", () => {
       MessageType.DmmDisconnected,
       MessageType.DmmReading,
       MessageType.DmmControlSet,
-    ]).toEqual([30, 31, 40, 41, 42, 43, 50]);
+    ]).toEqual([25, 26, 30, 31, 40, 41, 42, 43, 50]);
   });
 
   it("keeps instrument identities explicit and stable", () => {
