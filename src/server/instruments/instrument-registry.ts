@@ -59,15 +59,25 @@ export class InstrumentRegistry {
     return this.entry(instrument).endpoint;
   }
 
-  public subscribe(session: object, instrument: SupportedInstrument): Promise<void> {
+  public async subscribe(session: object, instrument: SupportedInstrument): Promise<void> {
     const entry = this.entry(instrument);
     if (entry.subscribers.has(session)) {
-      return entry.transition;
+      await entry.transition;
+      return;
     }
 
     entry.subscribers.add(session);
     entry.revision += 1;
-    return this.queueReconcile(entry);
+
+    try {
+      await this.queueReconcile(entry);
+    } catch (error) {
+      if (entry.subscribers.delete(session)) {
+        entry.revision += 1;
+        await this.queueReconcile(entry).catch(() => undefined);
+      }
+      throw error;
+    }
   }
 
   public unsubscribe(session: object, instrument: SupportedInstrument): Promise<void> {
