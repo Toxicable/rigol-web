@@ -22,6 +22,7 @@ import {
   type MeasurementReadMessage,
   type MeasurementResultMessage,
   type NonEmptyArray,
+  type ProtocolHelloAckMessage,
   type ScpiExecuteMessage,
   type ScpiResultMessage,
   type ServerJsonMessage,
@@ -50,8 +51,20 @@ export interface WebSocketLike {
   close(code?: number, reason?: string): void;
 }
 
+export enum BrowserTransportKind {
+  Connecting = 1,
+  Connected = 2,
+  Disconnected = 3,
+}
+
+export type BrowserTransportState =
+  | { kind: BrowserTransportKind.Connecting }
+  | { kind: BrowserTransportKind.Connected }
+  | { kind: BrowserTransportKind.Disconnected; reason: string };
+
 type SocketFactory = (url: string) => WebSocketLike;
 type DmmMessageListener = (message: DmmLifecycleMessage) => void;
+type TransportStateListener = (state: BrowserTransportState) => void;
 
 interface PendingRequest {
   resolve: (message: ServerJsonMessage) => void;
@@ -81,6 +94,7 @@ function asServerMessage(value: unknown): ServerJsonMessage {
   }
 
   switch (type) {
+    case MessageType.ProtocolHello:
     case MessageType.ScopeConnected:
     case MessageType.ScopeState:
     case MessageType.ScopeDisconnected:
@@ -105,9 +119,12 @@ export class ScopeWebSocketClient {
   private readonly pending = new Map<number, PendingRequest>();
   private readonly subscriptions = new Set<SupportedInstrument>();
   private readonly dmmListeners = new Set<DmmMessageListener>();
+  private readonly transportListeners = new Set<TransportStateListener>();
+  private transportState: BrowserTransportState = { kind: BrowserTransportKind.Connecting };
   private disposed = false;
   private binaryErrors = 0;
   private measurementInFlight = false;
+  private protocolReady = false;
 
   public constructor(
     private readonly waveforms: WaveformController,
@@ -117,28 +134,31 @@ export class ScopeWebSocketClient {
 
   public connect(): void {
     this.disposed = false;
+    this.protocolReady = false;
     this.waveforms.resetSession();
     useScopeStore.getState().setConnecting();
+    this.setTransportState({ kind: BrowserTransportKind.Connecting });
     const socket = this.socketFactory(this.urlFactory());
     socket.binaryType = "arraybuffer";
     socket.onopen = () => {
       this.binaryErrors = 0;
-      for (const instrument of this.subscriptions) {
-        this.sendInstrumentSubscribe(instrument);
-      }
     };
     socket.onmessage = (event) => this.handleMessage(event.data);
     socket.onerror = () => {
-      useScopeStore.getState().setError("WebSocket transport error");
+      const reason = "WebSocket transport error";
+      useScopeStore.getState().setError(reason);
+      this.setTransportState({ kind: BrowserTransportKind.Disconnected, reason });
     };
     socket.onclose = (event) => {
       if (this.socket !== socket) {
         return;
       }
       this.socket = null;
+      this.protocolReady = false;
       this.waveforms.resetSession();
       const reason = event.reason || "WebSocket disconnected";
       useScopeStore.getState().setTransportDisconnected(reason);
+      this.setTransportState({ kind: BrowserTransportKind.Disconnected, reason });
       this.rejectPending(new Error(reason));
       if (!this.disposed) {
         window.setTimeout(() => this.connect(), 500);
@@ -149,8 +169,10 @@ export class ScopeWebSocketClient {
 
   public dispose(): void {
     this.disposed = true;
+    this.protocolReady = false;
     this.subscriptions.clear();
     this.dmmListeners.clear();
+    this.transportListeners.clear();
     this.socket?.close(1000, "Client disposed");
     this.socket = null;
     this.waveforms.resetSession();
@@ -165,7 +187,7 @@ export class ScopeWebSocketClient {
     if (instrument === SupportedInstrument.Dho804) {
       useScopeStore.getState().setConnecting();
     }
-    if (this.socket?.readyState === OPEN) {
+    if (this.socket?.readyState === OPEN && this.protocolReady) {
       this.sendInstrumentSubscribe(instrument);
     }
   }
@@ -174,7 +196,7 @@ export class ScopeWebSocketClient {
     if (!this.subscriptions.delete(instrument)) {
       return;
     }
-    if (this.socket?.readyState === OPEN) {
+    if (this.socket?.readyState === OPEN && this.protocolReady) {
       const message: InstrumentUnsubscribeMessage = {
         type: MessageType.InstrumentUnsubscribe,
         instrument,
@@ -191,6 +213,12 @@ export class ScopeWebSocketClient {
   public onDmmMessage(listener: DmmMessageListener): () => void {
     this.dmmListeners.add(listener);
     return () => this.dmmListeners.delete(listener);
+  }
+
+  public onTransportState(listener: TransportStateListener): () => void {
+    listener(this.transportState);
+    this.transportListeners.add(listener);
+    return () => this.transportListeners.delete(listener);
   }
 
   public setControl(control: ControlChange): Promise<void> {
@@ -275,8 +303,8 @@ export class ScopeWebSocketClient {
   }
 
   public async executeScpi(
+    instrument: SupportedInstrument,
     command: string,
-    instrument: SupportedInstrument = SupportedInstrument.Dho804,
   ): Promise<string> {
     const requestId = this.nextRequestId();
     const message: ScpiExecuteMessage = {
@@ -379,6 +407,28 @@ export class ScopeWebSocketClient {
   private handleJson(message: ServerJsonMessage): void {
     const store = useScopeStore.getState();
     switch (message.type) {
+      case MessageType.ProtocolHello: {
+        if (message.protocolVersion !== PROTOCOL_VERSION) {
+          const reason = `Protocol version mismatch: server ${message.protocolVersion}, browser ${PROTOCOL_VERSION}`;
+          store.setTransportDisconnected(reason);
+          this.setTransportState({ kind: BrowserTransportKind.Disconnected, reason });
+          this.socket?.close(1002, reason);
+          return;
+        }
+
+        this.protocolReady = true;
+        const ack: ProtocolHelloAckMessage = {
+          type: MessageType.ProtocolHelloAck,
+          protocolVersion: PROTOCOL_VERSION,
+        };
+        this.send(ack);
+        this.setTransportState({ kind: BrowserTransportKind.Connected });
+        for (const instrument of this.subscriptions) {
+          this.sendInstrumentSubscribe(instrument);
+        }
+        return;
+      }
+
       case MessageType.ScopeConnected:
         this.requireProtocolVersion(message.protocolVersion);
         this.waveforms.resetSession();
@@ -443,6 +493,13 @@ export class ScopeWebSocketClient {
     }
   }
 
+  private setTransportState(state: BrowserTransportState): void {
+    this.transportState = state;
+    for (const listener of this.transportListeners) {
+      listener(state);
+    }
+  }
+
   private reconcileRunState(runState: ScopeRunState): void {
     if (runState !== ScopeRunState.Stopped) {
       this.retireDeepCapture();
@@ -493,6 +550,9 @@ export class ScopeWebSocketClient {
     const socket = this.socket;
     if (socket === null || socket.readyState !== OPEN) {
       throw new Error("WebSocket is not connected");
+    }
+    if (!this.protocolReady) {
+      throw new Error("WebSocket protocol handshake is not complete");
     }
     socket.send(JSON.stringify(message));
   }
