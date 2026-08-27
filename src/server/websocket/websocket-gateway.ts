@@ -104,6 +104,7 @@ export interface WebSocketGatewayOptions {
 
 interface ClientState {
   socket: WebSocket;
+  protocolReady: boolean;
   subscriptions: Set<SupportedInstrument>;
   pendingLiveFrames: Map<Channel, Uint8Array>;
   liveSendInFlight: boolean;
@@ -408,6 +409,11 @@ function parseClientMessage(value: unknown): ClientMessage {
   }
 
   switch (value.type) {
+    case MessageType.ProtocolHelloAck:
+      return {
+        type: MessageType.ProtocolHelloAck,
+        protocolVersion: readPositiveInteger(value.protocolVersion, "protocolVersion"),
+      };
     case MessageType.InstrumentSubscribe:
       return {
         type: MessageType.InstrumentSubscribe,
@@ -665,6 +671,7 @@ export class WebSocketGateway {
   private acceptClient(socket: WebSocket): void {
     const client: ClientState = {
       socket,
+      protocolReady: false,
       subscriptions: new Set(),
       pendingLiveFrames: new Map(),
       liveSendInFlight: false,
@@ -689,6 +696,11 @@ export class WebSocketGateway {
 
     socket.on("error", (error) => {
       console.error("WebSocket client error", error);
+    });
+
+    this.sendJson(client, {
+      type: MessageType.ProtocolHello,
+      protocolVersion: PROTOCOL_VERSION,
     });
   }
 
@@ -732,6 +744,23 @@ export class WebSocketGateway {
     client: ClientState,
     message: ClientMessage,
   ): Promise<void> {
+    if (message.type === MessageType.ProtocolHelloAck) {
+      if (message.protocolVersion !== PROTOCOL_VERSION) {
+        client.socket.close(
+          1002,
+          `Protocol version mismatch: server ${PROTOCOL_VERSION}, browser ${message.protocolVersion}`,
+        );
+        return;
+      }
+      client.protocolReady = true;
+      return;
+    }
+
+    if (!client.protocolReady) {
+      client.socket.close(1002, "Protocol handshake required");
+      return;
+    }
+
     try {
       switch (message.type) {
         case MessageType.InstrumentSubscribe:
@@ -829,6 +858,8 @@ export class WebSocketGateway {
           this.sendCompleted(client, message.requestId);
           return;
         }
+        case MessageType.ProtocolHelloAck:
+          return;
       }
     } catch (error) {
       if (message.type === MessageType.InteractionUpdate) {
@@ -1006,7 +1037,7 @@ export class WebSocketGateway {
     message: ServerJsonMessage,
   ): void {
     for (const client of this.clients.values()) {
-      if (client.subscriptions.has(instrument)) {
+      if (client.protocolReady && client.subscriptions.has(instrument)) {
         this.sendJson(client, message);
       }
     }
