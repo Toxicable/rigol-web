@@ -267,13 +267,13 @@ describe("Dm858eDriver", () => {
     await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 5)).resolves.toBeNull();
   });
 
-  it("suppresses a DATA:LAST reading when the authoritative function changed", async () => {
+  it("preserves a rejected function-change reading for the first stable poll", async () => {
     const transport = new ScriptedTransport();
     scriptReadingObservations(
       transport,
       { functionToken: "VOLT", points: 0, response: "-5.07000000E-01 VDC" },
       { functionToken: "RES", points: 1, response: "1.00000000E+03 OPAQUE_RES" },
-      { functionToken: "RES", points: 2, response: "1.00000000E+03 OPAQUE_RES" },
+      { functionToken: "RES", points: 1, response: "1.00000000E+03 OPAQUE_RES" },
     );
     const driver = scriptedDriver(transport);
 
@@ -284,6 +284,31 @@ describe("Dm858eDriver", () => {
       sequence: 0,
       value: 1_000,
       unit: DmmUnit.Ohms,
+    });
+  });
+
+  it("preserves freshness evidence across a configuration-change rejection", async () => {
+    const transport = new ScriptedTransport();
+    scriptReadingObservations(
+      transport,
+      { functionToken: "VOLT", points: 0, response: "-5.07000000E-01 VDC" },
+      {
+        functionToken: "VOLT",
+        points: 1,
+        response: "-5.08000000E-01 VDC",
+        operationStatus: 256,
+      },
+      { functionToken: "VOLT", points: 1, response: "-5.08000000E-01 VDC" },
+    );
+    const driver = scriptedDriver(transport);
+
+    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
+    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
+    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toEqual({
+      kind: DmmReadingKind.Value,
+      sequence: 0,
+      value: -0.508,
+      unit: DmmUnit.Volts,
     });
   });
 
