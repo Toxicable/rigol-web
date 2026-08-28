@@ -103,7 +103,10 @@ interface RuntimeInternals {
   } | null;
 }
 
-function runtimeFor(transport: AcRangeRaceTransport, initialState: DmmState): DmmRuntime {
+function runtimeFor(transport: AcRangeRaceTransport, initialState: DmmState): {
+  runtime: DmmRuntime;
+  stateStore: DmmStateStore;
+} {
   const runtime = new DmmRuntime({
     host: "dmm.test",
     port: 5556,
@@ -111,12 +114,13 @@ function runtimeFor(transport: AcRangeRaceTransport, initialState: DmmState): Dm
     publishState: () => {},
     publishSnapshot: () => {},
   });
+  const stateStore = new DmmStateStore(initialState);
   (runtime as unknown as RuntimeInternals).session = {
     driver: driverFor(transport),
-    stateStore: new DmmStateStore(initialState),
+    stateStore,
     transport,
   };
-  return runtime;
+  return { runtime, stateStore };
 }
 
 describe("DmmRuntime AC rate range races", () => {
@@ -125,7 +129,7 @@ describe("DmmRuntime AC rate range races", () => {
       { auto: false, value: 10 },
       { auto: false, value: 100 },
     );
-    const runtime = runtimeFor(transport, {
+    const { runtime, stateStore } = runtimeFor(transport, {
       function: DmmMeasurementFunction.AcVoltage,
       range: { mode: DmmRangeMode.Fixed, value: 10 },
       acquisitionRate: DmmAcquisitionRate.Slow,
@@ -138,6 +142,11 @@ describe("DmmRuntime AC rate range races", () => {
     });
 
     expect(transport.range).toEqual({ auto: false, value: 100 });
+    expect(stateStore.getState()).toEqual({
+      function: DmmMeasurementFunction.AcVoltage,
+      range: { mode: DmmRangeMode.Fixed, value: 100 },
+      acquisitionRate: DmmAcquisitionRate.Fast,
+    });
     expect(transport.commands).toContain("CONFigure:VOLTage:AC 100,0.1");
     expect(transport.commands).not.toContain("CONFigure:VOLTage:AC 10,0.01");
   });
@@ -147,7 +156,7 @@ describe("DmmRuntime AC rate range races", () => {
       { auto: true, value: 10 },
       { auto: false, value: 100 },
     );
-    const runtime = runtimeFor(transport, {
+    const { runtime, stateStore } = runtimeFor(transport, {
       function: DmmMeasurementFunction.AcVoltage,
       range: { mode: DmmRangeMode.Auto },
       acquisitionRate: DmmAcquisitionRate.Slow,
@@ -160,6 +169,11 @@ describe("DmmRuntime AC rate range races", () => {
     });
 
     expect(transport.range).toEqual({ auto: false, value: 100 });
+    expect(stateStore.getState()).toEqual({
+      function: DmmMeasurementFunction.AcVoltage,
+      range: { mode: DmmRangeMode.Fixed, value: 100 },
+      acquisitionRate: DmmAcquisitionRate.Fast,
+    });
     expect(transport.commands).toContain("CONFigure:VOLTage:AC 100,0.1");
     expect(transport.commands).not.toContain("CONFigure:VOLTage:AC AUTO,0.01");
   });
