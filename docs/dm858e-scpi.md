@@ -108,6 +108,12 @@ Those commands do not provide a coherent sample identity when queried independen
 
 A stable current snapshot can be published immediately, including an existing stopped/single-trigger reading present when the route first subscribes. The poller may suppress a byte-for-byte equivalent snapshot to reduce WebSocket traffic, but this is only display deduplication; it is not a claim that a new physical sample did or did not occur.
 
+The active DMM runtime owns the latest applicable display snapshot for the lifetime of one connected instrument session. When another browser session subscribes while that runtime is already active, the registry invokes the runtime's subscriber-added hook after the gateway has sent the current DMM lifecycle message. The runtime then republishes its retained snapshot, so a second tab or reconnecting browser receives an unchanged stopped/stable reading without restarting the instrument session.
+
+Snapshot state is session-scoped. Disconnect, stop, transport failure and session replacement clear the retained snapshot before a later session can replay anything.
+
+An authoritative measurement-function change invalidates a retained snapshot from the previous function immediately. The runtime publishes `DmmReadingKind.Unavailable` with `DmmReadingUnavailableReason.ConfigurationChanged`, the new function and its typed unit before any later valid `DATA:LAST?` snapshot replaces it. This prevents a previous function's numeric display from remaining current while `DATA:LAST?` is still unstable or suppressed during the transition.
+
 Host-side sample count, statistics and trend calculations must wait for a separately verified acquisition path that establishes one event per physical measurement. They must not infer samples from snapshot polling cadence or snapshot changes.
 
 ### Snapshot validity
