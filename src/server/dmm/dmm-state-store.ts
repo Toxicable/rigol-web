@@ -45,7 +45,10 @@ function sameDmmState(left: DmmState, right: DmmState): boolean {
   );
 }
 
-function sameRange(left: DmmRange, right: DmmRange): boolean {
+function sameRange(left: DmmRange | null, right: DmmRange | null): boolean {
+  if (left === null || right === null) {
+    return left === right;
+  }
   if (left.mode !== right.mode) {
     return false;
   }
