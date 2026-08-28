@@ -163,7 +163,7 @@ export class DmmRuntime {
             if (current.acquisitionRate === null || current.range === null) {
               throw new Error("Current DMM function does not expose an acquisition-rate control");
             }
-            await session.driver.setAcquisitionRate(control.function, current.range, control.value);
+            await session.driver.setAcquisitionRate(control.function, control.value);
             break;
           }
         }
