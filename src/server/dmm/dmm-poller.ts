@@ -1,4 +1,7 @@
-import type { DmmPrimaryReading } from "../../shared/dmm-types.js";
+import {
+  DmmReadingKind,
+  type DmmReadingSnapshot,
+} from "../../shared/dmm-types.js";
 import { ScpiPriority } from "../scpi/scpi-scheduler.js";
 import type { Dm858eDriver } from "./dm858e-driver.js";
 import type { DmmStateStore } from "./dmm-state-store.js";
@@ -9,7 +12,7 @@ const DEFAULT_STATE_INTERVAL_MS = 500;
 export interface DmmPollerOptions {
   driver: Dm858eDriver;
   stateStore: DmmStateStore;
-  publishReading: (reading: DmmPrimaryReading) => void;
+  publishSnapshot: (snapshot: DmmReadingSnapshot) => void;
   reportError: (error: unknown) => void;
   readingIntervalMs?: number;
   stateIntervalMs?: number;
@@ -18,7 +21,7 @@ export interface DmmPollerOptions {
 export class DmmPoller {
   private readonly driver: Dm858eDriver;
   private readonly stateStore: DmmStateStore;
-  private readonly publishReading: DmmPollerOptions["publishReading"];
+  private readonly publishSnapshot: DmmPollerOptions["publishSnapshot"];
   private readonly reportError: DmmPollerOptions["reportError"];
   private readonly readingIntervalMs: number;
   private readonly stateIntervalMs: number;
@@ -26,7 +29,7 @@ export class DmmPoller {
   private loopPromise: Promise<void> | null = null;
   private delayTimer: ReturnType<typeof setTimeout> | null = null;
   private wakeDelay: (() => void) | null = null;
-  private sequence = 0;
+  private lastSnapshot: DmmReadingSnapshot | null = null;
 
   public constructor(options: DmmPollerOptions) {
     validateInterval(options.readingIntervalMs ?? DEFAULT_READING_INTERVAL_MS, "readingIntervalMs");
@@ -34,7 +37,7 @@ export class DmmPoller {
 
     this.driver = options.driver;
     this.stateStore = options.stateStore;
-    this.publishReading = options.publishReading;
+    this.publishSnapshot = options.publishSnapshot;
     this.reportError = options.reportError;
     this.readingIntervalMs = options.readingIntervalMs ?? DEFAULT_READING_INTERVAL_MS;
     this.stateIntervalMs = options.stateIntervalMs ?? DEFAULT_STATE_INTERVAL_MS;
@@ -67,8 +70,7 @@ export class DmmPoller {
     while (this.running) {
       try {
         if (performance.now() >= nextStateReadAt) {
-          const previousRate = this.stateStore.getState().acquisitionRate;
-          const state = await this.driver.readDmmState(previousRate, ScpiPriority.Background);
+          const state = await this.driver.readDmmState(ScpiPriority.Background);
           if (!this.running) {
             break;
           }
@@ -77,20 +79,16 @@ export class DmmPoller {
         }
 
         const state = this.stateStore.getState();
-        const reading = await this.driver.readPrimaryReading(
+        const snapshot = await this.driver.readPrimarySnapshot(
           state.function,
-          this.sequence,
           ScpiPriority.Background,
         );
         if (!this.running) {
           break;
         }
-        if (reading !== null) {
-          // The driver suppresses its initial baseline, stale DATA:LAST? observations,
-          // and function/configuration races. A non-null value is therefore the
-          // evidence boundary for advancing the browser-visible sample sequence.
-          this.sequence += 1;
-          this.publishReading(reading);
+        if (snapshot !== null && !sameSnapshot(snapshot, this.lastSnapshot)) {
+          this.lastSnapshot = snapshot;
+          this.publishSnapshot(snapshot);
         }
       } catch (error) {
         if (this.running) {
@@ -132,6 +130,29 @@ export class DmmPoller {
     const wake = this.wakeDelay;
     this.wakeDelay = null;
     wake?.();
+  }
+}
+
+function sameSnapshot(
+  left: DmmReadingSnapshot,
+  right: DmmReadingSnapshot | null,
+): boolean {
+  if (
+    right === null ||
+    left.kind !== right.kind ||
+    left.function !== right.function ||
+    left.unit !== right.unit
+  ) {
+    return false;
+  }
+
+  switch (left.kind) {
+    case DmmReadingKind.Value:
+      return right.kind === DmmReadingKind.Value && left.value === right.value;
+    case DmmReadingKind.Overload:
+      return right.kind === DmmReadingKind.Overload;
+    case DmmReadingKind.Unavailable:
+      return right.kind === DmmReadingKind.Unavailable && left.reason === right.reason;
   }
 }
 
