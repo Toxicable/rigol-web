@@ -79,6 +79,9 @@ export class DmmPoller {
         }
 
         const state = this.stateStore.getState();
+        if (this.lastSnapshot !== null && this.lastSnapshot.function !== state.function) {
+          this.lastSnapshot = null;
+        }
         const snapshot = await this.driver.readPrimarySnapshot(
           state.function,
           ScpiPriority.Background,
