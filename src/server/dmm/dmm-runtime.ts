@@ -2,9 +2,9 @@ import {
   DmmControlKind,
   type DmmControlChange,
   type DmmInfo,
-  type DmmPrimaryReading,
+  type DmmReadingSnapshot,
 } from "../../shared/dmm-types.js";
-import { ScpiScheduler } from "../scpi/scpi-scheduler.js";
+import { ScpiPriority, ScpiScheduler } from "../scpi/scpi-scheduler.js";
 import { ScpiTransport } from "../scpi/scpi-transport.js";
 import {
   ServerDmmConnectionKind,
@@ -38,7 +38,7 @@ export interface DmmRuntimeOptions {
   port: number;
   publishConnection: (connection: ServerDmmConnection) => void;
   publishState: (state: ReturnType<DmmStateStore["getState"]>) => void;
-  publishReading: (reading: DmmPrimaryReading) => void;
+  publishSnapshot: (snapshot: DmmReadingSnapshot) => void;
   reconnectDelayMs?: number;
   connectTimeoutMs?: number;
 }
@@ -50,7 +50,7 @@ export class DmmRuntime {
   private readonly connectTimeoutMs: number;
   private readonly publishConnection: DmmRuntimeOptions["publishConnection"];
   private readonly publishState: DmmRuntimeOptions["publishState"];
-  private readonly publishReading: DmmRuntimeOptions["publishReading"];
+  private readonly publishSnapshot: DmmRuntimeOptions["publishSnapshot"];
   private running = false;
   private loopPromise: Promise<void> | null = null;
   private session: DmmSession | null = null;
@@ -83,7 +83,7 @@ export class DmmRuntime {
     this.connectTimeoutMs = connectTimeoutMs;
     this.publishConnection = options.publishConnection;
     this.publishState = options.publishState;
-    this.publishReading = options.publishReading;
+    this.publishSnapshot = options.publishSnapshot;
   }
 
   public start(): void {
@@ -125,23 +125,36 @@ export class DmmRuntime {
   public async setControl(control: DmmControlChange): Promise<void> {
     await this.serializeMutation(async () => {
       const session = this.requireSession();
-      const before = session.stateStore.getState();
 
       try {
         switch (control.kind) {
           case DmmControlKind.Function:
             await session.driver.setFunction(control.value);
             break;
-          case DmmControlKind.Range:
-            await session.driver.setRange(before.function, control.value);
+          case DmmControlKind.Range: {
+            const current = await session.driver.readDmmState(ScpiPriority.Immediate);
+            this.requireSameSession(session);
+            requireExpectedFunction(current.function, control.function);
+            if (current.range === null) {
+              throw new Error("Current DMM function does not expose a range control");
+            }
+            await session.driver.setRange(control.function, control.value);
             break;
-          case DmmControlKind.AcquisitionRate:
-            await session.driver.setAcquisitionRate(before.function, before.range, control.value);
+          }
+          case DmmControlKind.AcquisitionRate: {
+            const current = await session.driver.readDmmState(ScpiPriority.Immediate);
+            this.requireSameSession(session);
+            requireExpectedFunction(current.function, control.function);
+            if (current.acquisitionRate === null || current.range === null) {
+              throw new Error("Current DMM function does not expose an acquisition-rate control");
+            }
+            await session.driver.setAcquisitionRate(control.function, current.range, control.value);
             break;
+          }
         }
 
         this.requireSameSession(session);
-        const state = await session.driver.readDmmState(before.acquisitionRate);
+        const state = await session.driver.readDmmState(ScpiPriority.Immediate);
         this.requireSameSession(session);
         session.stateStore.replaceState(state);
       } catch (error) {
@@ -157,8 +170,7 @@ export class DmmRuntime {
       try {
         const response = await session.driver.executeRawScpi(command);
         this.requireSameSession(session);
-        const previousRate = session.stateStore.getState().acquisitionRate;
-        const state = await session.driver.readDmmState(previousRate);
+        const state = await session.driver.readDmmState(ScpiPriority.Immediate);
         this.requireSameSession(session);
         session.stateStore.replaceState(state);
         return response;
@@ -254,7 +266,7 @@ export class DmmRuntime {
       const poller = new DmmPoller({
         driver,
         stateStore,
-        publishReading: this.publishReading,
+        publishSnapshot: this.publishSnapshot,
         reportError: (error) => failure.fail(error),
       });
       const unsubscribeState = stateStore.subscribe(this.publishState);
@@ -360,6 +372,15 @@ export class DmmRuntime {
     const resolve = this.retryResolve;
     this.retryResolve = null;
     resolve?.();
+  }
+}
+
+function requireExpectedFunction(
+  actual: DmmControlChange extends never ? never : import("../../shared/dmm-types.js").DmmMeasurementFunction,
+  expected: import("../../shared/dmm-types.js").DmmMeasurementFunction,
+): void {
+  if (actual !== expected) {
+    throw new Error("Stale DMM control: measurement function changed before the request was applied");
   }
 }
 
