@@ -233,7 +233,7 @@ describe("Dm858eDriver", () => {
 
   it("sets AC speed in one scheduler operation and preserves current auto range", async () => {
     const transport = new ScriptedTransport();
-    respond(transport, "SENSe:FUNCtion?", "VOLT:AC");
+    respond(transport, "SENSe:FUNCtion?", "VOLT:AC", "VOLT:AC");
     respond(transport, "SENSe:VOLTage:AC:RANGe:AUTO?", "1");
     respond(transport, "SENSe:VOLTage:AC:RANGe?", "1.00000000E+01");
     const driver = scriptedDriver(transport);
@@ -247,13 +247,14 @@ describe("Dm858eDriver", () => {
       "SENSe:FUNCtion?",
       "SENSe:VOLTage:AC:RANGe:AUTO?",
       "SENSe:VOLTage:AC:RANGe?",
+      "SENSe:FUNCtion?",
       "CONFigure:VOLTage:AC AUTO,0.01",
     ]);
   });
 
   it("preserves the current physical fixed AC range while changing only rate", async () => {
     const transport = new ScriptedTransport();
-    respond(transport, "SENSe:FUNCtion?", "VOLT:AC");
+    respond(transport, "SENSe:FUNCtion?", "VOLT:AC", "VOLT:AC");
     respond(transport, "SENSe:VOLTage:AC:RANGe:AUTO?", "0");
     respond(transport, "SENSe:VOLTage:AC:RANGe?", "1.00000000E+02");
     const driver = scriptedDriver(transport);
@@ -267,8 +268,31 @@ describe("Dm858eDriver", () => {
       "SENSe:FUNCtion?",
       "SENSe:VOLTage:AC:RANGe:AUTO?",
       "SENSe:VOLTage:AC:RANGe?",
+      "SENSe:FUNCtion?",
       "CONFigure:VOLTage:AC 100,0.1",
     ]);
+  });
+
+  it("rejects an AC function change while resolving the physical range", async () => {
+    const transport = new ScriptedTransport();
+    respond(transport, "SENSe:FUNCtion?", "VOLT:AC", "RES");
+    respond(transport, "SENSe:VOLTage:AC:RANGe:AUTO?", "0");
+    respond(transport, "SENSe:VOLTage:AC:RANGe?", "1.00000000E+02");
+    const driver = scriptedDriver(transport);
+
+    await expect(driver.setAcquisitionRate(
+      DmmMeasurementFunction.AcVoltage,
+      DmmAcquisitionRate.Fast,
+    )).rejects.toThrow(/Stale DMM control/);
+    expect(transport.commands).toEqual([
+      "SENSe:FUNCtion?",
+      "SENSe:VOLTage:AC:RANGe:AUTO?",
+      "SENSe:VOLTage:AC:RANGe?",
+      "SENSe:FUNCtion?",
+    ]);
+    expect(transport.commands.some((command) => (
+      command.startsWith("CONFigure:VOLTage:AC ")
+    ))).toBe(false);
   });
 
   it("rejects a stale AC rate request before CONFigure can change function", async () => {
