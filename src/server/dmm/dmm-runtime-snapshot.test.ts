@@ -66,11 +66,11 @@ describe("DmmRuntime current snapshot lifecycle", () => {
       reason: DmmReadingUnavailableReason.ConfigurationChanged,
     };
     expect(states).toEqual([resistanceState]);
-    expect(snapshots.at(-1)).toEqual(invalidated);
+    expect(snapshots[snapshots.length - 1]).toEqual(invalidated);
     expect(internals.currentSnapshot).toEqual(invalidated);
 
     runtime.subscriberAdded();
-    expect(snapshots.at(-1)).toEqual(invalidated);
+    expect(snapshots[snapshots.length - 1]).toEqual(invalidated);
     expect(snapshots).not.toContainEqual({
       ...valueSnapshot,
       function: DmmMeasurementFunction.Resistance2Wire,
