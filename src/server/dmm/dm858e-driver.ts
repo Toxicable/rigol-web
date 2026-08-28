@@ -3,12 +3,17 @@ import {
   DmmMeasurementFunction,
   DmmRangeMode,
   DmmReadingKind,
+  DmmReadingUnavailableReason,
   DmmUnit,
   type DmmInfo,
-  type DmmPrimaryReading,
   type DmmRange,
+  type DmmReadingSnapshot,
   type DmmState,
 } from "../../shared/dmm-types.js";
+import {
+  ScpiProgramMessageKind,
+  classifyScpiProgramMessage,
+} from "../scpi/scpi-program-message.js";
 import {
   ScpiOperationKind,
   ScpiPriority,
@@ -31,14 +36,8 @@ interface ParsedConfiguration {
 }
 
 interface ReadRangeResult {
-  readonly range: DmmRange;
+  readonly range: DmmRange | null;
   readonly effectiveRange?: number;
-}
-
-interface ReadingBaseline {
-  readonly function: DmmMeasurementFunction;
-  readonly points: number;
-  readonly response: string;
 }
 
 interface ParsedLastReading {
@@ -60,7 +59,6 @@ const operationConfigurationChanged = 256;
 
 export class Dm858eDriver {
   private temperatureUnit: TemperatureUnit = "C";
-  private readingBaseline: ReadingBaseline | null = null;
   private readonly learnedReadingFunctionTokens = new Map<string, DmmMeasurementFunction>();
 
   public constructor(private readonly scheduler: ScpiScheduler) {}
@@ -93,7 +91,6 @@ export class Dm858eDriver {
   }
 
   public async readDmmState(
-    previousRate: DmmAcquisitionRate = DmmAcquisitionRate.Slow,
     priority: ScpiPriority = ScpiPriority.Normal,
   ): Promise<DmmState> {
     return this.scheduler.schedule({
@@ -106,7 +103,6 @@ export class Dm858eDriver {
           transport,
           configuration,
           rangeResult.effectiveRange,
-          previousRate,
         );
 
         if (configuration.function === DmmMeasurementFunction.Temperature) {
@@ -140,13 +136,22 @@ export class Dm858eDriver {
       throw new Error(`${functionName(measurementFunction)} does not expose a programmable range`);
     }
 
-    if (range.mode === DmmRangeMode.Auto) {
-      await this.command(`${spec.command}:AUTO ON`, ScpiPriority.Immediate);
-      return;
+    if (range.mode === DmmRangeMode.Fixed) {
+      requireSupportedRange(measurementFunction, range.value, spec.values);
     }
 
-    requireSupportedRange(measurementFunction, range.value, spec.values);
-    await this.command(`${spec.command} ${range.value}`, ScpiPriority.Immediate);
+    await this.scheduler.scheduleImmediate(
+      ScpiOperationKind.Write,
+      null,
+      async (transport) => {
+        await requireCurrentFunction(transport, measurementFunction);
+        if (range.mode === DmmRangeMode.Auto) {
+          await transport.command(`${spec.command}:AUTO ON`);
+          return;
+        }
+        await transport.command(`${spec.command} ${range.value}`);
+      },
+    );
   }
 
   public async setAcquisitionRate(
@@ -155,15 +160,8 @@ export class Dm858eDriver {
     rate: DmmAcquisitionRate,
   ): Promise<void> {
     const nplcCommand = nplcCommandFor(measurementFunction);
-    if (nplcCommand !== null) {
-      await this.command(
-        `${nplcCommand} ${plcForRate(rate)}`,
-        ScpiPriority.Immediate,
-      );
-      return;
-    }
-
     if (
+      nplcCommand === null &&
       measurementFunction !== DmmMeasurementFunction.AcVoltage &&
       measurementFunction !== DmmMeasurementFunction.AcCurrent
     ) {
@@ -173,7 +171,7 @@ export class Dm858eDriver {
     }
 
     const spec = rangeSpec(measurementFunction);
-    if (spec === null) {
+    if (nplcCommand === null && spec === null) {
       throw new Error("Missing range specification for AC measurement function");
     }
 
@@ -181,6 +179,16 @@ export class Dm858eDriver {
       ScpiOperationKind.Write,
       null,
       async (transport) => {
+        await requireCurrentFunction(transport, measurementFunction);
+
+        if (nplcCommand !== null) {
+          await transport.command(`${nplcCommand} ${plcForRate(rate)}`);
+          return;
+        }
+
+        if (spec === null) {
+          throw new Error("Missing range specification for AC measurement function");
+        }
         const effectiveRange = range.mode === DmmRangeMode.Fixed
           ? range.value
           : parsePositiveNumber(
@@ -196,15 +204,10 @@ export class Dm858eDriver {
     );
   }
 
-  public async readPrimaryReading(
+  public async readPrimarySnapshot(
     measurementFunction: DmmMeasurementFunction,
-    sequence: number,
     priority: ScpiPriority = ScpiPriority.Normal,
-  ): Promise<DmmPrimaryReading | null> {
-    if (!Number.isSafeInteger(sequence) || sequence < 0) {
-      throw new Error("DMM reading sequence must be a non-negative safe integer");
-    }
-
+  ): Promise<DmmReadingSnapshot | null> {
     return this.scheduler.schedule({
       priority,
       kind: ScpiOperationKind.Measurement,
@@ -215,10 +218,6 @@ export class Dm858eDriver {
         );
         const functionBefore = parseFunctionToken(
           await transport.queryText("SENSe:FUNCtion?"),
-        );
-        const points = parseNonNegativeInteger(
-          await transport.queryText("DATA:POINts?"),
-          "DM858E reading-memory point count",
         );
         const response = (await transport.queryText("DATA:LAST?")).trim();
         const functionAfter = parseFunctionToken(
@@ -246,53 +245,47 @@ export class Dm858eDriver {
           return null;
         }
 
+        const unit = unitForFunction(functionAfter);
         const parsed = parseLastReadingResponse(response);
         if (parsed === null) {
-          this.readingBaseline = { function: functionAfter, points, response };
-          return null;
+          return {
+            kind: DmmReadingKind.Unavailable,
+            function: functionAfter,
+            unit,
+            reason: DmmReadingUnavailableReason.NoData,
+          };
         }
         if (!this.readingFunctionTokenMatches(parsed.functionToken, functionAfter)) {
           return null;
         }
 
-        const baseline = this.readingBaseline;
-        const nextBaseline = { function: functionAfter, points, response };
-        if (baseline === null) {
-          this.readingBaseline = nextBaseline;
-          return null;
-        }
-
-        const fresh =
-          functionAfter !== baseline.function ||
-          points !== baseline.points ||
-          response !== baseline.response;
-        this.readingBaseline = nextBaseline;
-        if (!fresh) {
-          return null;
-        }
-
         // DATA:LAST? only documents the bare 9.9E37 response as "no data".
         // A non-bare sentinel-sized value has no documented DATA:LAST? meaning, so
-        // keep overload UNKNOWN until a measurement-correlated mechanism is verified.
+        // expose it as unavailable rather than inventing an overload classification.
         if (Math.abs(parsed.value) >= noDataSentinel) {
-          return null;
+          return {
+            kind: DmmReadingKind.Unavailable,
+            function: functionAfter,
+            unit,
+            reason: DmmReadingUnavailableReason.UnclassifiedSentinel,
+          };
         }
 
         return {
           kind: DmmReadingKind.Value,
-          sequence,
+          function: functionAfter,
           value: functionAfter === DmmMeasurementFunction.Temperature
             ? temperatureToCelsius(parsed.value, readingTemperatureUnit)
             : parsed.value,
-          unit: unitForFunction(functionAfter),
+          unit,
         };
       },
     });
   }
 
   public async executeRawScpi(command: string): Promise<string> {
-    validateRawProgramMessage(command);
-    if (hasUnquotedQueryMarker(command)) {
+    const kind = classifyScpiProgramMessage(command);
+    if (kind === ScpiProgramMessageKind.Query) {
       return this.scheduler.schedule({
         priority: ScpiPriority.Normal,
         kind: ScpiOperationKind.RawScpi,
@@ -368,13 +361,25 @@ export class Dm858eDriver {
   }
 }
 
+async function requireCurrentFunction(
+  transport: ScpiTransport,
+  expected: DmmMeasurementFunction,
+): Promise<void> {
+  const actual = parseFunctionToken(await transport.queryText("SENSe:FUNCtion?"));
+  if (actual !== expected) {
+    throw new Error(
+      `Stale DMM control: expected ${functionName(expected)}, current function is ${functionName(actual)}`,
+    );
+  }
+}
+
 async function readRange(
   transport: ScpiTransport,
   measurementFunction: DmmMeasurementFunction,
 ): Promise<ReadRangeResult> {
   const spec = rangeSpec(measurementFunction);
   if (spec === null) {
-    return { range: { mode: DmmRangeMode.Auto } };
+    return { range: null };
   }
 
   const auto = parseBoolean(await transport.queryText(`${spec.command}:AUTO?`));
@@ -403,8 +408,7 @@ async function readAcquisitionRate(
   transport: ScpiTransport,
   configuration: ParsedConfiguration,
   effectiveRange: number | undefined,
-  previousRate: DmmAcquisitionRate,
-): Promise<DmmAcquisitionRate> {
+): Promise<DmmAcquisitionRate | null> {
   const nplcCommand = nplcCommandFor(configuration.function);
   if (nplcCommand !== null) {
     return rateFromPlc(
@@ -425,7 +429,7 @@ async function readAcquisitionRate(
     }
   }
 
-  return previousRate;
+  return null;
 }
 
 function parseConfiguration(value: string): ParsedConfiguration {
@@ -745,35 +749,4 @@ function temperatureToCelsius(value: number, unit: TemperatureUnit): number {
 function nearlyEqual(left: number, right: number): boolean {
   const scale = Math.max(Math.abs(left), Math.abs(right), Number.MIN_VALUE);
   return Math.abs(left - right) <= scale * 1e-9;
-}
-
-function validateRawProgramMessage(command: string): void {
-  if (command.trim().length === 0) {
-    throw new Error("Raw SCPI command must not be empty");
-  }
-  if (command.includes("\n") || command.includes("\r")) {
-    throw new Error("Raw SCPI execution accepts exactly one program message");
-  }
-}
-
-function hasUnquotedQueryMarker(command: string): boolean {
-  let quote: "\"" | "'" | null = null;
-  for (let index = 0; index < command.length; index += 1) {
-    const character = command[index];
-    if (character === undefined) {
-      continue;
-    }
-    if (quote === null && (character === "\"" || character === "'")) {
-      quote = character;
-      continue;
-    }
-    if (quote !== null && character === quote) {
-      quote = null;
-      continue;
-    }
-    if (quote === null && character === "?") {
-      return true;
-    }
-  }
-  return false;
 }
