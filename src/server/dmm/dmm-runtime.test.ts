@@ -94,6 +94,7 @@ class FakeDm858eServer {
   public range = 10;
   public nplc = 20;
   public blockReadings = false;
+  public readingPoints = 0;
 
   public async start(): Promise<number> {
     return listen(this.server);
@@ -190,6 +191,9 @@ class FakeDm858eServer {
     if (command === "CONFigure?") {
       return configureResponse(this.functionToken, this.range, this.nplc);
     }
+    if (command === "SENSe:FUNCtion?") {
+      return this.functionToken;
+    }
     if (command.endsWith(":RANGe:AUTO?")) {
       return this.rangeAuto ? "1" : "0";
     }
@@ -199,8 +203,21 @@ class FakeDm858eServer {
     if (command.endsWith(":NPLC?")) {
       return this.nplc.toExponential(8).toUpperCase();
     }
+    if (command === "DATA:POINts?") {
+      return String(this.readingPoints);
+    }
     if (command === "DATA:LAST?") {
-      return "-1.25000000E-01 VDC";
+      this.readingPoints += 1;
+      return readingResponseFor(this.functionToken);
+    }
+    if (command === "STATus:OPERation:CONDition?") {
+      return "0";
+    }
+    if (command === "STATus:QUEStionable:EVENt?") {
+      return "0";
+    }
+    if (command === "UNIT:TEMPerature?") {
+      return "C";
     }
     if (command === "*OPT?") {
       return "NONE";
@@ -253,6 +270,13 @@ function configureResponse(functionToken: string, range: number, nplc: number): 
     return `CAP ${range.toExponential(8).toUpperCase()}`;
   }
   return functionToken;
+}
+
+function readingResponseFor(functionToken: string): string {
+  if (functionToken === "VOLT") {
+    return "-1.25000000E-01 VDC";
+  }
+  return `-1.25000000E-01 FAKE_${functionToken.replace(/:/g, "_")}`;
 }
 
 describe("DmmRuntime integration", () => {
@@ -326,6 +350,52 @@ describe("DmmRuntime integration", () => {
       expect(fake.connections[0]?.commands).toContain("SENSe:FRESistance:RANGe 100");
       expect(fake.connections[0]?.commands).toContain("SENSe:FRESistance:NPLC 0.4");
       expect(fake.connections[0]?.commands).toContain("*OPT?");
+    } finally {
+      await runtime.stop();
+      await fake.stop();
+    }
+  });
+
+  it("serializes concurrent logical controls through authoritative readback", async () => {
+    const fake = new FakeDm858eServer();
+    const port = await fake.start();
+    const connected: ConnectedDmmConnection[] = [];
+    const runtime = new DmmRuntime({
+      host: "127.0.0.1",
+      port,
+      reconnectDelayMs: 20,
+      connectTimeoutMs: 500,
+      publishConnection: (connection) => {
+        if (connection.kind === ServerDmmConnectionKind.Connected) {
+          connected.push(connection);
+        }
+      },
+      publishState: () => {},
+      publishReading: () => {},
+    });
+
+    try {
+      runtime.start();
+      await waitFor(() => connected[0]);
+
+      await Promise.all([
+        runtime.setControl({
+          kind: DmmControlKind.Function,
+          value: DmmMeasurementFunction.AcVoltage,
+        }),
+        runtime.setControl({
+          kind: DmmControlKind.Function,
+          value: DmmMeasurementFunction.Resistance2Wire,
+        }),
+      ]);
+
+      const commands = fake.connections[0]?.commands ?? [];
+      const firstWrite = commands.indexOf("SENSe:FUNCtion \"VOLTage:AC\"");
+      const secondWrite = commands.indexOf("SENSe:FUNCtion \"RESistance\"");
+      expect(firstWrite).toBeGreaterThanOrEqual(0);
+      expect(secondWrite).toBeGreaterThan(firstWrite);
+      expect(commands.slice(firstWrite + 1, secondWrite)).toContain("CONFigure?");
+      expect(fake.functionToken).toBe("RES");
     } finally {
       await runtime.stop();
       await fake.stop();
