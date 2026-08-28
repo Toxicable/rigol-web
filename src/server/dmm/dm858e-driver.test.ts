@@ -47,7 +47,6 @@ interface ReadingObservation {
   points: number;
   response: string;
   operationStatus?: number;
-  questionableEvents?: number;
 }
 
 function scriptedDriver(transport: ScriptedTransport): Dm858eDriver {
@@ -100,11 +99,6 @@ function scriptReadingObservations(
     transport,
     "DATA:LAST?",
     ...observations.map((observation) => observation.response),
-  );
-  respond(
-    transport,
-    "STATus:QUEStionable:EVENt?",
-    ...observations.map((observation) => String(observation.questionableEvents ?? 0)),
   );
 }
 
@@ -293,26 +287,18 @@ describe("Dm858eDriver", () => {
     });
   });
 
-  it("uses the documented Questionable Data event bit for overload", async () => {
+  it("keeps overload UNKNOWN instead of consuming a latched Questionable Data event", async () => {
     const transport = new ScriptedTransport();
     scriptReadingObservations(
       transport,
       { functionToken: "VOLT", points: 0, response: "-5.07000000E-01 VDC" },
-      {
-        functionToken: "VOLT",
-        points: 1,
-        response: "-5.07000000E-01 VDC",
-        questionableEvents: 1,
-      },
+      { functionToken: "VOLT", points: 1, response: "9.90000000E+37 VDC" },
     );
     const driver = scriptedDriver(transport);
 
     await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toEqual({
-      kind: DmmReadingKind.Overload,
-      sequence: 0,
-      unit: DmmUnit.Volts,
-    });
+    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
+    expect(transport.commands).not.toContain("STATus:QUEStionable:EVENt?");
   });
 
   it("treats only the documented bare DATA:LAST no-data sentinel as no data", async () => {
@@ -326,6 +312,15 @@ describe("Dm858eDriver", () => {
 
     await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
     await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
+  });
+
+  it("leaves Questionable Data events available to explicit raw SCPI", async () => {
+    const transport = new ScriptedTransport();
+    respond(transport, "STATus:QUEStionable:EVENt?", "1");
+    const driver = scriptedDriver(transport);
+
+    await expect(driver.executeRawScpi("STATus:QUEStionable:EVENt?")).resolves.toBe("1");
+    expect(transport.commands).toEqual(["STATus:QUEStionable:EVENt?"]);
   });
 
   it("normalizes temperature using a unit read in the same measurement transaction", async () => {
