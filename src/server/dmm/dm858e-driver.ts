@@ -35,6 +35,16 @@ interface ReadRangeResult {
   readonly effectiveRange?: number;
 }
 
+interface ReadingBaseline {
+  readonly points: number;
+  readonly response: string;
+}
+
+interface ParsedLastReading {
+  readonly value: number;
+  readonly functionToken: string;
+}
+
 type TemperatureUnit = "C" | "F" | "K";
 
 const dcVoltageRanges = [0.1, 1, 10, 100, 1_000] as const;
@@ -43,10 +53,20 @@ const currentRanges = [1e-4, 1e-3, 1e-2, 1e-1, 1, 3] as const;
 const resistanceRanges = [100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000, 50_000_000] as const;
 const capacitanceRanges = [1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3] as const;
 const frequencyVoltageRanges = [0.1, 1, 10, 100, 750] as const;
+
 const noDataSentinel = 9.9e37;
+const operationConfigurationChanged = 256;
+const voltageOverloadEvent = 1;
+const currentOverloadEvent = 2;
+const temperatureOverloadEvent = 16;
+const frequencyOverloadEvent = 32;
+const resistanceOverloadEvent = 512;
+const capacitanceOverloadEvent = 1_024;
 
 export class Dm858eDriver {
   private temperatureUnit: TemperatureUnit = "C";
+  private readingBaseline: ReadingBaseline | null = null;
+  private readonly learnedReadingFunctionTokens = new Map<string, DmmMeasurementFunction>();
 
   public constructor(private readonly scheduler: ScpiScheduler) {}
 
@@ -162,18 +182,22 @@ export class Dm858eDriver {
       throw new Error("Missing range specification for AC measurement function");
     }
 
-    const effectiveRange = range.mode === DmmRangeMode.Fixed
-      ? range.value
-      : parsePositiveNumber(
-          await this.queryText(`${spec.command}?`, ScpiPriority.Immediate),
-          "effective AC range",
+    await this.scheduler.scheduleImmediate(
+      ScpiOperationKind.Write,
+      null,
+      async (transport) => {
+        const effectiveRange = range.mode === DmmRangeMode.Fixed
+          ? range.value
+          : parsePositiveNumber(
+              await transport.queryText(`${spec.command}?`),
+              "effective AC range",
+            );
+        const resolution = effectiveRange * resolutionRatioForRate(rate);
+        const rangeToken = range.mode === DmmRangeMode.Auto ? "AUTO" : String(range.value);
+        await transport.command(
+          `${configureCommandFor(measurementFunction)} ${rangeToken},${resolution}`,
         );
-    const resolution = effectiveRange * resolutionRatioForRate(rate);
-    const rangeToken = range.mode === DmmRangeMode.Auto ? "AUTO" : String(range.value);
-
-    await this.command(
-      `${configureCommandFor(measurementFunction)} ${rangeToken},${resolution}`,
-      ScpiPriority.Immediate,
+      },
     );
   }
 
@@ -186,34 +210,98 @@ export class Dm858eDriver {
       throw new Error("DMM reading sequence must be a non-negative safe integer");
     }
 
-    const response = await this.queryText(
-      "DATA:LAST?",
+    return this.scheduler.schedule({
       priority,
-      ScpiOperationKind.Measurement,
-    );
-    const value = parseLeadingFiniteNumber(response, "DM858E primary reading");
+      kind: ScpiOperationKind.Measurement,
+      execute: async (transport) => {
+        const operationBefore = parseNonNegativeInteger(
+          await transport.queryText("STATus:OPERation:CONDition?"),
+          "DM858E operation status",
+        );
+        const functionBefore = parseFunctionToken(
+          await transport.queryText("SENSe:FUNCtion?"),
+        );
+        const points = parseNonNegativeInteger(
+          await transport.queryText("DATA:POINts?"),
+          "DM858E reading-memory point count",
+        );
+        const response = (await transport.queryText("DATA:LAST?")).trim();
+        const functionAfter = parseFunctionToken(
+          await transport.queryText("SENSe:FUNCtion?"),
+        );
 
-    if (isBareNoDataResponse(response)) {
-      return null;
-    }
+        let readingTemperatureUnit = this.temperatureUnit;
+        if (functionAfter === DmmMeasurementFunction.Temperature) {
+          readingTemperatureUnit = parseTemperatureUnit(
+            await transport.queryText("UNIT:TEMPerature?"),
+          );
+          this.temperatureUnit = readingTemperatureUnit;
+        }
 
-    const unit = unitForFunction(measurementFunction);
-    if (Math.abs(value) >= noDataSentinel) {
-      return {
-        kind: DmmReadingKind.Overload,
-        sequence,
-        unit,
-      };
-    }
+        const operationAfter = parseNonNegativeInteger(
+          await transport.queryText("STATus:OPERation:CONDition?"),
+          "DM858E operation status",
+        );
+        const questionableEvents = parseNonNegativeInteger(
+          await transport.queryText("STATus:QUEStionable:EVENt?"),
+          "DM858E questionable-data event status",
+        );
 
-    return {
-      kind: DmmReadingKind.Value,
-      sequence,
-      value: measurementFunction === DmmMeasurementFunction.Temperature
-        ? temperatureToCelsius(value, this.temperatureUnit)
-        : value,
-      unit,
-    };
+        const baseline = this.readingBaseline;
+        this.readingBaseline = { points, response };
+        if (baseline === null) {
+          return null;
+        }
+
+        if (
+          ((operationBefore | operationAfter) & operationConfigurationChanged) !== 0 ||
+          functionBefore !== functionAfter ||
+          functionAfter !== measurementFunction
+        ) {
+          return null;
+        }
+
+        const parsed = parseLastReadingResponse(response);
+        if (parsed === null) {
+          return null;
+        }
+        if (!this.readingFunctionTokenMatches(parsed.functionToken, functionAfter)) {
+          return null;
+        }
+
+        const overloadMask = overloadEventMaskFor(functionAfter);
+        const overload = overloadMask !== 0 && (questionableEvents & overloadMask) !== 0;
+        const fresh = points !== baseline.points || response !== baseline.response || overload;
+        if (!fresh) {
+          return null;
+        }
+
+        const unit = unitForFunction(functionAfter);
+        if (overload) {
+          return {
+            kind: DmmReadingKind.Overload,
+            sequence,
+            unit,
+          };
+        }
+
+        // DATA:LAST? only documents the bare 9.9E37 response as "no data".
+        // A non-bare sentinel-sized value has no documented DATA:LAST? meaning, so
+        // do not infer overload from it without a matching status event.
+        if (Math.abs(parsed.value) >= noDataSentinel) {
+          return null;
+        }
+
+        return {
+          kind: DmmReadingKind.Value,
+          sequence,
+          value: functionAfter === DmmMeasurementFunction.Temperature
+            ? temperatureToCelsius(parsed.value, readingTemperatureUnit)
+            : parsed.value,
+          unit,
+        };
+      },
+    });
   }
 
   public async executeRawScpi(command: string): Promise<string> {
@@ -241,6 +329,27 @@ export class Dm858eDriver {
       },
     });
     return "";
+  }
+
+  private readingFunctionTokenMatches(
+    token: string,
+    measurementFunction: DmmMeasurementFunction,
+  ): boolean {
+    const normalized = token.trim().toUpperCase();
+
+    // VDC is the only DATA:LAST? function token explicitly exemplified by the
+    // Programming Guide. Other spellings are treated as opaque and learned only
+    // while the instrument reports a stable, authoritative current function.
+    if (normalized === "VDC") {
+      return measurementFunction === DmmMeasurementFunction.DcVoltage;
+    }
+
+    const learned = this.learnedReadingFunctionTokens.get(normalized);
+    if (learned === undefined) {
+      this.learnedReadingFunctionTokens.set(normalized, measurementFunction);
+      return true;
+    }
+    return learned === measurementFunction;
   }
 
   private async queryText(
@@ -450,6 +559,30 @@ function nplcCommandFor(value: DmmMeasurementFunction): string | null {
   }
 }
 
+function overloadEventMaskFor(value: DmmMeasurementFunction): number {
+  switch (value) {
+    case DmmMeasurementFunction.DcVoltage:
+    case DmmMeasurementFunction.AcVoltage:
+      return voltageOverloadEvent;
+    case DmmMeasurementFunction.DcCurrent:
+    case DmmMeasurementFunction.AcCurrent:
+      return currentOverloadEvent;
+    case DmmMeasurementFunction.Resistance2Wire:
+    case DmmMeasurementFunction.Resistance4Wire:
+      return resistanceOverloadEvent;
+    case DmmMeasurementFunction.Frequency:
+      return frequencyOverloadEvent;
+    case DmmMeasurementFunction.Capacitance:
+      return capacitanceOverloadEvent;
+    case DmmMeasurementFunction.Temperature:
+      return temperatureOverloadEvent;
+    case DmmMeasurementFunction.Continuity:
+    case DmmMeasurementFunction.Diode:
+    case DmmMeasurementFunction.Period:
+      return 0;
+  }
+}
+
 function functionName(value: DmmMeasurementFunction): string {
   switch (value) {
     case DmmMeasurementFunction.DcVoltage: return "DC voltage";
@@ -569,16 +702,34 @@ function parsePositiveNumber(value: string, name: string): number {
   return parsed;
 }
 
-function parseLeadingFiniteNumber(value: string, name: string): number {
-  const match = /^[\s]*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)/.exec(value);
-  if (match === null || match[1] === undefined) {
-    throw new Error(`Invalid ${name}: ${value}`);
-  }
-  const parsed = Number(match[1]);
-  if (!Number.isFinite(parsed)) {
+function parseNonNegativeInteger(value: string, name: string): number {
+  const parsed = Number(value.trim());
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
     throw new Error(`Invalid ${name}: ${value}`);
   }
   return parsed;
+}
+
+function parseLastReadingResponse(value: string): ParsedLastReading | null {
+  if (isBareNoDataResponse(value)) {
+    return null;
+  }
+
+  const match = /^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)\s+(.+?)\s*$/.exec(value);
+  if (match === null || match[1] === undefined || match[2] === undefined) {
+    throw new Error(`Invalid DM858E DATA:LAST? response: ${value}`);
+  }
+
+  const parsed = Number(match[1]);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Invalid DM858E DATA:LAST? value: ${value}`);
+  }
+
+  const functionToken = match[2].trim();
+  if (functionToken.length === 0) {
+    throw new Error(`Missing DM858E DATA:LAST? measurement function: ${value}`);
+  }
+  return { value: parsed, functionToken };
 }
 
 function isBareNoDataResponse(value: string): boolean {
@@ -586,7 +737,7 @@ function isBareNoDataResponse(value: string): boolean {
   if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?$/.test(trimmed)) {
     return false;
   }
-  return Math.abs(Number(trimmed)) >= noDataSentinel;
+  return Number(trimmed) === noDataSentinel;
 }
 
 function parseBoolean(value: string): boolean {
