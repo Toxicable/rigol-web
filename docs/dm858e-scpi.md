@@ -28,7 +28,7 @@ A state validation pass is kept inside one `ScpiScheduler` operation so an Immed
 
 For range-capable functions, the driver also reads the corresponding `RANGe:AUTO?` and `RANGe?` values so the shared state distinguishes Auto from a fixed range.
 
-For temperature, the driver reads `UNIT:TEMPerature?`. The Programming Guide defines the returned unit as `C`, `F`, or `K`. Browser-facing primary temperature readings are normalized to Celsius because the first shared DMM contract exposes `DmmUnit.Celsius`, not an arbitrary temperature-unit field.
+For temperature, the driver reads `UNIT:TEMPerature?`. The Programming Guide defines the returned unit as `C`, `F`, or `K`. Browser-facing primary temperature readings are normalized to Celsius because the first shared DMM contract exposes `DmmUnit.Celsius`, not an arbitrary temperature-unit field. Temperature primary-reading transactions re-read the unit so a front-panel unit change cannot make the browser convert with an older cached unit.
 
 ## Measurement function mapping
 
@@ -86,7 +86,7 @@ Programming Guide Table 3.14 defines:
 
 DC voltage, DC current, 2-wire resistance and 4-wire resistance expose direct `NPLC` commands, so the backend writes and reads the exact 20 / 5 / 0.4 PLC values.
 
-AC voltage/current speed is represented through the `CONFigure` resolution relationship from Table 3.14. The first implementation keeps the selected Auto/fixed range while changing that resolution.
+AC voltage/current speed is represented through the `CONFigure` resolution relationship from Table 3.14. The range query required for Auto mode and the matching `CONFigure:*` write run inside one scheduler operation so no other SCPI operation can be inserted between those two steps.
 
 The first shared state requires an acquisition-rate value even for functions where the Programming Guide does not expose this three-rate control. For continuity, diode, frequency, period, capacitance and temperature, the backend preserves the last meaningful shared rate in state and rejects rate writes instead of claiming to configure an unsupported control.
 
@@ -94,20 +94,61 @@ The first shared state requires an acquisition-rate value even for functions whe
 
 The first backend uses `DATA:LAST?` for the live primary value.
 
-This is intentional: `READ?` starts a measurement group and waits for the requested trigger/results, while `DATA:LAST?` asks for the last performed measurement. Using `DATA:LAST?` therefore avoids silently changing the meter's front-panel trigger workflow just to refresh the browser display.
+This is intentional: `READ?` starts a measurement group and waits for the requested trigger/results, while `DATA:LAST?` asks for the last performed measurement. Using `DATA:LAST?` avoids silently changing the meter's front-panel trigger workflow just to refresh the browser display.
 
-The Programming Guide defines the normal `DATA:LAST?` return as measurement data plus measurement function, and separately defines the bare numeric response `9.90000000E+37` when **no measurement data is available**. The backend therefore suppresses only a bare sentinel response. A sentinel-sized reading that also carries the normal measurement-function suffix is represented as `DmmReadingKind.Overload` so an overrange/open-circuit condition does not leave the browser displaying an earlier valid reading. The exact real-instrument suffix spellings for every function remain part of physical integration verification.
+The Programming Guide defines normal `DATA:LAST?` output as measurement data plus measurement function and gives `-5.07000000E-01 VDC` as its example. It separately defines the **bare** numeric response `9.90000000E+37` when no measurement data is available. The backend therefore treats only the bare documented form as no data and does not infer an overload encoding from a suffixed `9.9E37` value.
 
-The initial poll cadence is deliberately conservative and simple:
+Each primary-reading observation is one scheduler operation and also reads:
 
-- primary-reading check: 100 ms;
-- state/front-panel validation: 500 ms.
+- `STATus:OPERation:CONDition?` before and after the observation;
+- `SENSe:FUNCtion?` before and after `DATA:LAST?`;
+- `DATA:POINts?` before `DATA:LAST?`;
+- `STATus:QUEStionable:EVENt?` after `DATA:LAST?`;
+- `UNIT:TEMPerature?` inside the same transaction when temperature is active.
 
-This is not a claim of 10 readings/s effective acquisition or an optimized path. Real-device throughput, duplicate-last-reading behavior and any buffered/triggered replacement belong to DM858E integration benchmarking.
+Operation Status bit 8 (`256`) is documented as **Configuration change**: the configuration has changed since the last measurement and reading, whether from the front panel or SCPI. If this bit is present, the function changes during the transaction, or the authoritative function no longer matches the state snapshot used by the poller, that observation is suppressed rather than being published with a stale unit.
 
-## Raw SCPI
+The Programming Guide only gives `VDC` as an explicit `DATA:LAST?` function-token example. The backend does not invent the other token spellings. Unknown tokens are treated as opaque and are associated with a function only while `SENSe:FUNCtion?` is stable and authoritative; a token later observed under a different function is rejected.
 
-Raw SCPI commands use the same per-instrument `ScpiScheduler` as state, controls and readings. Nothing writes around the scheduler directly.
+### Freshness and sequence numbers
+
+`DATA:LAST?` is a last-value query, not proof that a new measurement occurred. The driver therefore establishes a baseline on the first observation and publishes only when there is evidence of a new measurement since the prior observation:
+
+- `DATA:POINts?` changed; or
+- the complete `DATA:LAST?` response changed; or
+- a documented overload event for the active function appeared.
+
+Repeated polling of the same last measurement therefore returns no browser reading and does not advance the browser sequence number. This is deliberately conservative: if reading-memory count does not change and two legitimate consecutive measurements have exactly the same returned text, the first backend may under-count rather than fabricate a fresh sample. Integration can replace this observation strategy with a verified buffered/consuming acquisition path if the physical meter shows that is necessary.
+
+### Overload evidence
+
+Questionable Data register overload bits are specification-backed event indicators. The backend uses `STATus:QUEStionable:EVENt?`, which the Programming Guide says returns and clears the event register, for the functions whose overload bit is explicitly documented:
+
+| Function family | Event bit |
+| --- | ---: |
+| Voltage | 1 |
+| Current | 2 |
+| Temperature | 16 |
+| Frequency | 32 |
+| Resistance | 512 |
+| Capacitance | 1024 |
+
+A fresh observation with the matching documented event is published as `DmmReadingKind.Overload`. Continuity, diode and period are not assigned an overload event by inference; their exact overload representation remains an integration verification item. Likewise, a non-bare sentinel-sized `DATA:LAST?` value without matching documented status evidence is suppressed instead of being guessed as overload.
+
+The initial poll cadence remains:
+
+- primary-reading observation: 100 ms;
+- full state/front-panel validation: 500 ms.
+
+This is not a claim of 10 readings/s effective acquisition or an optimized path.
+
+## Control and raw-SCPI serialization
+
+Multiple browser tabs may share one active DM858E runtime. A logical mutation therefore has to be serialized beyond the individual SCPI messages.
+
+The runtime serializes each control request from prerequisite state through write and authoritative readback before another control or raw-SCPI mutation can begin. This prevents two clients from both reporting success after interleaving stale prerequisite state. Raw SCPI uses the same mutation queue because it may also change instrument state.
+
+All individual SCPI operations still use the same per-instrument `ScpiScheduler`; nothing writes directly around it.
 
 After a raw SCPI operation, the runtime performs an authoritative state readback because the raw command may have changed function, range, rate or temperature unit.
 
@@ -117,8 +158,9 @@ The physical DM858E integration stream must verify at minimum:
 
 - LAN SCPI port/connection behavior;
 - exact real-instrument response spelling for every supported state query;
-- exact `DATA:LAST?` function suffixes and overload/open-circuit forms for every supported measurement function;
-- `DATA:LAST?` duplicate/update behavior at Slow/Medium/Fast rates;
+- exact `DATA:LAST?` function suffixes beyond the guide's `VDC` example;
+- reading-memory point-count behaviour during ordinary front-panel continuous measurement and at memory saturation;
+- exact overload/open-circuit behaviour for continuity, diode and period and any real `DATA:LAST?` sentinel forms;
 - sustained acquisition throughput and whether a buffered/triggered strategy materially improves it;
 - front-panel changes while the browser is subscribed;
 - temperature/sensor combinations beyond the first shared function selector.
