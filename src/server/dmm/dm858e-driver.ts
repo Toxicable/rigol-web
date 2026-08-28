@@ -36,6 +36,7 @@ interface ReadRangeResult {
 }
 
 interface ReadingBaseline {
+  readonly function: DmmMeasurementFunction;
   readonly points: number;
   readonly response: string;
 }
@@ -237,12 +238,6 @@ export class Dm858eDriver {
           "DM858E operation status",
         );
 
-        const baseline = this.readingBaseline;
-        this.readingBaseline = { points, response };
-        if (baseline === null) {
-          return null;
-        }
-
         if (
           ((operationBefore | operationAfter) & operationConfigurationChanged) !== 0 ||
           functionBefore !== functionAfter ||
@@ -253,13 +248,25 @@ export class Dm858eDriver {
 
         const parsed = parseLastReadingResponse(response);
         if (parsed === null) {
+          this.readingBaseline = { function: functionAfter, points, response };
           return null;
         }
         if (!this.readingFunctionTokenMatches(parsed.functionToken, functionAfter)) {
           return null;
         }
 
-        const fresh = points !== baseline.points || response !== baseline.response;
+        const baseline = this.readingBaseline;
+        const nextBaseline = { function: functionAfter, points, response };
+        if (baseline === null) {
+          this.readingBaseline = nextBaseline;
+          return null;
+        }
+
+        const fresh =
+          functionAfter !== baseline.function ||
+          points !== baseline.points ||
+          response !== baseline.response;
+        this.readingBaseline = nextBaseline;
         if (!fresh) {
           return null;
         }
