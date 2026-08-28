@@ -56,12 +56,6 @@ const frequencyVoltageRanges = [0.1, 1, 10, 100, 750] as const;
 
 const noDataSentinel = 9.9e37;
 const operationConfigurationChanged = 256;
-const voltageOverloadEvent = 1;
-const currentOverloadEvent = 2;
-const temperatureOverloadEvent = 16;
-const frequencyOverloadEvent = 32;
-const resistanceOverloadEvent = 512;
-const capacitanceOverloadEvent = 1_024;
 
 export class Dm858eDriver {
   private temperatureUnit: TemperatureUnit = "C";
@@ -242,10 +236,6 @@ export class Dm858eDriver {
           await transport.queryText("STATus:OPERation:CONDition?"),
           "DM858E operation status",
         );
-        const questionableEvents = parseNonNegativeInteger(
-          await transport.queryText("STATus:QUEStionable:EVENt?"),
-          "DM858E questionable-data event status",
-        );
 
         const baseline = this.readingBaseline;
         this.readingBaseline = { points, response };
@@ -269,25 +259,14 @@ export class Dm858eDriver {
           return null;
         }
 
-        const overloadMask = overloadEventMaskFor(functionAfter);
-        const overload = overloadMask !== 0 && (questionableEvents & overloadMask) !== 0;
-        const fresh = points !== baseline.points || response !== baseline.response || overload;
+        const fresh = points !== baseline.points || response !== baseline.response;
         if (!fresh) {
           return null;
         }
 
-        const unit = unitForFunction(functionAfter);
-        if (overload) {
-          return {
-            kind: DmmReadingKind.Overload,
-            sequence,
-            unit,
-          };
-        }
-
         // DATA:LAST? only documents the bare 9.9E37 response as "no data".
         // A non-bare sentinel-sized value has no documented DATA:LAST? meaning, so
-        // do not infer overload from it without a matching status event.
+        // keep overload UNKNOWN until a measurement-correlated mechanism is verified.
         if (Math.abs(parsed.value) >= noDataSentinel) {
           return null;
         }
@@ -298,7 +277,7 @@ export class Dm858eDriver {
           value: functionAfter === DmmMeasurementFunction.Temperature
             ? temperatureToCelsius(parsed.value, readingTemperatureUnit)
             : parsed.value,
-          unit,
+          unit: unitForFunction(functionAfter),
         };
       },
     });
@@ -556,30 +535,6 @@ function nplcCommandFor(value: DmmMeasurementFunction): string | null {
     case DmmMeasurementFunction.Capacitance:
     case DmmMeasurementFunction.Temperature:
       return null;
-  }
-}
-
-function overloadEventMaskFor(value: DmmMeasurementFunction): number {
-  switch (value) {
-    case DmmMeasurementFunction.DcVoltage:
-    case DmmMeasurementFunction.AcVoltage:
-      return voltageOverloadEvent;
-    case DmmMeasurementFunction.DcCurrent:
-    case DmmMeasurementFunction.AcCurrent:
-      return currentOverloadEvent;
-    case DmmMeasurementFunction.Resistance2Wire:
-    case DmmMeasurementFunction.Resistance4Wire:
-      return resistanceOverloadEvent;
-    case DmmMeasurementFunction.Frequency:
-      return frequencyOverloadEvent;
-    case DmmMeasurementFunction.Capacitance:
-      return capacitanceOverloadEvent;
-    case DmmMeasurementFunction.Temperature:
-      return temperatureOverloadEvent;
-    case DmmMeasurementFunction.Continuity:
-    case DmmMeasurementFunction.Diode:
-    case DmmMeasurementFunction.Period:
-      return 0;
   }
 }
 
