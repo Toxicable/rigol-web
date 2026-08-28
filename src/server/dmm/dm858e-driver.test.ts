@@ -5,6 +5,7 @@ import {
   DmmMeasurementFunction,
   DmmRangeMode,
   DmmReadingKind,
+  DmmReadingUnavailableReason,
   DmmUnit,
 } from "../../shared/dmm-types.js";
 import {
@@ -44,7 +45,6 @@ class ScriptedTransport {
 
 interface ReadingObservation {
   functionToken: string;
-  points: number;
   response: string;
   operationStatus?: number;
 }
@@ -89,11 +89,6 @@ function scriptReadingObservations(
       observation.functionToken,
       observation.functionToken,
     ]),
-  );
-  respond(
-    transport,
-    "DATA:POINts?",
-    ...observations.map((observation) => String(observation.points)),
   );
   respond(
     transport,
@@ -146,21 +141,20 @@ describe("Dm858eDriver", () => {
     });
   });
 
-  it("preserves the last meaningful rate for functions without programmable speed", async () => {
+  it("reports non-applicable range and rate as null", async () => {
     const transport = new ScriptedTransport();
     respond(transport, "CONFigure?", "CONT");
 
-    await expect(
-      scriptedDriver(transport).readDmmState(DmmAcquisitionRate.Fast),
-    ).resolves.toEqual({
+    await expect(scriptedDriver(transport).readDmmState()).resolves.toEqual({
       function: DmmMeasurementFunction.Continuity,
-      range: { mode: DmmRangeMode.Auto },
-      acquisitionRate: DmmAcquisitionRate.Fast,
+      range: null,
+      acquisitionRate: null,
     });
   });
 
-  it("sets exact function and DM858E range commands", async () => {
+  it("sets exact function and DM858E range commands after checking physical function", async () => {
     const transport = new ScriptedTransport();
+    respond(transport, "SENSe:FUNCtion?", "CURR", "CAP", "FREQ");
     const driver = scriptedDriver(transport);
 
     await driver.setFunction(DmmMeasurementFunction.Resistance4Wire);
@@ -178,8 +172,11 @@ describe("Dm858eDriver", () => {
 
     expect(transport.commands).toEqual([
       "SENSe:FUNCtion \"FRESistance\"",
+      "SENSe:FUNCtion?",
       "SENSe:CURRent:DC:RANGe 3",
+      "SENSe:FUNCtion?",
       "SENSe:CAPacitance:RANGe:AUTO ON",
+      "SENSe:FUNCtion?",
       "SENSe:FREQuency:VOLTage:RANGe 750",
     ]);
   });
@@ -203,19 +200,21 @@ describe("Dm858eDriver", () => {
     expect(transport.commands).toEqual([]);
   });
 
-  it("distinguishes adjacent low capacitance ranges", async () => {
+  it("rejects a stale range request before writing", async () => {
     const transport = new ScriptedTransport();
+    respond(transport, "SENSe:FUNCtion?", "RES");
     const driver = scriptedDriver(transport);
 
-    await expect(driver.setRange(DmmMeasurementFunction.Capacitance, {
+    await expect(driver.setRange(DmmMeasurementFunction.DcVoltage, {
       mode: DmmRangeMode.Fixed,
-      value: 2e-9,
-    })).rejects.toThrow(/Unsupported capacitance range/);
-    expect(transport.commands).toEqual([]);
+      value: 1_000,
+    })).rejects.toThrow(/Stale DMM control/);
+    expect(transport.commands).toEqual(["SENSe:FUNCtion?"]);
   });
 
-  it("maps Slow Medium Fast to the documented NPLC values", async () => {
+  it("maps Slow Medium Fast to documented NPLC values with function validation", async () => {
     const transport = new ScriptedTransport();
+    respond(transport, "SENSe:FUNCtion?", "VOLT", "VOLT", "VOLT");
     const driver = scriptedDriver(transport);
     const range = { mode: DmmRangeMode.Fixed as const, value: 10 };
 
@@ -224,14 +223,18 @@ describe("Dm858eDriver", () => {
     await driver.setAcquisitionRate(DmmMeasurementFunction.DcVoltage, range, DmmAcquisitionRate.Fast);
 
     expect(transport.commands).toEqual([
+      "SENSe:FUNCtion?",
       "SENSe:VOLTage:DC:NPLC 20",
+      "SENSe:FUNCtion?",
       "SENSe:VOLTage:DC:NPLC 5",
+      "SENSe:FUNCtion?",
       "SENSe:VOLTage:DC:NPLC 0.4",
     ]);
   });
 
-  it("sets AC speed through one scheduler operation and preserves auto range", async () => {
+  it("sets AC speed in one scheduler operation and preserves auto range", async () => {
     const transport = new ScriptedTransport();
+    respond(transport, "SENSe:FUNCtion?", "VOLT:AC");
     respond(transport, "SENSe:VOLTage:AC:RANGe?", "1.00000000E+01");
     const driver = scriptedDriver(transport);
 
@@ -242,106 +245,130 @@ describe("Dm858eDriver", () => {
     );
 
     expect(transport.commands).toEqual([
+      "SENSe:FUNCtion?",
       "SENSe:VOLTage:AC:RANGe?",
       "CONFigure:VOLTage:AC AUTO,0.01",
     ]);
   });
 
-  it("publishes only when reading-memory or response evidence proves a fresh reading", async () => {
+  it("rejects a stale AC rate request before CONFigure can change function", async () => {
+    const transport = new ScriptedTransport();
+    respond(transport, "SENSe:FUNCtion?", "RES");
+    const driver = scriptedDriver(transport);
+
+    await expect(driver.setAcquisitionRate(
+      DmmMeasurementFunction.AcVoltage,
+      { mode: DmmRangeMode.Auto },
+      DmmAcquisitionRate.Fast,
+    )).rejects.toThrow(/Stale DMM control/);
+    expect(transport.commands).toEqual(["SENSe:FUNCtion?"]);
+  });
+
+  it("publishes the first stable DATA:LAST value as a latest-reading snapshot", async () => {
     const transport = new ScriptedTransport();
     scriptReadingObservations(
       transport,
-      { functionToken: "VOLT", points: 0, response: "-5.07000000E-01 VDC" },
-      { functionToken: "VOLT", points: 1, response: "-5.07000000E-01 VDC" },
-      { functionToken: "VOLT", points: 1, response: "-5.07000000E-01 VDC" },
+      { functionToken: "VOLT", response: "-5.07000000E-01 VDC" },
     );
     const driver = scriptedDriver(transport);
 
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 4)).resolves.toBeNull();
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 4)).resolves.toEqual({
+    await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.DcVoltage)).resolves.toEqual({
       kind: DmmReadingKind.Value,
-      sequence: 4,
+      function: DmmMeasurementFunction.DcVoltage,
       value: -0.507,
       unit: DmmUnit.Volts,
     });
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 5)).resolves.toBeNull();
+    expect(transport.commands).not.toContain("DATA:POINts?");
   });
 
-  it("preserves a rejected function-change reading for the first stable poll", async () => {
+  it("does not pretend repeated DATA:LAST snapshots are distinct samples", async () => {
     const transport = new ScriptedTransport();
     scriptReadingObservations(
       transport,
-      { functionToken: "VOLT", points: 0, response: "-5.07000000E-01 VDC" },
-      { functionToken: "RES", points: 1, response: "1.00000000E+03 OPAQUE_RES" },
-      { functionToken: "RES", points: 1, response: "1.00000000E+03 OPAQUE_RES" },
+      { functionToken: "VOLT", response: "-5.07000000E-01 VDC" },
+      { functionToken: "VOLT", response: "-5.07000000E-01 VDC" },
     );
     const driver = scriptedDriver(transport);
 
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.Resistance2Wire, 0)).resolves.toEqual({
+    const expected = {
       kind: DmmReadingKind.Value,
-      sequence: 0,
+      function: DmmMeasurementFunction.DcVoltage,
+      value: -0.507,
+      unit: DmmUnit.Volts,
+    };
+    await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.DcVoltage)).resolves.toEqual(expected);
+    await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.DcVoltage)).resolves.toEqual(expected);
+  });
+
+  it("retries the same stopped reading after a stale function observation", async () => {
+    const transport = new ScriptedTransport();
+    scriptReadingObservations(
+      transport,
+      { functionToken: "RES", response: "1.00000000E+03 OPAQUE_RES" },
+      { functionToken: "RES", response: "1.00000000E+03 OPAQUE_RES" },
+    );
+    const driver = scriptedDriver(transport);
+
+    await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.DcVoltage)).resolves.toBeNull();
+    await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.Resistance2Wire)).resolves.toEqual({
+      kind: DmmReadingKind.Value,
+      function: DmmMeasurementFunction.Resistance2Wire,
       value: 1_000,
       unit: DmmUnit.Ohms,
     });
   });
 
-  it("preserves freshness evidence across a configuration-change rejection", async () => {
+  it("retries the same reading after a configuration-change observation", async () => {
     const transport = new ScriptedTransport();
     scriptReadingObservations(
       transport,
-      { functionToken: "VOLT", points: 0, response: "-5.07000000E-01 VDC" },
       {
         functionToken: "VOLT",
-        points: 1,
         response: "-5.08000000E-01 VDC",
         operationStatus: 256,
       },
-      { functionToken: "VOLT", points: 1, response: "-5.08000000E-01 VDC" },
+      { functionToken: "VOLT", response: "-5.08000000E-01 VDC" },
     );
     const driver = scriptedDriver(transport);
 
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toEqual({
+    await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.DcVoltage)).resolves.toBeNull();
+    await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.DcVoltage)).resolves.toEqual({
       kind: DmmReadingKind.Value,
-      sequence: 0,
+      function: DmmMeasurementFunction.DcVoltage,
       value: -0.508,
       unit: DmmUnit.Volts,
     });
   });
 
-  it("does not consume latched Questionable Data events while polling", async () => {
+  it("publishes documented bare DATA:LAST no-data as unavailable", async () => {
     const transport = new ScriptedTransport();
     scriptReadingObservations(
       transport,
-      { functionToken: "VOLT", points: 0, response: "-5.07000000E-01 VDC" },
-      { functionToken: "VOLT", points: 1, response: "-5.08000000E-01 VDC" },
+      { functionToken: "VOLT", response: "9.90000000E+37" },
     );
     const driver = scriptedDriver(transport);
 
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toEqual({
-      kind: DmmReadingKind.Value,
-      sequence: 0,
-      value: -0.508,
+    await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.DcVoltage)).resolves.toEqual({
+      kind: DmmReadingKind.Unavailable,
+      function: DmmMeasurementFunction.DcVoltage,
       unit: DmmUnit.Volts,
+      reason: DmmReadingUnavailableReason.NoData,
+    });
+  });
+
+  it("does not consume latched Questionable Data events while reading snapshots", async () => {
+    const transport = new ScriptedTransport();
+    scriptReadingObservations(
+      transport,
+      { functionToken: "VOLT", response: "-5.08000000E-01 VDC" },
+    );
+    const driver = scriptedDriver(transport);
+
+    await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.DcVoltage)).resolves.toMatchObject({
+      kind: DmmReadingKind.Value,
+      value: -0.508,
     });
     expect(transport.commands).not.toContain("STATus:QUEStionable:EVENt?");
-  });
-
-  it("treats only the documented bare DATA:LAST no-data sentinel as no data", async () => {
-    const transport = new ScriptedTransport();
-    scriptReadingObservations(
-      transport,
-      { functionToken: "VOLT", points: 0, response: "-5.07000000E-01 VDC" },
-      { functionToken: "VOLT", points: 1, response: "9.90000000E+37" },
-    );
-    const driver = scriptedDriver(transport);
-
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
   });
 
   it("leaves Questionable Data events available to explicit raw SCPI", async () => {
@@ -353,26 +380,24 @@ describe("Dm858eDriver", () => {
     expect(transport.commands).toEqual(["STATus:QUEStionable:EVENt?"]);
   });
 
-  it("normalizes temperature using a unit read in the same measurement transaction", async () => {
+  it("normalizes temperature using a unit read in the same snapshot transaction", async () => {
     const transport = new ScriptedTransport();
     respond(transport, "CONFigure?", "TEMP FRTD,385");
-    respond(transport, "UNIT:TEMPerature?", "F", "F", "F");
+    respond(transport, "UNIT:TEMPerature?", "F", "F");
     scriptReadingObservations(
       transport,
-      { functionToken: "TEMP", points: 0, response: "2.12000000E+02 OPAQUE_TEMP" },
-      { functionToken: "TEMP", points: 1, response: "2.12000000E+02 OPAQUE_TEMP" },
+      { functionToken: "TEMP", response: "2.12000000E+02 OPAQUE_TEMP" },
     );
     const driver = scriptedDriver(transport);
 
     await expect(driver.readDmmState()).resolves.toEqual({
       function: DmmMeasurementFunction.Temperature,
-      range: { mode: DmmRangeMode.Auto },
-      acquisitionRate: DmmAcquisitionRate.Slow,
+      range: null,
+      acquisitionRate: null,
     });
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.Temperature, 8)).resolves.toBeNull();
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.Temperature, 8)).resolves.toEqual({
+    await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.Temperature)).resolves.toEqual({
       kind: DmmReadingKind.Value,
-      sequence: 8,
+      function: DmmMeasurementFunction.Temperature,
       value: 100,
       unit: DmmUnit.Celsius,
     });
