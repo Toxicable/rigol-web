@@ -4,7 +4,7 @@ import {
   DmmRangeMode,
   DmmReadingKind,
   DmmReadingUnavailableReason,
-  DmmUnit,
+  dmmUnitForFunction,
   type DmmInfo,
   type DmmRange,
   type DmmReadingSnapshot,
@@ -156,7 +156,6 @@ export class Dm858eDriver {
 
   public async setAcquisitionRate(
     measurementFunction: DmmMeasurementFunction,
-    range: DmmRange,
     rate: DmmAcquisitionRate,
   ): Promise<void> {
     const nplcCommand = nplcCommandFor(measurementFunction);
@@ -189,14 +188,15 @@ export class Dm858eDriver {
         if (spec === null) {
           throw new Error("Missing range specification for AC measurement function");
         }
-        const effectiveRange = range.mode === DmmRangeMode.Fixed
-          ? range.value
-          : parsePositiveNumber(
-              await transport.queryText(`${spec.command}?`),
-              "effective AC range",
-            );
-        const resolution = effectiveRange * resolutionRatioForRate(rate);
-        const rangeToken = range.mode === DmmRangeMode.Auto ? "AUTO" : String(range.value);
+
+        const physicalRange = await readRange(transport, measurementFunction);
+        if (physicalRange.range === null || physicalRange.effectiveRange === undefined) {
+          throw new Error("Missing physical range for AC measurement function");
+        }
+        const resolution = physicalRange.effectiveRange * resolutionRatioForRate(rate);
+        const rangeToken = physicalRange.range.mode === DmmRangeMode.Auto
+          ? "AUTO"
+          : String(physicalRange.range.value);
         await transport.command(
           `${configureCommandFor(measurementFunction)} ${rangeToken},${resolution}`,
         );
@@ -245,7 +245,7 @@ export class Dm858eDriver {
           return null;
         }
 
-        const unit = unitForFunction(functionAfter);
+        const unit = dmmUnitForFunction(functionAfter);
         const parsed = parseLastReadingResponse(response);
         if (parsed === null) {
           return {
@@ -563,30 +563,6 @@ function functionName(value: DmmMeasurementFunction): string {
     case DmmMeasurementFunction.Period: return "period";
     case DmmMeasurementFunction.Capacitance: return "capacitance";
     case DmmMeasurementFunction.Temperature: return "temperature";
-  }
-}
-
-function unitForFunction(value: DmmMeasurementFunction): DmmUnit {
-  switch (value) {
-    case DmmMeasurementFunction.DcVoltage:
-    case DmmMeasurementFunction.AcVoltage:
-    case DmmMeasurementFunction.Diode:
-      return DmmUnit.Volts;
-    case DmmMeasurementFunction.DcCurrent:
-    case DmmMeasurementFunction.AcCurrent:
-      return DmmUnit.Amps;
-    case DmmMeasurementFunction.Resistance2Wire:
-    case DmmMeasurementFunction.Resistance4Wire:
-    case DmmMeasurementFunction.Continuity:
-      return DmmUnit.Ohms;
-    case DmmMeasurementFunction.Frequency:
-      return DmmUnit.Hertz;
-    case DmmMeasurementFunction.Period:
-      return DmmUnit.Seconds;
-    case DmmMeasurementFunction.Capacitance:
-      return DmmUnit.Farads;
-    case DmmMeasurementFunction.Temperature:
-      return DmmUnit.Celsius;
   }
 }
 
