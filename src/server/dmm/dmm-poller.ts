@@ -86,6 +86,9 @@ export class DmmPoller {
           break;
         }
         if (reading !== null) {
+          // The driver suppresses its initial baseline, stale DATA:LAST? observations,
+          // and function/configuration races. A non-null value is therefore the
+          // evidence boundary for advancing the browser-visible sample sequence.
           this.sequence += 1;
           this.publishReading(reading);
         }
