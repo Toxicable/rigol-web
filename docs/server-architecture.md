@@ -4,7 +4,7 @@
 
 The Rigol Web server coordinates two fixed instruments, the DHO804 and DM858E, plus browser clients over one WebSocket per browser tab.
 
-The design remains concrete. Shared code exists only where both supported instruments genuinely need the same behaviour, principally SCPI transport/scheduling and subscription-owned lifecycle.
+The design remains concrete. Shared code exists only where both supported instruments genuinely need the same behaviour, principally SCPI transport/scheduling/program-message classification and subscription-owned lifecycle.
 
 ## Top-level structure
 
@@ -47,7 +47,7 @@ Responsibilities:
 
 This is a small lifecycle registry, not a generic plugin framework or dependency-injection container.
 
-The configured endpoints are:
+Configured endpoints are explicit:
 
 ```text
 RIGOL_SCOPE_HOST
@@ -58,7 +58,9 @@ RIGOL_DMM_PORT
 
 No browser message may choose an arbitrary host or port.
 
-## ScpiTransport
+## Shared SCPI infrastructure
+
+### ScpiTransport
 
 `ScpiTransport` owns one TCP socket and raw SCPI framing for one active instrument session.
 
@@ -73,7 +75,7 @@ Responsibilities:
 
 It does not know DHO804 channels, DM858E functions, browser messages, polling or application state.
 
-## ScpiScheduler
+### ScpiScheduler
 
 `ScpiScheduler` is the sole normal owner of serialized access to its `ScpiTransport`.
 
@@ -91,9 +93,18 @@ The DHO804 and DM858E do not share a scheduler queue. Each runtime creates its o
 
 See `scpi-scheduler.md`.
 
-## DHO804 path
+### SCPI program-message classification
 
-The existing DHO804 application path remains:
+`src/server/scpi/scpi-program-message.ts` owns the generic raw-SCPI message rules used by both drivers:
+
+- non-empty input
+- exactly one CR/LF-free program message
+- command/query classification from `?` outside quoted strings
+- doubled quote handling inside SCPI strings
+
+Drivers do not maintain independent raw-SCPI query scanners.
+
+## DHO804 path
 
 ```text
 WebSocketGateway
@@ -107,89 +118,55 @@ ScpiScheduler
 ScpiTransport
 ```
 
-### Dho804Driver
+`Dho804Driver` owns exact DHO804 SCPI commands, response parsing, waveform native representation and device-specific quirks.
 
-Owns exact DHO804 SCPI commands, response parsing, waveform native representation and device-specific quirks.
+`ScopeStateStore` owns the complete cached connected `ScopeState` and change notifications. It does not query the instrument.
 
-Native Rigol waveform/TMC representation stops at this boundary. Higher waveform services consume normalized amplitude data.
+`ScopeController` owns application-level scope control semantics including discrete/interactive controls, readback, acquisition actions, measurements and raw SCPI routing.
 
-### ScopeStateStore
+`ScopePoller` validates important physical scope state. Live/deep waveform services remain DHO804-specific.
 
-Owns the complete cached connected `ScopeState` and change notifications. It does not query the instrument.
-
-### ScopeController
-
-Owns application-level scope control semantics:
-
-- discrete controls
-- interactive update/commit behaviour
-- optimistic state where appropriate
-- focused authoritative readback
-- Run/Stop/Single
-- measurements
-- raw DHO804 SCPI routing
-- stale poll rejection around newer local mutations
-
-### ScopePoller
-
-Validates important physical scope state at approximately 1 Hz. Poll cycles do not pile up and stale snapshots are discarded after newer local mutations.
-
-### LiveWaveformService
-
-Owns recurring NORMAL/live waveform reads, keeps work latest-oriented and publishes normalized binary frames.
-
-### DeepCaptureService
-
-Owns RAW/deep capture retrieval, retained full captures, min/max viewport downsampling and deep viewport encoding.
-
-See `waveforms.md` and `waveform-protocol.md`.
-
-## ScopeRuntime
-
-`ScopeRuntime` composes one live DHO804 session:
-
-```text
-ScopeRuntime
-  |- ScpiTransport
-  |- ScpiScheduler
-  |- Dho804Driver
-  |- ScopeStateStore
-  |- ScopeController
-  |- ScopePoller
-  |- LiveWaveformService
-  `- DeepCaptureService
-```
-
-Unlike the original scope-only startup model, `ScopeRuntime.start()` is called by `InstrumentRegistry` only while at least one DHO804 browser subscription exists.
-
-Activation publishes a pending/disconnected lifecycle first, then attempts:
-
-```text
-connect TCP
- -> identify and require DHO804
- -> read complete initial ScopeState
- -> publish Connected
- -> start poll/live services
-```
-
-A partially initialized scope is never published as connected.
-
-While activated, transport failure uses the existing simple fresh-session retry loop. Once the last DHO804 subscriber leaves, `stop()` publishes inactive state immediately, cancels/rejects current work and disposes the session. No reconnect loop runs while inactive.
+`ScopeRuntime` composes the active DHO804 session and is started/stopped only by `InstrumentRegistry` subscription ownership.
 
 ## DM858E path
 
-The foundation reserves a separate DMM runtime/controller/driver path and shared browser contracts without implementing the device SCPI semantics in this workstream.
-
-The backend workstream owns:
-
 ```text
-src/server/dmm/dm858e-driver.ts
-src/server/dmm/dmm-runtime.ts
-src/server/dmm/dmm-state-store.ts
-src/server/dmm/dmm-poller.ts   (only if needed)
+WebSocketGateway
+   |
+DmmRuntime
+   |
+Dm858eDriver
+   |
+ScpiScheduler
+   |
+ScpiTransport
 ```
 
-`Dm858eDriver` will own exact DM858E commands/parsing. Its runtime will create a fresh `ScpiTransport` + `ScpiScheduler` session under the same subscription lifecycle as the DHO804.
+`Dm858eDriver` owns:
+
+- exact DM858E SCPI commands and parsing
+- model validation
+- function/range/rate mappings
+- latest-reading snapshot parsing
+- immediate physical-function validation before function-dependent writes
+
+`DmmStateStore` owns authoritative cached DMM configuration state. Non-applicable range/rate controls are represented explicitly as `null`.
+
+`DmmPoller` performs two distinct jobs while the runtime is active:
+
+- low-rate authoritative configuration reconciliation
+- latest-reading display snapshot polling
+
+The display snapshot is not a sample stream. It carries no sequence/sample identity and must not be used for sample statistics.
+
+`DmmRuntime` owns:
+
+- fresh-session connect/identify/start/stop/reconnect lifecycle
+- one logical mutation queue shared by browser controls and raw SCPI
+- authoritative state readback after mutations
+- stale function-dependent control rejection
+
+Range/rate messages carry the function under which the browser created them. Under mutation ownership the runtime compares that expected function with a fresh authoritative state read. The driver then rechecks `SENSe:FUNCtion?` immediately before the write in the same scheduler operation. Stale requests fail rather than being reinterpreted under another function.
 
 Do not route DM858E commands through `ScopeController`, and do not place DM858E state into `ScopeStateStore`.
 
@@ -202,9 +179,10 @@ Responsibilities:
 - accept `/ws` connections
 - send `ProtocolHello` immediately
 - require a matching `ProtocolHelloAck` before application traffic
-- track the instruments subscribed by each browser session
+- track instruments subscribed by each browser session
 - dispatch commands only when that session is subscribed to the target instrument
-- publish lifecycle/state/readings/waveforms only to subscribed sessions
+- structurally validate function-bound DMM range/rate controls
+- publish lifecycle/state/snapshots/waveforms only to subscribed sessions
 - route raw SCPI to the explicitly named instrument
 - send command results/errors
 - enforce DHO804 waveform backpressure behaviour
@@ -212,30 +190,30 @@ Responsibilities:
 
 It must not construct instrument SCPI commands, directly mutate instrument state or implement waveform downsampling.
 
-Multiple browser tabs may subscribe to the same physical instrument. They share the one runtime/session for that instrument; there is no exclusive browser lock.
+Multiple browser tabs may subscribe to the same physical instrument. They share one runtime/session for that instrument; there is no exclusive browser lock.
 
 See `websocket-protocol.md`.
 
 ## Protocol compatibility
 
-WebSocket protocol version 2 uses an application-level handshake before subscriptions:
+WebSocket protocol version 3 uses an application-level handshake before subscriptions:
 
 ```text
 server: ProtocolHello(PROTOCOL_VERSION)
 client: ProtocolHelloAck(PROTOCOL_VERSION)
 ```
 
-Any non-handshake client message received before a valid acknowledgement closes the socket with a protocol error. Version mismatch is therefore visible before an old browser can silently wait for a scope lifecycle message that is now subscription-gated.
+Version 3 hard-cuts the DMM surface to latest-reading snapshot semantics, explicit non-applicable controls and function-bound range/rate requests. Any non-handshake client message received before acknowledgement closes the socket with a protocol error.
 
 ## Raw SCPI
 
-The raw SCPI console is deliberately allowed to originate command text in the browser, but targeting is explicit:
+Raw SCPI console targeting is explicit:
 
 ```text
 ScpiExecute(instrument, command)
 ```
 
-The gateway routes it to the selected runtime's normal scheduler path. There is no implicit DHO804 target and no direct socket bypass.
+The gateway routes it to the selected runtime's normal mutation/scheduler path. There is no implicit DHO804 target and no direct socket bypass.
 
 ## DMM lifecycle publication
 
@@ -244,9 +222,9 @@ The gateway exposes separate DM858E lifecycle/data messages:
 - `DmmConnected`
 - `DmmState`
 - `DmmDisconnected`
-- `DmmReading`
+- `DmmSnapshot`
 
-The real DMM runtime will drive those callbacks in the backend workstream. Until then the route receives a clear backend-not-implemented disconnected state.
+`DmmSnapshot` is latest display state, not a new-measurement event. `Unavailable` snapshots replace a prior valid display when the backend can no longer report a usable current value.
 
 ## Failure philosophy
 
@@ -274,7 +252,7 @@ instrument-specific app semantics
 instrument-specific driver
         |
         v
-shared SCPI scheduler
+shared SCPI scheduler/program-message rules
         |
         v
 shared TCP/framing transport
@@ -300,18 +278,19 @@ src/
 |  |  `- instrument-registry.ts
 |  |- scpi/
 |  |  |- scpi-transport.ts
-|  |  `- scpi-scheduler.ts
+|  |  |- scpi-scheduler.ts
+|  |  `- scpi-program-message.ts
 |  |- scope/
 |  |  |- dho804-driver.ts
 |  |  |- scope-controller.ts
 |  |  |- scope-state-store.ts
 |  |  `- scope-poller.ts
-|  |- dmm/                 (DM858E backend workstream)
+|  |- dmm/
+|  |  |- dm858e-driver.ts
+|  |  |- dmm-runtime.ts
+|  |  |- dmm-state-store.ts
+|  |  `- dmm-poller.ts
 |  |- waveform/
-|  |  |- live-waveform-service.ts
-|  |  |- deep-capture-service.ts
-|  |  |- downsample.ts
-|  |  `- waveform-frame-encoder.ts
 |  `- websocket/
 |     `- websocket-gateway.ts
 |
@@ -324,8 +303,10 @@ Tests live beside the files they exercise.
 
 - `InstrumentRegistry` owns subscription-driven activation, not instrument semantics.
 - `Dho804Driver` owns DHO804 SCPI semantics.
-- `Dm858eDriver` owns DM858E SCPI semantics once implemented.
+- `Dm858eDriver` owns DM858E SCPI semantics.
 - `ScopeController` remains scope-only.
-- `ScpiScheduler` owns serialized access for one instrument session.
+- `DmmRuntime` owns DMM logical mutation serialization and state reconciliation.
+- `ScpiScheduler` owns serialized transport access for one instrument session.
+- generic raw-SCPI message classification lives in the SCPI layer.
 - waveform services remain DHO804-specific.
 - `WebSocketGateway` owns transport/session routing, not device commands.
