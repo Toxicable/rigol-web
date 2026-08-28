@@ -216,11 +216,10 @@ describe("Dm858eDriver", () => {
     const transport = new ScriptedTransport();
     respond(transport, "SENSe:FUNCtion?", "VOLT", "VOLT", "VOLT");
     const driver = scriptedDriver(transport);
-    const range = { mode: DmmRangeMode.Fixed as const, value: 10 };
 
-    await driver.setAcquisitionRate(DmmMeasurementFunction.DcVoltage, range, DmmAcquisitionRate.Slow);
-    await driver.setAcquisitionRate(DmmMeasurementFunction.DcVoltage, range, DmmAcquisitionRate.Medium);
-    await driver.setAcquisitionRate(DmmMeasurementFunction.DcVoltage, range, DmmAcquisitionRate.Fast);
+    await driver.setAcquisitionRate(DmmMeasurementFunction.DcVoltage, DmmAcquisitionRate.Slow);
+    await driver.setAcquisitionRate(DmmMeasurementFunction.DcVoltage, DmmAcquisitionRate.Medium);
+    await driver.setAcquisitionRate(DmmMeasurementFunction.DcVoltage, DmmAcquisitionRate.Fast);
 
     expect(transport.commands).toEqual([
       "SENSe:FUNCtion?",
@@ -232,22 +231,43 @@ describe("Dm858eDriver", () => {
     ]);
   });
 
-  it("sets AC speed in one scheduler operation and preserves auto range", async () => {
+  it("sets AC speed in one scheduler operation and preserves current auto range", async () => {
     const transport = new ScriptedTransport();
     respond(transport, "SENSe:FUNCtion?", "VOLT:AC");
+    respond(transport, "SENSe:VOLTage:AC:RANGe:AUTO?", "1");
     respond(transport, "SENSe:VOLTage:AC:RANGe?", "1.00000000E+01");
     const driver = scriptedDriver(transport);
 
     await driver.setAcquisitionRate(
       DmmMeasurementFunction.AcVoltage,
-      { mode: DmmRangeMode.Auto },
       DmmAcquisitionRate.Fast,
     );
 
     expect(transport.commands).toEqual([
       "SENSe:FUNCtion?",
+      "SENSe:VOLTage:AC:RANGe:AUTO?",
       "SENSe:VOLTage:AC:RANGe?",
       "CONFigure:VOLTage:AC AUTO,0.01",
+    ]);
+  });
+
+  it("preserves the current physical fixed AC range while changing only rate", async () => {
+    const transport = new ScriptedTransport();
+    respond(transport, "SENSe:FUNCtion?", "VOLT:AC");
+    respond(transport, "SENSe:VOLTage:AC:RANGe:AUTO?", "0");
+    respond(transport, "SENSe:VOLTage:AC:RANGe?", "1.00000000E+02");
+    const driver = scriptedDriver(transport);
+
+    await driver.setAcquisitionRate(
+      DmmMeasurementFunction.AcVoltage,
+      DmmAcquisitionRate.Fast,
+    );
+
+    expect(transport.commands).toEqual([
+      "SENSe:FUNCtion?",
+      "SENSe:VOLTage:AC:RANGe:AUTO?",
+      "SENSe:VOLTage:AC:RANGe?",
+      "CONFigure:VOLTage:AC 100,0.1",
     ]);
   });
 
@@ -258,7 +278,6 @@ describe("Dm858eDriver", () => {
 
     await expect(driver.setAcquisitionRate(
       DmmMeasurementFunction.AcVoltage,
-      { mode: DmmRangeMode.Auto },
       DmmAcquisitionRate.Fast,
     )).rejects.toThrow(/Stale DMM control/);
     expect(transport.commands).toEqual(["SENSe:FUNCtion?"]);
