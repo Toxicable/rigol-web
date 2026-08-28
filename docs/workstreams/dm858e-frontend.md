@@ -4,11 +4,12 @@
 
 This workstream starts after `dm858e-instrument-foundation.md` is complete and merged. It may proceed in parallel with `dm858e-backend.md`.
 
-Implement the DM858E browser UI against the shared DMM/protocol contracts from stream B. Use fakes/mocked WebSocket messages where necessary; do not wait for the real backend implementation.
+Implement the DM858E browser UI against the shared DMM/protocol contracts. Use fakes/mocked WebSocket messages where necessary; do not wait for the physical instrument.
 
 ## Read before changing code
 
 - `docs/dm858e-ui-plan.md`
+- `docs/dm858e-scpi.md`
 - `docs/workstreams/dm858e-instrument-foundation.md`
 - `docs/frontend.md`
 - `docs/websocket-protocol.md`
@@ -21,15 +22,15 @@ Implement the DM858E browser UI against the shared DMM/protocol contracts from s
 
 Build a fast bench-DMM-oriented `/dm858e` UI with:
 
-- large stable primary numeric display
+- large stable latest-reading display
 - function selection
-- Auto/fixed range control
-- Slow/Medium/Fast rate selection
+- Auto/fixed range control when applicable
+- Slow/Medium/Fast rate selection when applicable
 - connection and active-state feedback
-- optional basic statistics/trend display if included in the current plan/contracts
+- explicit unavailable/overload display states
 - raw SCPI console bound to the DM858E route
 
-No logging UI is included.
+No logging UI is included. Statistics/trend are deferred until the backend exposes a verified sample stream rather than only a latest-reading snapshot.
 
 ## Source ownership
 
@@ -43,7 +44,7 @@ DM858E route component(s)
 DMM-specific tests/styles
 ```
 
-Reuse shared app-shell/router code from stream B. Do not redesign the global router, subscription protocol or server lifecycle.
+Reuse shared app-shell/router code. Do not redesign the global router, subscription protocol or server lifecycle.
 
 Avoid edits to scope-specific components unless a tiny shared visual primitive is clearly useful to both.
 
@@ -55,11 +56,11 @@ The DMM browser layer should own:
 
 - current DMM connection state
 - current authoritative DMM state snapshot
-- latest primary reading
+- latest `DmmReadingSnapshot`
 - pending/request result state needed for controls
 - route subscription hookup using the shared client/protocol foundation
 
-Do not put a high-frequency history array into React state if a plotted reading stream later becomes large. For the first pass, keep the architecture simple and only optimize when required.
+`DmmReadingSnapshot` is display state, not a uniquely identified sample. Do not build sample counters/history/statistics from snapshot arrivals or snapshot changes.
 
 ## Primary reading presentation
 
@@ -67,13 +68,14 @@ The primary reading is the visual focus.
 
 Requirements:
 
-- large numeric value
+- large numeric value when `DmmReadingKind.Value`
+- explicit unavailable/overload presentation rather than retaining a stale numeric value
 - unit visually attached but not competing with the number
 - fixed-width/tabular numerals
 - stable width/alignment as digits/sign/exponent change
 - selected function visible
-- Auto or selected fixed range visible
-- rate/resolution visible
+- Auto or selected fixed range visible only when `state.range !== null`
+- rate/resolution visible only when `state.acquisitionRate !== null`
 - disconnected/connecting state cannot be mistaken for a valid reading
 
 The web UI should specifically avoid the owner-reported DM858 numeric-layout jumping problem.
@@ -82,46 +84,66 @@ Do not animate digits in a way that harms readability.
 
 ## Function selection
 
-Provide direct controls for the supported function enum established in stream B.
+Provide direct controls for the supported function enum established in the shared DMM contract.
 
 Keep common functions one action away. Do not bury DCV/ACV/current/resistance behind a generic configuration modal.
 
-Controls that are not meaningful for the selected function should not remain active with invalid stale values.
+Controls that are not meaningful for the selected function must not remain active. `null` range/rate state means not applicable; it is not an Auto/default value.
 
 ## Range control
 
-Show:
+When `state.range !== null`, show:
 
 - Auto
 - supported fixed ranges for the current function
 
+When `state.range === null`, do not show an active range selector.
+
 The browser must render range options from typed domain knowledge/capabilities rather than allowing arbitrary numeric SCPI strings.
 
-When the backend reconciles to a different actual value, authoritative state wins.
+A range request must include the function under which its value was selected:
+
+```ts
+{
+  kind: DmmControlKind.Range,
+  function: state.function,
+  value: nextRange,
+}
+```
+
+If another tab or the physical front panel changes function before the request is applied, the server rejects the stale request and authoritative state wins.
 
 ## Rate/resolution
 
-Expose the three documented modes clearly:
+When `state.acquisitionRate !== null`, expose the three documented modes clearly:
 
 - Slow — 5.5 digit
 - Medium — 4.5 digit
 - Fast — 4.5 digit
 
-The UI may also mention the DM858E 80 readings/s maximum in Fast mode where useful, but do not imply all functions necessarily deliver exactly that rate under all configurations.
+When `state.acquisitionRate === null`, do not show an active rate selector.
+
+A rate request likewise includes `function: state.function` so a stale request cannot be reinterpreted under a different measurement function.
+
+The UI may mention the DM858E 80 readings/s maximum in Fast mode where useful, but do not imply all functions necessarily deliver exactly that rate under all configurations.
 
 ## Statistics / trend
 
-If host-side statistics are part of the shared first-pass contract, implement them from streamed readings rather than invoking Rigol's built-in math/statistics UI.
+Do **not** compute min/max/average/standard deviation/sample count or a measurement timeline from `DmmSnapshot` messages.
 
-Useful first metrics:
+The current snapshot path intentionally does not identify individual physical measurements. A future backend contract must establish one event per measurement before host-side statistics/trend are implemented.
+
+Once that sample stream exists, useful metrics include:
 
 - min
 - max
 - average
 - standard deviation
 - sample count
+- elapsed time
+- trend plot
 
-A compact trend plot is useful, but it is secondary to the main reading. Plot redraw cadence should be decoupled from reading arrival if needed for smooth UI behaviour.
+Plot redraw cadence should be decoupled from sample arrival if needed for smooth UI behaviour.
 
 Do not add persistence, CSV export or logging controls.
 
@@ -155,10 +177,13 @@ Cover at least:
 - route mount subscribes to DM858E and unmount/navigation unsubscribes
 - connection/disconnection rendering
 - stable primary value formatting for positive, negative, small, large and exponent-form values
+- unavailable snapshot clears/replaces the prior numeric presentation
 - function selection messages
-- range selection messages
-- rate selection messages
+- range selection messages include the current function context
+- rate selection messages include the current function context
+- range/rate controls are absent or disabled when shared state is `null`
 - authoritative state overwrites stale optimistic control state
+- stale function-dependent control failure is surfaced and followed by authoritative state
 - raw SCPI targets DM858E
 - no DMM state leaks into the DHO804 route/store
 
