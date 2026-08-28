@@ -89,7 +89,7 @@ Programming Guide Table 3.14 defines:
 
 DC voltage, DC current, 2-wire resistance and 4-wire resistance expose direct `NPLC` commands, so the backend writes and reads the exact 20 / 5 / 0.4 PLC values.
 
-AC voltage/current speed is represented through the `CONFigure` resolution relationship from Table 3.14. The effective-range query required for Auto mode and the matching `CONFigure:*` write run inside one scheduler operation.
+AC voltage/current speed is represented through the `CONFigure` resolution relationship from Table 3.14. Because `CONFigure:* <range>,<resolution>` also writes range, an AC rate-only request must not reuse a range captured by an earlier runtime state read. The driver therefore re-reads the physical `RANGe:AUTO?` mode and effective `RANGe?` value inside the same Immediate scheduler operation that performs `CONFigure:*`, and constructs the resolution/range arguments from that current physical state. A same-function front-panel Auto/fixed or fixed-range change made after the runtime state read is therefore preserved instead of being silently restored to the stale browser-era range.
 
 Continuity, diode, frequency, period, capacitance and temperature do not expose the shared three-rate control, so their `acquisitionRate` state is `null` and rate writes are rejected.
 
@@ -158,9 +158,10 @@ Under the runtime mutation queue, a function-dependent request:
 4. enters the driver write operation;
 5. re-reads `SENSe:FUNCtion?` inside that same scheduler operation immediately before the physical write;
 6. rejects instead of writing if the front panel changed function in the meantime;
-7. performs authoritative state readback after a successful write.
+7. for AC rate changes, re-reads physical Auto/fixed range mode plus effective range inside that same write operation before constructing `CONFigure:*`;
+8. performs authoritative state readback after a successful write.
 
-This prevents a stale range value from being reinterpreted under another function and prevents a stale AC-rate `CONFigure:*` request from restoring an old AC function.
+This prevents a stale range value from being reinterpreted under another function, prevents a stale AC-rate `CONFigure:*` request from restoring an old AC function, and prevents a rate-only change from overwriting a newer same-function front-panel range choice.
 
 Function-change requests themselves are not function-bound because selecting a new function is their explicit intent.
 
