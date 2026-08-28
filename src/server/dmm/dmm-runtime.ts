@@ -58,6 +58,7 @@ export class DmmRuntime {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryResolve: (() => void) | null = null;
   private disconnectedReason = "DMM runtime inactive";
+  private mutationTail: Promise<void> = Promise.resolve();
 
   public constructor(options: DmmRuntimeOptions) {
     if (options.host.trim().length === 0) {
@@ -122,45 +123,64 @@ export class DmmRuntime {
   }
 
   public async setControl(control: DmmControlChange): Promise<void> {
-    const session = this.requireSession();
-    const before = session.stateStore.getState();
+    await this.serializeMutation(async () => {
+      const session = this.requireSession();
+      const before = session.stateStore.getState();
 
-    try {
-      switch (control.kind) {
-        case DmmControlKind.Function:
-          await session.driver.setFunction(control.value);
-          break;
-        case DmmControlKind.Range:
-          await session.driver.setRange(before.function, control.value);
-          break;
-        case DmmControlKind.AcquisitionRate:
-          await session.driver.setAcquisitionRate(before.function, before.range, control.value);
-          break;
+      try {
+        switch (control.kind) {
+          case DmmControlKind.Function:
+            await session.driver.setFunction(control.value);
+            break;
+          case DmmControlKind.Range:
+            await session.driver.setRange(before.function, control.value);
+            break;
+          case DmmControlKind.AcquisitionRate:
+            await session.driver.setAcquisitionRate(before.function, before.range, control.value);
+            break;
+        }
+
+        this.requireSameSession(session);
+        const state = await session.driver.readDmmState(before.acquisitionRate);
+        this.requireSameSession(session);
+        session.stateStore.replaceState(state);
+      } catch (error) {
+        this.failSessionIfTransportLost(session, error);
+        throw error;
       }
-
-      this.requireSameSession(session);
-      const state = await session.driver.readDmmState(before.acquisitionRate);
-      this.requireSameSession(session);
-      session.stateStore.replaceState(state);
-    } catch (error) {
-      this.failSessionIfTransportLost(session, error);
-      throw error;
-    }
+    });
   }
 
   public async executeRawScpi(command: string): Promise<string> {
-    const session = this.requireSession();
+    return this.serializeMutation(async () => {
+      const session = this.requireSession();
+      try {
+        const response = await session.driver.executeRawScpi(command);
+        this.requireSameSession(session);
+        const previousRate = session.stateStore.getState().acquisitionRate;
+        const state = await session.driver.readDmmState(previousRate);
+        this.requireSameSession(session);
+        session.stateStore.replaceState(state);
+        return response;
+      } catch (error) {
+        this.failSessionIfTransportLost(session, error);
+        throw error;
+      }
+    });
+  }
+
+  private async serializeMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.mutationTail;
+    let release!: () => void;
+    this.mutationTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await previous;
     try {
-      const response = await session.driver.executeRawScpi(command);
-      this.requireSameSession(session);
-      const previousRate = session.stateStore.getState().acquisitionRate;
-      const state = await session.driver.readDmmState(previousRate);
-      this.requireSameSession(session);
-      session.stateStore.replaceState(state);
-      return response;
-    } catch (error) {
-      this.failSessionIfTransportLost(session, error);
-      throw error;
+      return await operation();
+    } finally {
+      release();
     }
   }
 
