@@ -111,10 +111,13 @@ The Programming Guide only gives `VDC` as an explicit `DATA:LAST?` function-toke
 
 ### Freshness and sequence numbers
 
-`DATA:LAST?` is a last-value query, not proof that a new measurement occurred. The driver therefore establishes a baseline on the first observation and publishes only when there is evidence of a new measurement since the prior observation:
+`DATA:LAST?` is a last-value query, not proof that a new measurement occurred. The driver therefore establishes a baseline on the first stable observation and publishes only when there is evidence of a new measurement since the prior stable observation:
 
+- the authoritative measurement function changed; or
 - `DATA:POINts?` changed; or
 - the complete `DATA:LAST?` response changed.
+
+An observation rejected because Operation Status reports a configuration change, because the authoritative function changes during the transaction, or because the poller's cached function has not caught up does **not** advance the freshness baseline. This preserves the new reading as fresh evidence for the first later poll where function/configuration state is stable, including stopped or single-trigger operation where the point count and `DATA:LAST?` response may remain unchanged indefinitely.
 
 Repeated polling of the same last measurement therefore returns no browser reading and does not advance the browser sequence number. This is deliberately conservative: if reading-memory count does not change and two legitimate consecutive measurements have exactly the same returned text, the first backend may under-count rather than fabricate a fresh sample. Integration can replace this observation strategy with a verified buffered/consuming acquisition path if the physical meter shows that is necessary.
 
