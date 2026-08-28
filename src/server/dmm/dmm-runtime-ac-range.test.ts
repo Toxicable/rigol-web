@@ -27,6 +27,7 @@ class AcRangeRaceTransport {
   public readonly commands: string[] = [];
   public range: PhysicalRange;
   private pendingRangeChange: PhysicalRange | null;
+  private resolutionRatio = 1e-5;
 
   public constructor(initialRange: PhysicalRange, nextRange: PhysicalRange) {
     this.range = { ...initialRange };
@@ -36,22 +37,27 @@ class AcRangeRaceTransport {
   public command = async (command: string): Promise<void> => {
     this.commands.push(command);
     const match = /^CONFigure:VOLTage:AC (AUTO|[+\-0-9.Ee]+),([+\-0-9.Ee]+)$/.exec(command);
-    if (match === null || match[1] === undefined) {
+    if (match === null || match[1] === undefined || match[2] === undefined) {
       return;
     }
 
+    const resolution = Number(match[2]);
     if (match[1] === "AUTO") {
       this.range = { auto: true, value: this.range.value };
+      this.resolutionRatio = resolution / this.range.value;
       return;
     }
-    this.range = { auto: false, value: Number(match[1]) };
+
+    const range = Number(match[1]);
+    this.range = { auto: false, value: range };
+    this.resolutionRatio = resolution / range;
   };
 
   public queryText = async (command: string): Promise<string> => {
     this.commands.push(command);
     switch (command) {
       case "CONFigure?":
-        return `VOLT:AC ${this.range.value},${this.range.value * 1e-5}`;
+        return `VOLT:AC ${this.range.value},${this.range.value * this.resolutionRatio}`;
       case "SENSe:FUNCtion?":
         return "VOLT:AC";
       case "SENSe:VOLTage:AC:RANGe:AUTO?":
