@@ -1,9 +1,13 @@
 import {
   DmmControlKind,
+  DmmReadingKind,
+  DmmReadingUnavailableReason,
+  dmmUnitForFunction,
   type DmmControlChange,
   type DmmInfo,
   type DmmMeasurementFunction,
   type DmmReadingSnapshot,
+  type DmmState,
 } from "../../shared/dmm-types.js";
 import { ScpiPriority, ScpiScheduler } from "../scpi/scpi-scheduler.js";
 import { ScpiTransport } from "../scpi/scpi-transport.js";
@@ -55,6 +59,7 @@ export class DmmRuntime {
   private running = false;
   private loopPromise: Promise<void> | null = null;
   private session: DmmSession | null = null;
+  private currentSnapshot: DmmReadingSnapshot | null = null;
   private initializingTransport: ScpiTransport | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryResolve: (() => void) | null = null;
@@ -93,6 +98,7 @@ export class DmmRuntime {
     }
 
     this.running = true;
+    this.currentSnapshot = null;
     this.disconnectedReason = "DMM connection pending";
     this.publishConnection({
       kind: ServerDmmConnectionKind.Disconnected,
@@ -107,6 +113,7 @@ export class DmmRuntime {
     }
 
     this.running = false;
+    this.currentSnapshot = null;
     this.disconnectedReason = "DMM runtime inactive";
     this.publishConnection({
       kind: ServerDmmConnectionKind.Disconnected,
@@ -121,6 +128,13 @@ export class DmmRuntime {
       await loop;
     }
     this.loopPromise = null;
+  }
+
+  public subscriberAdded(): void {
+    if (this.session === null || this.currentSnapshot === null) {
+      return;
+    }
+    this.publishSnapshot(this.currentSnapshot);
   }
 
   public async setControl(control: DmmControlChange): Promise<void> {
@@ -207,6 +221,7 @@ export class DmmRuntime {
           break;
         }
 
+        this.currentSnapshot = null;
         this.session = session;
         this.publishConnection({
           kind: ServerDmmConnectionKind.Connected,
@@ -218,6 +233,7 @@ export class DmmRuntime {
         const failure = await session.failure.promise;
         if (this.session === session) {
           this.session = null;
+          this.currentSnapshot = null;
         }
         if (this.running) {
           this.publishDisconnected(failure);
@@ -231,6 +247,7 @@ export class DmmRuntime {
         if (session !== null) {
           if (this.session === session) {
             this.session = null;
+            this.currentSnapshot = null;
           }
           if (this.running) {
             this.publishDisconnected(error);
@@ -267,10 +284,12 @@ export class DmmRuntime {
       const poller = new DmmPoller({
         driver,
         stateStore,
-        publishSnapshot: this.publishSnapshot,
+        publishSnapshot: (snapshot) => this.acceptSnapshot(stateStore, snapshot),
         reportError: (error) => failure.fail(error),
       });
-      const unsubscribeState = stateStore.subscribe(this.publishState);
+      const unsubscribeState = stateStore.subscribe((state) => {
+        this.acceptState(stateStore, state);
+      });
 
       return {
         info,
@@ -291,6 +310,47 @@ export class DmmRuntime {
         this.initializingTransport = null;
       }
     }
+  }
+
+  private acceptState(stateStore: DmmStateStore, state: DmmState): void {
+    const session = this.session;
+    if (session === null || session.stateStore !== stateStore) {
+      return;
+    }
+
+    const previousSnapshot = this.currentSnapshot;
+    let invalidatedSnapshot: DmmReadingSnapshot | null = null;
+    if (previousSnapshot !== null && previousSnapshot.function !== state.function) {
+      invalidatedSnapshot = {
+        kind: DmmReadingKind.Unavailable,
+        function: state.function,
+        unit: dmmUnitForFunction(state.function),
+        reason: DmmReadingUnavailableReason.ConfigurationChanged,
+      };
+      this.currentSnapshot = invalidatedSnapshot;
+    }
+
+    this.publishState(state);
+    if (invalidatedSnapshot !== null) {
+      this.publishSnapshot(invalidatedSnapshot);
+    }
+  }
+
+  private acceptSnapshot(
+    stateStore: DmmStateStore,
+    snapshot: DmmReadingSnapshot,
+  ): void {
+    const session = this.session;
+    if (
+      session === null ||
+      session.stateStore !== stateStore ||
+      snapshot.function !== stateStore.getState().function
+    ) {
+      return;
+    }
+
+    this.currentSnapshot = snapshot;
+    this.publishSnapshot(snapshot);
   }
 
   private async connectTransport(transport: ScpiTransport): Promise<void> {
@@ -343,6 +403,7 @@ export class DmmRuntime {
   }
 
   private publishDisconnected(error: unknown): void {
+    this.currentSnapshot = null;
     this.disconnectedReason = errorMessage(error);
     this.publishConnection({
       kind: ServerDmmConnectionKind.Disconnected,
