@@ -42,6 +42,14 @@ class ScriptedTransport {
   public isUsable = (): boolean => true;
 }
 
+interface ReadingObservation {
+  functionToken: string;
+  points: number;
+  response: string;
+  operationStatus?: number;
+  questionableEvents?: number;
+}
+
 function scriptedDriver(transport: ScriptedTransport): Dm858eDriver {
   const recorder: ScpiOperationRecorder = { addBinaryBytes: () => {} };
   const run = <T>(operation: ScpiOperation<T>): Promise<T> => operation.execute(
@@ -61,6 +69,43 @@ function scriptedDriver(transport: ScriptedTransport): Dm858eDriver {
 
 function respond(transport: ScriptedTransport, command: string, ...values: string[]): void {
   transport.text.set(command, values);
+}
+
+function scriptReadingObservations(
+  transport: ScriptedTransport,
+  ...observations: ReadingObservation[]
+): void {
+  respond(
+    transport,
+    "STATus:OPERation:CONDition?",
+    ...observations.flatMap((observation) => {
+      const value = String(observation.operationStatus ?? 0);
+      return [value, value];
+    }),
+  );
+  respond(
+    transport,
+    "SENSe:FUNCtion?",
+    ...observations.flatMap((observation) => [
+      observation.functionToken,
+      observation.functionToken,
+    ]),
+  );
+  respond(
+    transport,
+    "DATA:POINts?",
+    ...observations.map((observation) => String(observation.points)),
+  );
+  respond(
+    transport,
+    "DATA:LAST?",
+    ...observations.map((observation) => observation.response),
+  );
+  respond(
+    transport,
+    "STATus:QUEStionable:EVENt?",
+    ...observations.map((observation) => String(observation.questionableEvents ?? 0)),
+  );
 }
 
 describe("Dm858eDriver", () => {
@@ -191,7 +236,7 @@ describe("Dm858eDriver", () => {
     ]);
   });
 
-  it("sets AC speed through CONFIGure resolution and preserves auto range", async () => {
+  it("sets AC speed through one scheduler operation and preserves auto range", async () => {
     const transport = new ScriptedTransport();
     respond(transport, "SENSe:VOLTage:AC:RANGe?", "1.00000000E+01");
     const driver = scriptedDriver(transport);
@@ -208,17 +253,17 @@ describe("Dm858eDriver", () => {
     ]);
   });
 
-  it("distinguishes the bare no-data sentinel from an overload reading", async () => {
+  it("publishes only when reading-memory or response evidence proves a fresh reading", async () => {
     const transport = new ScriptedTransport();
-    respond(
+    scriptReadingObservations(
       transport,
-      "DATA:LAST?",
-      "-5.07000000E-01 VDC",
-      "9.90000000E+37",
-      "9.90000000E+37 VDC",
+      { functionToken: "VOLT", points: 0, response: "-5.07000000E-01 VDC" },
+      { functionToken: "VOLT", points: 1, response: "-5.07000000E-01 VDC" },
+      { functionToken: "VOLT", points: 1, response: "-5.07000000E-01 VDC" },
     );
     const driver = scriptedDriver(transport);
 
+    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 4)).resolves.toBeNull();
     await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 4)).resolves.toEqual({
       kind: DmmReadingKind.Value,
       sequence: 4,
@@ -226,18 +271,72 @@ describe("Dm858eDriver", () => {
       unit: DmmUnit.Volts,
     });
     await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 5)).resolves.toBeNull();
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 6)).resolves.toEqual({
+  });
+
+  it("suppresses a DATA:LAST reading when the authoritative function changed", async () => {
+    const transport = new ScriptedTransport();
+    scriptReadingObservations(
+      transport,
+      { functionToken: "VOLT", points: 0, response: "-5.07000000E-01 VDC" },
+      { functionToken: "RES", points: 1, response: "1.00000000E+03 OPAQUE_RES" },
+      { functionToken: "RES", points: 2, response: "1.00000000E+03 OPAQUE_RES" },
+    );
+    const driver = scriptedDriver(transport);
+
+    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
+    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
+    await expect(driver.readPrimaryReading(DmmMeasurementFunction.Resistance2Wire, 0)).resolves.toEqual({
+      kind: DmmReadingKind.Value,
+      sequence: 0,
+      value: 1_000,
+      unit: DmmUnit.Ohms,
+    });
+  });
+
+  it("uses the documented Questionable Data event bit for overload", async () => {
+    const transport = new ScriptedTransport();
+    scriptReadingObservations(
+      transport,
+      { functionToken: "VOLT", points: 0, response: "-5.07000000E-01 VDC" },
+      {
+        functionToken: "VOLT",
+        points: 1,
+        response: "-5.07000000E-01 VDC",
+        questionableEvents: 1,
+      },
+    );
+    const driver = scriptedDriver(transport);
+
+    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
+    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toEqual({
       kind: DmmReadingKind.Overload,
-      sequence: 6,
+      sequence: 0,
       unit: DmmUnit.Volts,
     });
   });
 
-  it("normalizes Fahrenheit temperature readings to Celsius", async () => {
+  it("treats only the documented bare DATA:LAST no-data sentinel as no data", async () => {
+    const transport = new ScriptedTransport();
+    scriptReadingObservations(
+      transport,
+      { functionToken: "VOLT", points: 0, response: "-5.07000000E-01 VDC" },
+      { functionToken: "VOLT", points: 1, response: "9.90000000E+37" },
+    );
+    const driver = scriptedDriver(transport);
+
+    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
+    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
+  });
+
+  it("normalizes temperature using a unit read in the same measurement transaction", async () => {
     const transport = new ScriptedTransport();
     respond(transport, "CONFigure?", "TEMP FRTD,385");
-    respond(transport, "UNIT:TEMPerature?", "F");
-    respond(transport, "DATA:LAST?", "2.12000000E+02");
+    respond(transport, "UNIT:TEMPerature?", "F", "F", "F");
+    scriptReadingObservations(
+      transport,
+      { functionToken: "TEMP", points: 0, response: "2.12000000E+02 OPAQUE_TEMP" },
+      { functionToken: "TEMP", points: 1, response: "2.12000000E+02 OPAQUE_TEMP" },
+    );
     const driver = scriptedDriver(transport);
 
     await expect(driver.readDmmState()).resolves.toEqual({
@@ -245,6 +344,7 @@ describe("Dm858eDriver", () => {
       range: { mode: DmmRangeMode.Auto },
       acquisitionRate: DmmAcquisitionRate.Slow,
     });
+    await expect(driver.readPrimaryReading(DmmMeasurementFunction.Temperature, 8)).resolves.toBeNull();
     await expect(driver.readPrimaryReading(DmmMeasurementFunction.Temperature, 8)).resolves.toEqual({
       kind: DmmReadingKind.Value,
       sequence: 8,
