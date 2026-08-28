@@ -287,17 +287,22 @@ describe("Dm858eDriver", () => {
     });
   });
 
-  it("keeps overload UNKNOWN instead of consuming a latched Questionable Data event", async () => {
+  it("does not consume latched Questionable Data events while polling", async () => {
     const transport = new ScriptedTransport();
     scriptReadingObservations(
       transport,
       { functionToken: "VOLT", points: 0, response: "-5.07000000E-01 VDC" },
-      { functionToken: "VOLT", points: 1, response: "9.90000000E+37 VDC" },
+      { functionToken: "VOLT", points: 1, response: "-5.08000000E-01 VDC" },
     );
     const driver = scriptedDriver(transport);
 
     await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
-    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toBeNull();
+    await expect(driver.readPrimaryReading(DmmMeasurementFunction.DcVoltage, 0)).resolves.toEqual({
+      kind: DmmReadingKind.Value,
+      sequence: 0,
+      value: -0.508,
+      unit: DmmUnit.Volts,
+    });
     expect(transport.commands).not.toContain("STATus:QUEStionable:EVENt?");
   });
 
