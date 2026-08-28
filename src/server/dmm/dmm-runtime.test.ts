@@ -14,7 +14,7 @@ import {
   DmmRangeMode,
   DmmReadingKind,
   DmmUnit,
-  type DmmPrimaryReading,
+  type DmmReadingSnapshot,
   type DmmState,
 } from "../../shared/dmm-types.js";
 import {
@@ -94,10 +94,18 @@ class FakeDm858eServer {
   public range = 10;
   public nplc = 20;
   public blockReadings = false;
-  public readingPoints = 0;
+  public latestReading = "-1.25000000E-01 VDC";
 
   public async start(): Promise<number> {
     return listen(this.server);
+  }
+
+  public setFrontPanelFunction(functionToken: string): void {
+    this.functionToken = functionToken;
+    this.rangeAuto = true;
+    this.range = defaultRangeFor(functionToken);
+    this.nplc = 20;
+    this.latestReading = readingResponseFor(functionToken);
   }
 
   public disconnect(index: number): void {
@@ -137,10 +145,7 @@ class FakeDm858eServer {
 
   private handleCommand(connection: FakeConnection, command: string): void {
     if (command.startsWith("SENSe:FUNCtion ")) {
-      this.functionToken = functionTokenFromSetCommand(command);
-      this.rangeAuto = true;
-      this.range = defaultRangeFor(this.functionToken);
-      this.nplc = 20;
+      this.setFrontPanelFunction(functionTokenFromSetCommand(command));
       return;
     }
 
@@ -164,7 +169,7 @@ class FakeDm858eServer {
 
     const configureMatch = /^CONFigure:(VOLTage:AC|CURRent:AC) (AUTO|[+\-0-9.Ee]+),([+\-0-9.Ee]+)$/.exec(command);
     if (configureMatch !== null) {
-      this.functionToken = configureMatch[1] === "VOLTage:AC" ? "VOLT:AC" : "CURR:AC";
+      this.setFrontPanelFunction(configureMatch[1] === "VOLTage:AC" ? "VOLT:AC" : "CURR:AC");
       this.rangeAuto = configureMatch[2] === "AUTO";
       if (!this.rangeAuto && configureMatch[2] !== undefined) {
         this.range = Number(configureMatch[2]);
@@ -203,12 +208,8 @@ class FakeDm858eServer {
     if (command.endsWith(":NPLC?")) {
       return this.nplc.toExponential(8).toUpperCase();
     }
-    if (command === "DATA:POINts?") {
-      return String(this.readingPoints);
-    }
     if (command === "DATA:LAST?") {
-      this.readingPoints += 1;
-      return readingResponseFor(this.functionToken);
+      return this.latestReading;
     }
     if (command === "STATus:OPERation:CONDition?") {
       return "0";
@@ -280,12 +281,12 @@ function readingResponseFor(functionToken: string): string {
 }
 
 describe("DmmRuntime integration", () => {
-  it("publishes initial state/readings and applies function/range/rate controls with readback", async () => {
+  it("publishes the existing latest snapshot and applies function-bound controls with readback", async () => {
     const fake = new FakeDm858eServer();
     const port = await fake.start();
     const connected: ConnectedDmmConnection[] = [];
     const states: DmmState[] = [];
-    const readings: DmmPrimaryReading[] = [];
+    const snapshots: DmmReadingSnapshot[] = [];
     const runtime = new DmmRuntime({
       host: "127.0.0.1",
       port,
@@ -297,7 +298,7 @@ describe("DmmRuntime integration", () => {
         }
       },
       publishState: (state) => states.push(state),
-      publishReading: (reading) => readings.push(reading),
+      publishSnapshot: (snapshot) => snapshots.push(snapshot),
     });
 
     try {
@@ -310,13 +311,14 @@ describe("DmmRuntime integration", () => {
         acquisitionRate: DmmAcquisitionRate.Slow,
       });
 
-      const firstReading = await waitFor(() => readings[0]);
-      expect(firstReading).toEqual({
+      const firstSnapshot = await waitFor(() => snapshots[0]);
+      expect(firstSnapshot).toEqual({
         kind: DmmReadingKind.Value,
-        sequence: 0,
+        function: DmmMeasurementFunction.DcVoltage,
         value: -0.125,
         unit: DmmUnit.Volts,
       });
+      expect(fake.connections[0]?.commands).not.toContain("DATA:POINts?");
 
       await runtime.setControl({
         kind: DmmControlKind.Function,
@@ -328,16 +330,18 @@ describe("DmmRuntime integration", () => {
 
       await runtime.setControl({
         kind: DmmControlKind.Range,
+        function: DmmMeasurementFunction.Resistance4Wire,
         value: { mode: DmmRangeMode.Fixed, value: 100 },
       });
       await waitFor(() => states.find((state) => (
         state.function === DmmMeasurementFunction.Resistance4Wire &&
-        state.range.mode === DmmRangeMode.Fixed &&
+        state.range?.mode === DmmRangeMode.Fixed &&
         state.range.value === 100
       )));
 
       await runtime.setControl({
         kind: DmmControlKind.AcquisitionRate,
+        function: DmmMeasurementFunction.Resistance4Wire,
         value: DmmAcquisitionRate.Fast,
       });
       await waitFor(() => states.find((state) => (
@@ -356,7 +360,7 @@ describe("DmmRuntime integration", () => {
     }
   });
 
-  it("serializes concurrent logical controls through authoritative readback", async () => {
+  it("rejects a queued range request whose originating function is stale", async () => {
     const fake = new FakeDm858eServer();
     const port = await fake.start();
     const connected: ConnectedDmmConnection[] = [];
@@ -371,38 +375,74 @@ describe("DmmRuntime integration", () => {
         }
       },
       publishState: () => {},
-      publishReading: () => {},
+      publishSnapshot: () => {},
     });
 
     try {
       runtime.start();
       await waitFor(() => connected[0]);
 
-      await Promise.all([
-        runtime.setControl({
-          kind: DmmControlKind.Function,
-          value: DmmMeasurementFunction.AcVoltage,
-        }),
-        runtime.setControl({
-          kind: DmmControlKind.Function,
-          value: DmmMeasurementFunction.Resistance2Wire,
-        }),
-      ]);
+      const changeFunction = runtime.setControl({
+        kind: DmmControlKind.Function,
+        value: DmmMeasurementFunction.Resistance2Wire,
+      });
+      const staleRange = runtime.setControl({
+        kind: DmmControlKind.Range,
+        function: DmmMeasurementFunction.DcVoltage,
+        value: { mode: DmmRangeMode.Fixed, value: 1_000 },
+      });
 
-      const commands = fake.connections[0]?.commands ?? [];
-      const firstWrite = commands.indexOf("SENSe:FUNCtion \"VOLTage:AC\"");
-      const secondWrite = commands.indexOf("SENSe:FUNCtion \"RESistance\"");
-      expect(firstWrite).toBeGreaterThanOrEqual(0);
-      expect(secondWrite).toBeGreaterThan(firstWrite);
-      expect(commands.slice(firstWrite + 1, secondWrite)).toContain("CONFigure?");
+      await expect(changeFunction).resolves.toBeUndefined();
+      await expect(staleRange).rejects.toThrow(/Stale DMM control/);
       expect(fake.functionToken).toBe("RES");
+      expect(fake.connections[0]?.commands).not.toContain("SENSe:RESistance:RANGe 1000");
     } finally {
       await runtime.stop();
       await fake.stop();
     }
   });
 
-  it("stops promptly while a reading query is active", async () => {
+  it("rejects a front-panel-stale AC rate request before CONFigure can restore the old function", async () => {
+    const fake = new FakeDm858eServer();
+    fake.setFrontPanelFunction("VOLT:AC");
+    const port = await fake.start();
+    const connected: ConnectedDmmConnection[] = [];
+    const runtime = new DmmRuntime({
+      host: "127.0.0.1",
+      port,
+      reconnectDelayMs: 20,
+      connectTimeoutMs: 500,
+      publishConnection: (connection) => {
+        if (connection.kind === ServerDmmConnectionKind.Connected) {
+          connected.push(connection);
+        }
+      },
+      publishState: () => {},
+      publishSnapshot: () => {},
+    });
+
+    try {
+      runtime.start();
+      await waitFor(() => connected[0]);
+      fake.setFrontPanelFunction("RES");
+
+      await expect(runtime.setControl({
+        kind: DmmControlKind.AcquisitionRate,
+        function: DmmMeasurementFunction.AcVoltage,
+        value: DmmAcquisitionRate.Fast,
+      })).rejects.toThrow(/Stale DMM control/);
+
+      expect(fake.functionToken).toBe("RES");
+      expect(fake.connections[0]?.commands.some((command) => (
+        command.startsWith("CONFigure:VOLTage:AC ")
+      ))).toBe(false);
+    } finally {
+      await runtime.stop();
+      await fake.stop();
+    }
+  });
+
+  it("stops promptly while a snapshot query is active", async () => {
     const fake = new FakeDm858eServer();
     fake.blockReadings = true;
     const port = await fake.start();
@@ -418,7 +458,7 @@ describe("DmmRuntime integration", () => {
         }
       },
       publishState: () => {},
-      publishReading: () => {},
+      publishSnapshot: () => {},
     });
 
     try {
@@ -449,7 +489,7 @@ describe("DmmRuntime integration", () => {
         }
       },
       publishState: () => {},
-      publishReading: () => {},
+      publishSnapshot: () => {},
     });
 
     try {
