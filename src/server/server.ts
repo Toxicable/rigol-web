@@ -65,7 +65,7 @@ const dmmRuntime = new DmmRuntime({
   ...dmmEndpoint,
   publishConnection: (connection) => gateway.setDmmConnection(connection),
   publishState: (state) => gateway.publishDmmState(state),
-  publishReading: (reading) => gateway.broadcastDmmReading(reading),
+  publishSnapshot: (snapshot) => gateway.broadcastDmmSnapshot(snapshot),
 });
 
 const instruments = new InstrumentRegistry({
