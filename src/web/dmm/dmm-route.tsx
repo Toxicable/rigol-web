@@ -37,7 +37,7 @@ export function DmmRoute({ client }: DmmRouteProps) {
           setStatus(message.reason);
           return;
         case MessageType.DmmState:
-        case MessageType.DmmReading:
+        case MessageType.DmmSnapshot:
           return;
       }
     });
