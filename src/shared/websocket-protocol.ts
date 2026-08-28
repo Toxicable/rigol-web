@@ -1,7 +1,7 @@
 import type {
   DmmControlChange,
   DmmInfo,
-  DmmPrimaryReading,
+  DmmReadingSnapshot,
   DmmState,
 } from "./dmm-types.js";
 import type { SupportedInstrument } from "./instrument-types.js";
@@ -16,7 +16,7 @@ import type {
   TriggerType,
 } from "./scope-types.js";
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 export type NonEmptyArray<T> = [T, ...T[]];
 
@@ -48,7 +48,7 @@ export enum MessageType {
   DmmConnected = 40,
   DmmState = 41,
   DmmDisconnected = 42,
-  DmmReading = 43,
+  DmmSnapshot = 43,
 
   DmmControlSet = 50,
 }
@@ -262,9 +262,9 @@ export interface DmmDisconnectedMessage {
   reason: string;
 }
 
-export interface DmmReadingMessage {
-  type: MessageType.DmmReading;
-  reading: DmmPrimaryReading;
+export interface DmmSnapshotMessage {
+  type: MessageType.DmmSnapshot;
+  snapshot: DmmReadingSnapshot;
 }
 
 export interface DmmControlSetMessage {
@@ -277,7 +277,7 @@ export type DmmLifecycleMessage =
   | DmmConnectedMessage
   | DmmStateMessage
   | DmmDisconnectedMessage
-  | DmmReadingMessage;
+  | DmmSnapshotMessage;
 
 export interface CommandCompletedMessage {
   type: MessageType.CommandCompleted;
