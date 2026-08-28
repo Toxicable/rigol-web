@@ -103,7 +103,6 @@ Each primary-reading observation is one scheduler operation and also reads:
 - `STATus:OPERation:CONDition?` before and after the observation;
 - `SENSe:FUNCtion?` before and after `DATA:LAST?`;
 - `DATA:POINts?` before `DATA:LAST?`;
-- `STATus:QUEStionable:EVENt?` after `DATA:LAST?`;
 - `UNIT:TEMPerature?` inside the same transaction when temperature is active.
 
 Operation Status bit 8 (`256`) is documented as **Configuration change**: the configuration has changed since the last measurement and reading, whether from the front panel or SCPI. If this bit is present, the function changes during the transaction, or the authoritative function no longer matches the state snapshot used by the poller, that observation is suppressed rather than being published with a stale unit.
@@ -115,25 +114,22 @@ The Programming Guide only gives `VDC` as an explicit `DATA:LAST?` function-toke
 `DATA:LAST?` is a last-value query, not proof that a new measurement occurred. The driver therefore establishes a baseline on the first observation and publishes only when there is evidence of a new measurement since the prior observation:
 
 - `DATA:POINts?` changed; or
-- the complete `DATA:LAST?` response changed; or
-- a documented overload event for the active function appeared.
+- the complete `DATA:LAST?` response changed.
 
 Repeated polling of the same last measurement therefore returns no browser reading and does not advance the browser sequence number. This is deliberately conservative: if reading-memory count does not change and two legitimate consecutive measurements have exactly the same returned text, the first backend may under-count rather than fabricate a fresh sample. Integration can replace this observation strategy with a verified buffered/consuming acquisition path if the physical meter shows that is necessary.
 
-### Overload evidence
+### Overload remains UNKNOWN
 
-Questionable Data register overload bits are specification-backed event indicators. The backend uses `STATus:QUEStionable:EVENt?`, which the Programming Guide says returns and clears the event register, for the functions whose overload bit is explicitly documented:
+The Questionable Data register contains documented overload event bits, but its event register is asynchronous to `DATA:LAST?`: the Programming Guide does not associate a latched event with a particular reading. `STATus:QUEStionable:EVENt?` also clears the latched event register when queried. The background poller therefore **does not query that register** and does not use it to classify an individual primary reading.
 
-| Function family | Event bit |
-| --- | ---: |
-| Voltage | 1 |
-| Current | 2 |
-| Temperature | 16 |
-| Frequency | 32 |
-| Resistance | 512 |
-| Capacitance | 1024 |
+This is intentionally conservative. A latched overload may have come from an earlier measurement than the current `DATA:LAST?` value, especially at Fast acquisition rates where several measurements can occur between browser polls. Consuming the event register in the poller would also make those status events disappear before an explicit raw-SCPI query could inspect them.
 
-A fresh observation with the matching documented event is published as `DmmReadingKind.Overload`. Continuity, diode and period are not assigned an overload event by inference; their exact overload representation remains an integration verification item. Likewise, a non-bare sentinel-sized `DATA:LAST?` value without matching documented status evidence is suppressed instead of being guessed as overload.
+For the current `DATA:LAST?` path:
+
+- bare `9.90000000E+37` is the documented no-data form and is suppressed;
+- a sentinel-sized value carrying a suffix has no documented `DATA:LAST?` meaning and is also suppressed;
+- `DmmReadingKind.Overload` is not emitted until a measurement-correlated overload mechanism is established from the specification or physical-device verification;
+- explicit raw SCPI remains free to query `STATus:QUEStionable:EVENt?` and accept its documented clear-on-read semantics.
 
 The initial poll cadence remains:
 
@@ -160,7 +156,7 @@ The physical DM858E integration stream must verify at minimum:
 - exact real-instrument response spelling for every supported state query;
 - exact `DATA:LAST?` function suffixes beyond the guide's `VDC` example;
 - reading-memory point-count behaviour during ordinary front-panel continuous measurement and at memory saturation;
-- exact overload/open-circuit behaviour for continuity, diode and period and any real `DATA:LAST?` sentinel forms;
+- a measurement-correlated overload/open-circuit representation for every supported function, including any real `DATA:LAST?` sentinel forms;
 - sustained acquisition throughput and whether a buffered/triggered strategy materially improves it;
 - front-panel changes while the browser is subscribed;
 - temperature/sensor combinations beyond the first shared function selector.
