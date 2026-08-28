@@ -89,7 +89,7 @@ Programming Guide Table 3.14 defines:
 
 DC voltage, DC current, 2-wire resistance and 4-wire resistance expose direct `NPLC` commands, so the backend writes and reads the exact 20 / 5 / 0.4 PLC values.
 
-AC voltage/current speed is represented through the `CONFigure` resolution relationship from Table 3.14. Because `CONFigure:* <range>,<resolution>` also writes range, an AC rate-only request must not reuse a range captured by an earlier runtime state read. The driver therefore re-reads the physical `RANGe:AUTO?` mode and effective `RANGe?` value inside the same Immediate scheduler operation that performs `CONFigure:*`, and constructs the resolution/range arguments from that current physical state. A same-function front-panel Auto/fixed or fixed-range change made after the runtime state read is therefore preserved instead of being silently restored to the stale browser-era range.
+AC voltage/current speed is represented through the `CONFigure` resolution relationship from Table 3.14. Because `CONFigure:* <range>,<resolution>` also writes range, an AC rate-only request must not reuse a range captured by an earlier runtime state read. Inside the same Immediate scheduler operation that will perform `CONFigure:*`, the driver samples physical `RANGe:AUTO?` mode plus effective `RANGe?` repeatedly and requires two adjacent observations to agree on both mode and effective range before constructing the command. Up to three observations are allowed so a single front-panel transition can settle; if no adjacent pair is stable, the rate write fails without sending `CONFigure:*`. The driver then re-checks the measurement function immediately before the command. This prevents a mixed Auto/fixed observation, such as `AUTO? -> 1` followed by a front-panel change to fixed 100 V before `RANGe?`, from silently restoring Auto or an older fixed range.
 
 Continuity, diode, frequency, period, capacitance and temperature do not expose the shared three-rate control, so their `acquisitionRate` state is `null` and rate writes are rejected.
 
@@ -156,12 +156,14 @@ Under the runtime mutation queue, a function-dependent request:
 2. rejects the request if its expected function no longer matches;
 3. verifies the control is applicable to that function;
 4. enters the driver write operation;
-5. re-reads `SENSe:FUNCtion?` inside that same scheduler operation immediately before the physical write;
+5. re-reads `SENSe:FUNCtion?` inside that same scheduler operation before deriving the write;
 6. rejects instead of writing if the front panel changed function in the meantime;
-7. for AC rate changes, re-reads physical Auto/fixed range mode plus effective range inside that same write operation before constructing `CONFigure:*`;
-8. performs authoritative state readback after a successful write.
+7. for AC rate changes, samples physical Auto/fixed mode and effective range until two adjacent observations agree, retrying within a three-observation bound;
+8. rejects the rate write without `CONFigure:*` if the range state does not stabilize;
+9. re-checks `SENSe:FUNCtion?` immediately before `CONFigure:*`;
+10. performs authoritative state readback after a successful write.
 
-This prevents a stale range value from being reinterpreted under another function, prevents a stale AC-rate `CONFigure:*` request from restoring an old AC function, and prevents a rate-only change from overwriting a newer same-function front-panel range choice.
+This prevents a stale range value from being reinterpreted under another function, prevents a stale AC-rate `CONFigure:*` request from restoring an old AC function, and prevents a rate-only change from overwriting a newer same-function front-panel range choice or a mixed Auto/fixed observation created while the front panel is changing.
 
 Function-change requests themselves are not function-bound because selecting a new function is their explicit intent.
 
