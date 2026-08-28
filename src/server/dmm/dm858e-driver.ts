@@ -56,6 +56,7 @@ const frequencyVoltageRanges = [0.1, 1, 10, 100, 750] as const;
 
 const noDataSentinel = 9.9e37;
 const operationConfigurationChanged = 256;
+const rangeStabilityObservationLimit = 3;
 
 export class Dm858eDriver {
   private temperatureUnit: TemperatureUnit = "C";
@@ -98,7 +99,7 @@ export class Dm858eDriver {
       kind: ScpiOperationKind.StateRead,
       execute: async (transport) => {
         const configuration = parseConfiguration(await transport.queryText("CONFigure?"));
-        const rangeResult = await readRange(transport, configuration.function);
+        const rangeResult = await readRangeObservation(transport, configuration.function);
         const acquisitionRate = await readAcquisitionRate(
           transport,
           configuration,
@@ -189,7 +190,7 @@ export class Dm858eDriver {
           throw new Error("Missing range specification for AC measurement function");
         }
 
-        const physicalRange = await readRange(transport, measurementFunction);
+        const physicalRange = await readStableRange(transport, measurementFunction);
         if (physicalRange.range === null || physicalRange.effectiveRange === undefined) {
           throw new Error("Missing physical range for AC measurement function");
         }
@@ -374,7 +375,7 @@ async function requireCurrentFunction(
   }
 }
 
-async function readRange(
+async function readRangeObservation(
   transport: ScpiTransport,
   measurementFunction: DmmMeasurementFunction,
 ): Promise<ReadRangeResult> {
@@ -403,6 +404,38 @@ async function readRange(
     },
     effectiveRange,
   };
+}
+
+async function readStableRange(
+  transport: ScpiTransport,
+  measurementFunction: DmmMeasurementFunction,
+): Promise<ReadRangeResult> {
+  let previous = await readRangeObservation(transport, measurementFunction);
+
+  for (let observation = 1; observation < rangeStabilityObservationLimit; observation += 1) {
+    const current = await readRangeObservation(transport, measurementFunction);
+    if (sameRangeObservation(previous, current)) {
+      return current;
+    }
+    previous = current;
+  }
+
+  throw new Error(
+    `Unstable ${functionName(measurementFunction)} range while applying acquisition rate`,
+  );
+}
+
+function sameRangeObservation(left: ReadRangeResult, right: ReadRangeResult): boolean {
+  if (left.range === null || right.range === null) {
+    return left.range === right.range;
+  }
+  if (left.range.mode !== right.range.mode) {
+    return false;
+  }
+  if (left.effectiveRange === undefined || right.effectiveRange === undefined) {
+    return false;
+  }
+  return nearlyEqual(left.effectiveRange, right.effectiveRange);
 }
 
 async function readAcquisitionRate(
