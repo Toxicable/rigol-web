@@ -2,6 +2,7 @@ import {
   DmmControlKind,
   type DmmControlChange,
   type DmmInfo,
+  type DmmMeasurementFunction,
   type DmmReadingSnapshot,
 } from "../../shared/dmm-types.js";
 import { ScpiPriority, ScpiScheduler } from "../scpi/scpi-scheduler.js";
@@ -376,8 +377,8 @@ export class DmmRuntime {
 }
 
 function requireExpectedFunction(
-  actual: DmmControlChange extends never ? never : import("../../shared/dmm-types.js").DmmMeasurementFunction,
-  expected: import("../../shared/dmm-types.js").DmmMeasurementFunction,
+  actual: DmmMeasurementFunction,
+  expected: DmmMeasurementFunction,
 ): void {
   if (actual !== expected) {
     throw new Error("Stale DMM control: measurement function changed before the request was applied");
