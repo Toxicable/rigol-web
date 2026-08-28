@@ -197,6 +197,7 @@ export class Dm858eDriver {
         const rangeToken = physicalRange.range.mode === DmmRangeMode.Auto
           ? "AUTO"
           : String(physicalRange.range.value);
+        await requireCurrentFunction(transport, measurementFunction);
         await transport.command(
           `${configureCommandFor(measurementFunction)} ${rangeToken},${resolution}`,
         );
