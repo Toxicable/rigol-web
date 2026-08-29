@@ -28,7 +28,7 @@ export function DmmReading({ state, snapshot }: DmmReadingProps) {
           <span className="dmm-eyebrow">Primary measurement</span>
           <h1>{dmmFunctionLabel(state.function)}</h1>
         </div>
-        <span className="status-pill">Live snapshot</span>
+        <span className="status-pill">Latest reading</span>
       </div>
 
       <div className={reading.numeric ? "dmm-primary-reading numeric" : "dmm-primary-reading"}>
