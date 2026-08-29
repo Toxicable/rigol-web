@@ -1,7 +1,4 @@
-import {
-  dm858eFixedRanges,
-  dm858eMaximumSignificantDigits,
-} from "../../shared/dm858e-capabilities.js";
+import { dm858eFixedRanges } from "../../shared/dm858e-capabilities.js";
 import {
   DmmAcquisitionRate,
   DmmMeasurementFunction,
@@ -273,9 +270,6 @@ export class Dm858eDriver {
           return null;
         }
 
-        // DATA:LAST? only documents the bare 9.9E37 response as "no data".
-        // A non-bare sentinel-sized value has no documented DATA:LAST? meaning, so
-        // expose it as unavailable rather than inventing an overload classification.
         if (Math.abs(parsed.value) >= noDataSentinel) {
           return {
             kind: DmmReadingKind.Unavailable,
@@ -288,7 +282,7 @@ export class Dm858eDriver {
         const value = functionAfter === DmmMeasurementFunction.Temperature
           ? temperatureToCelsius(parsed.value, readingTemperatureUnit)
           : parsed.value;
-        const resolution = snapshotResolution(functionAfter, configurationAfter, value);
+        const resolution = snapshotResolution(functionAfter, configurationAfter);
         if (resolution === null) {
           return {
             kind: DmmReadingKind.Unavailable,
@@ -342,9 +336,6 @@ export class Dm858eDriver {
   ): boolean {
     const normalized = token.trim().toUpperCase();
 
-    // VDC is the only DATA:LAST? function token explicitly exemplified by the
-    // Programming Guide. Other spellings are treated as opaque and learned only
-    // while the instrument reports a stable, authoritative current function.
     if (normalized === "VDC") {
       return measurementFunction === DmmMeasurementFunction.DcVoltage;
     }
@@ -674,31 +665,14 @@ function rateFromResolution(range: number, resolution: number): DmmAcquisitionRa
 function snapshotResolution(
   measurementFunction: DmmMeasurementFunction,
   configuration: ParsedConfiguration,
-  value: number,
 ): number | null {
-  if (configuration.resolution !== undefined && configuredResolutionIsMeasurementResolution(measurementFunction)) {
-    return configuration.resolution;
+  if (
+    configuration.resolution === undefined ||
+    !configuredResolutionIsMeasurementResolution(measurementFunction)
+  ) {
+    return null;
   }
-
-  switch (measurementFunction) {
-    case DmmMeasurementFunction.Continuity:
-    case DmmMeasurementFunction.Diode:
-    case DmmMeasurementFunction.Frequency:
-    case DmmMeasurementFunction.Period:
-    case DmmMeasurementFunction.Capacitance:
-    case DmmMeasurementFunction.Temperature:
-      return resolutionFromSignificantDigits(
-        value,
-        dm858eMaximumSignificantDigits(measurementFunction, null),
-      );
-    case DmmMeasurementFunction.DcVoltage:
-    case DmmMeasurementFunction.AcVoltage:
-    case DmmMeasurementFunction.DcCurrent:
-    case DmmMeasurementFunction.AcCurrent:
-    case DmmMeasurementFunction.Resistance2Wire:
-    case DmmMeasurementFunction.Resistance4Wire:
-      return null;
-  }
+  return configuration.resolution;
 }
 
 function configuredResolutionIsMeasurementResolution(
@@ -720,19 +694,6 @@ function configuredResolutionIsMeasurementResolution(
     case DmmMeasurementFunction.Temperature:
       return false;
   }
-}
-
-function resolutionFromSignificantDigits(value: number, digits: number): number {
-  if (!Number.isFinite(value)) {
-    throw new Error("DMM reading must be finite before deriving fixed digit resolution");
-  }
-  if (!Number.isInteger(digits) || digits < 1) {
-    throw new Error("DMM display digit count must be a positive integer");
-  }
-  if (value === 0) {
-    return 10 ** (1 - digits);
-  }
-  return 10 ** (Math.floor(Math.log10(Math.abs(value))) - digits + 1);
 }
 
 function requireSupportedRange(
