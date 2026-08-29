@@ -15,15 +15,19 @@ The current implementation includes:
 - a separate Zustand DMM store with explicit browser-transport, runtime-waiting, instrument-disconnected and connected states;
 - route-owned subscribe/unsubscribe lifecycle binding to the shared browser WebSocket;
 - a stable tabular primary-reading display with engineering-unit formatting and explicit unavailable/overload states;
+- conservative reading precision: values are never padded with synthetic trailing significant digits, and functions with authoritative Slow/Medium/Fast state are capped to the corresponding 5.5/4.5-digit class;
 - stale-function snapshot rejection in both the store and presentation layer;
+- immediate local invalidation of a retained numeric reading whenever authoritative function, range or rate context changes, including same-function range/rate changes;
+- lifecycle-generation plus request-token ownership for pending controls so completion/failure from an old DMM session or old route mount cannot mutate a newer request;
 - direct controls for every shared DM858E measurement function;
-- typed Auto/fixed range choices matching the backend's DM858E-specific limits, including the 3 A current maximum and 1 mF capacitance maximum;
+- typed Auto/fixed range choices from the single shared `src/shared/dm858e-capabilities.ts` source used by both frontend and backend, including the 3 A current maximum and 1 mF capacitance maximum;
 - Slow/Medium/Fast controls carrying their originating measurement-function context;
+- active function/range/rate choices are disabled and the route also guards redundant controls, preventing no-op selections from issuing physical SCPI configuration writes;
 - no optimistic mutation of authoritative function/range/rate state while a request is pending;
 - control-failure presentation while normal backend polling supplies authoritative follow-up state;
 - reuse of the shared instrument-aware SCPI console, targeted to `DM858E` with a DMM-specific prompt;
 - responsive desktop/lab and narrow-window layouts;
-- focused store, lifecycle, control-generation, rendered-control and reading-format/presentation tests.
+- focused store, lifecycle, control-generation, rendered-control and reading-format/presentation tests, including old-session/old-route completion races and same-function context invalidation.
 
 The snapshot channel remains display-only. No statistics, history, persistence, CSV export or logging UI has been added.
 
@@ -40,6 +44,7 @@ Repository `pnpm typecheck`, `pnpm test` and `pnpm build` still need to be run f
 - `docs/websocket-protocol.md`
 - `docs/testing.md`
 - `src/shared/dmm-types.ts`
+- `src/shared/dm858e-capabilities.ts`
 - `src/shared/websocket-protocol.ts`
 - existing scope store/client/component patterns
 
@@ -64,9 +69,12 @@ Primary ownership:
 ```text
 src/web/dmm/**
 src/web/components/dmm/**
+src/shared/dm858e-capabilities.ts
 DM858E route component(s)
 DMM-specific tests/styles
 ```
+
+The server driver may consume shared typed device capabilities, but SCPI command strings, parsing and instrument behavior stay server-only.
 
 Reuse shared app-shell/router code. Do not redesign the global router, subscription protocol or server lifecycle.
 
@@ -86,6 +94,10 @@ The DMM browser layer should own:
 
 `DmmReadingSnapshot` is display state, not a uniquely identified sample. Do not build sample counters/history/statistics from snapshot arrivals or snapshot changes.
 
+Pending control completion/failure must be owned by the route/session generation and request that created it. A promise from a replaced session or unmounted route must not clear or fail a newer pending control.
+
+Any authoritative change to function, range or rate invalidates a retained numeric reading before the new metadata is rendered with it. Equivalent periodic state snapshots may retain the reading.
+
 ## Primary reading presentation
 
 The primary reading is the visual focus.
@@ -101,6 +113,8 @@ Requirements:
 - Auto or selected fixed range visible only when `state.range !== null`
 - rate/resolution visible only when `state.acquisitionRate !== null`
 - disconnected/connecting state cannot be mistaken for a valid reading
+- do not append trailing zeroes that imply precision not carried by the measurement value
+- where the authoritative state exposes Slow/Medium/Fast, do not display more significant digits than the corresponding 5.5/4.5-digit class
 
 The web UI should specifically avoid the owner-reported DM858 numeric-layout jumping problem.
 
@@ -114,6 +128,8 @@ Keep common functions one action away. Do not bury DCV/ACV/current/resistance be
 
 Controls that are not meaningful for the selected function must not remain active. `null` range/rate state means not applicable; it is not an Auto/default value.
 
+Selecting the already-active function must be a no-op; it must not send another instrument configuration write.
+
 ## Range control
 
 When `state.range !== null`, show:
@@ -123,7 +139,7 @@ When `state.range !== null`, show:
 
 When `state.range === null`, do not show an active range selector.
 
-The browser must render range options from typed domain knowledge/capabilities rather than allowing arbitrary numeric SCPI strings.
+The browser and backend must consume the same shared typed DM858E range table rather than maintaining independent copies.
 
 A range request must include the function under which its value was selected:
 
@@ -136,6 +152,8 @@ A range request must include the function under which its value was selected:
 ```
 
 If another tab or the physical front panel changes function before the request is applied, the server rejects the stale request and authoritative state wins.
+
+Selecting the already-active Auto/fixed range must be a no-op; it must not send another configuration write.
 
 ## Rate/resolution
 
@@ -150,6 +168,8 @@ When `state.acquisitionRate === null`, do not show an active rate selector.
 A rate request likewise includes `function: state.function` so a stale request cannot be reinterpreted under a different measurement function.
 
 The UI may mention the DM858E 80 readings/s maximum in Fast mode where useful, but do not imply all functions necessarily deliver exactly that rate under all configurations.
+
+Selecting the already-active rate must be a no-op; it must not send another configuration write.
 
 ## Statistics / trend
 
@@ -201,12 +221,17 @@ Cover at least:
 - route mount subscribes to DM858E and unmount/navigation unsubscribes
 - connection/disconnection rendering
 - stable primary value formatting for positive, negative, small, large and exponent-form values
+- Slow versus Medium/Fast precision caps do not manufacture significant digits
 - unavailable snapshot clears/replaces the prior numeric presentation
+- same-function range/rate state changes invalidate a retained numeric reading immediately
 - function selection messages
 - range selection messages include the current function context
 - rate selection messages include the current function context
 - range/rate controls are absent or disabled when shared state is `null`
+- active function/range/rate selections do not send redundant writes
 - authoritative state overwrites stale optimistic control state
+- old-session rejection cannot mutate a newer session's pending control
+- old-route completion cannot mutate a newer route mount's pending control
 - stale function-dependent control failure is surfaced and followed by authoritative state
 - raw SCPI targets DM858E
 - no DMM state leaks into the DHO804 route/store
@@ -221,4 +246,4 @@ pnpm build
 
 ## Completion criteria
 
-This stream is complete when `/dm858e` is a usable fake-data DMM interface driven entirely through the shared protocol/contracts, with no dependency on the physical DM858E and no edits required to backend driver logic.
+This stream is complete when `/dm858e` is a usable fake-data DMM interface driven entirely through the shared protocol/contracts, with no dependency on the physical DM858E and no new backend instrument behavior required. The small backend import of shared capability data is allowed so device limits have one source of truth.
