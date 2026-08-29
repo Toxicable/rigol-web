@@ -588,7 +588,7 @@ describe("Dm858eDriver", () => {
     expect(transport.commands).toEqual(["STATus:QUEStionable:EVENt?"]);
   });
 
-  it("normalizes temperature using a unit read in the same snapshot transaction", async () => {
+  it("does not publish a numeric temperature reading without an authoritative resolution", async () => {
     const transport = new ScriptedTransport();
     respond(transport, "CONFigure?", "TEMP FRTD,385");
     respond(transport, "UNIT:TEMPerature?", "F", "F");
@@ -604,11 +604,10 @@ describe("Dm858eDriver", () => {
       acquisitionRate: null,
     });
     await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.Temperature)).resolves.toEqual({
-      kind: DmmReadingKind.Value,
+      kind: DmmReadingKind.Unavailable,
       function: DmmMeasurementFunction.Temperature,
-      value: 100,
-      resolution: 0.001,
       unit: DmmUnit.Celsius,
+      reason: DmmReadingUnavailableReason.ResolutionUnavailable,
     });
   });
 
