@@ -18,7 +18,7 @@ interface DmmReadingProps {
 
 export function DmmReading({ state, snapshot }: DmmReadingProps) {
   const currentSnapshot = snapshot?.function === state.function ? snapshot : null;
-  const reading = formatDmmReading(currentSnapshot, state.acquisitionRate);
+  const reading = formatDmmReading(currentSnapshot);
   const rangeUnit = dmmRangeUnit(state.function);
 
   return (
