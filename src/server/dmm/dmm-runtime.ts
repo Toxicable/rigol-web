@@ -457,7 +457,11 @@ function sameSnapshot(
 
   switch (left.kind) {
     case DmmReadingKind.Value:
-      return right.kind === DmmReadingKind.Value && left.value === right.value;
+      return (
+        right.kind === DmmReadingKind.Value &&
+        left.value === right.value &&
+        left.resolution === right.resolution
+      );
     case DmmReadingKind.Overload:
       return right.kind === DmmReadingKind.Overload;
     case DmmReadingKind.Unavailable:
