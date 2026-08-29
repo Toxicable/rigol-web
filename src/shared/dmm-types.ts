@@ -91,6 +91,7 @@ export enum DmmReadingUnavailableReason {
   NoData = 1,
   UnclassifiedSentinel = 2,
   ConfigurationChanged = 3,
+  ResolutionUnavailable = 4,
 }
 
 export type DmmReadingSnapshot =
@@ -98,6 +99,7 @@ export type DmmReadingSnapshot =
       kind: DmmReadingKind.Value;
       function: DmmMeasurementFunction;
       value: number;
+      resolution: number;
       unit: DmmUnit;
     }
   | {
