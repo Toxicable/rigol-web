@@ -240,7 +240,6 @@ export class Dm858eDriver {
         );
 
         if (
-          ((operationBefore | operationAfter) & operationConfigurationChanged) !== 0 ||
           functionBefore !== functionAfter ||
           functionAfter !== measurementFunction
         ) {
@@ -248,6 +247,15 @@ export class Dm858eDriver {
         }
 
         const unit = dmmUnitForFunction(functionAfter);
+        if (((operationBefore | operationAfter) & operationConfigurationChanged) !== 0) {
+          return {
+            kind: DmmReadingKind.Unavailable,
+            function: functionAfter,
+            unit,
+            reason: DmmReadingUnavailableReason.ConfigurationChanged,
+          };
+        }
+
         const parsed = parseLastReadingResponse(response);
         if (parsed === null) {
           return {
