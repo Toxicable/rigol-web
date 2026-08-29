@@ -68,7 +68,7 @@ function scriptedDriver(transport: ScriptedTransport): Dm858eDriver {
 }
 
 function respond(transport: ScriptedTransport, command: string, ...values: string[]): void {
-  transport.text.set(command, values);
+  transport.text.set(command, [...(transport.text.get(command) ?? []), ...values]);
 }
 
 function defaultConfiguration(functionToken: string): string {
