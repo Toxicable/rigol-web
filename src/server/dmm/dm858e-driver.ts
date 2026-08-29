@@ -1,4 +1,7 @@
-import { dm858eFixedRanges } from "../../shared/dm858e-capabilities.js";
+import {
+  dm858eFixedRanges,
+  dm858eMaximumSignificantDigits,
+} from "../../shared/dm858e-capabilities.js";
 import {
   DmmAcquisitionRate,
   DmmMeasurementFunction,
@@ -212,6 +215,8 @@ export class Dm858eDriver {
           await transport.queryText("STATus:OPERation:CONDition?"),
           "DM858E operation status",
         );
+        const configurationTextBefore = (await transport.queryText("CONFigure?")).trim();
+        const configurationBefore = parseConfiguration(configurationTextBefore);
         const functionBefore = parseFunctionToken(
           await transport.queryText("SENSe:FUNCtion?"),
         );
@@ -219,6 +224,8 @@ export class Dm858eDriver {
         const functionAfter = parseFunctionToken(
           await transport.queryText("SENSe:FUNCtion?"),
         );
+        const configurationTextAfter = (await transport.queryText("CONFigure?")).trim();
+        const configurationAfter = parseConfiguration(configurationTextAfter);
 
         let readingTemperatureUnit = this.temperatureUnit;
         if (functionAfter === DmmMeasurementFunction.Temperature) {
@@ -235,7 +242,10 @@ export class Dm858eDriver {
 
         if (
           functionBefore !== functionAfter ||
-          functionAfter !== measurementFunction
+          functionAfter !== measurementFunction ||
+          configurationBefore.function !== functionBefore ||
+          configurationAfter.function !== functionAfter ||
+          configurationTextBefore !== configurationTextAfter
         ) {
           return null;
         }
@@ -275,12 +285,24 @@ export class Dm858eDriver {
           };
         }
 
+        const value = functionAfter === DmmMeasurementFunction.Temperature
+          ? temperatureToCelsius(parsed.value, readingTemperatureUnit)
+          : parsed.value;
+        const resolution = snapshotResolution(functionAfter, configurationAfter, value);
+        if (resolution === null) {
+          return {
+            kind: DmmReadingKind.Unavailable,
+            function: functionAfter,
+            unit,
+            reason: DmmReadingUnavailableReason.ResolutionUnavailable,
+          };
+        }
+
         return {
           kind: DmmReadingKind.Value,
           function: functionAfter,
-          value: functionAfter === DmmMeasurementFunction.Temperature
-            ? temperatureToCelsius(parsed.value, readingTemperatureUnit)
-            : parsed.value,
+          value,
+          resolution,
           unit,
         };
       },
@@ -647,6 +669,70 @@ function rateFromResolution(range: number, resolution: number): DmmAcquisitionRa
     return DmmAcquisitionRate.Fast;
   }
   throw new Error(`Unsupported DM858E resolution/range ratio: ${ratio}`);
+}
+
+function snapshotResolution(
+  measurementFunction: DmmMeasurementFunction,
+  configuration: ParsedConfiguration,
+  value: number,
+): number | null {
+  if (configuration.resolution !== undefined && configuredResolutionIsMeasurementResolution(measurementFunction)) {
+    return configuration.resolution;
+  }
+
+  switch (measurementFunction) {
+    case DmmMeasurementFunction.Continuity:
+    case DmmMeasurementFunction.Diode:
+    case DmmMeasurementFunction.Frequency:
+    case DmmMeasurementFunction.Period:
+    case DmmMeasurementFunction.Capacitance:
+    case DmmMeasurementFunction.Temperature:
+      return resolutionFromSignificantDigits(
+        value,
+        dm858eMaximumSignificantDigits(measurementFunction, null),
+      );
+    case DmmMeasurementFunction.DcVoltage:
+    case DmmMeasurementFunction.AcVoltage:
+    case DmmMeasurementFunction.DcCurrent:
+    case DmmMeasurementFunction.AcCurrent:
+    case DmmMeasurementFunction.Resistance2Wire:
+    case DmmMeasurementFunction.Resistance4Wire:
+      return null;
+  }
+}
+
+function configuredResolutionIsMeasurementResolution(
+  measurementFunction: DmmMeasurementFunction,
+): boolean {
+  switch (measurementFunction) {
+    case DmmMeasurementFunction.DcVoltage:
+    case DmmMeasurementFunction.AcVoltage:
+    case DmmMeasurementFunction.DcCurrent:
+    case DmmMeasurementFunction.AcCurrent:
+    case DmmMeasurementFunction.Resistance2Wire:
+    case DmmMeasurementFunction.Resistance4Wire:
+    case DmmMeasurementFunction.Frequency:
+    case DmmMeasurementFunction.Period:
+    case DmmMeasurementFunction.Capacitance:
+      return true;
+    case DmmMeasurementFunction.Continuity:
+    case DmmMeasurementFunction.Diode:
+    case DmmMeasurementFunction.Temperature:
+      return false;
+  }
+}
+
+function resolutionFromSignificantDigits(value: number, digits: number): number {
+  if (!Number.isFinite(value)) {
+    throw new Error("DMM reading must be finite before deriving fixed digit resolution");
+  }
+  if (!Number.isInteger(digits) || digits < 1) {
+    throw new Error("DMM display digit count must be a positive integer");
+  }
+  if (value === 0) {
+    return 10 ** (1 - digits);
+  }
+  return 10 ** (Math.floor(Math.log10(Math.abs(value))) - digits + 1);
 }
 
 function requireSupportedRange(
