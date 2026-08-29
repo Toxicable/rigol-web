@@ -138,9 +138,8 @@ export class DmmRuntime {
   }
 
   public async setControl(control: DmmControlChange): Promise<void> {
-    await this.serializeMutation(async () => {
-      const session = this.requireSession();
-
+    const session = this.requireSession();
+    await this.serializeMutation(session, async () => {
       try {
         switch (control.kind) {
           case DmmControlKind.Function:
@@ -180,8 +179,8 @@ export class DmmRuntime {
   }
 
   public async executeRawScpi(command: string): Promise<string> {
-    return this.serializeMutation(async () => {
-      const session = this.requireSession();
+    const session = this.requireSession();
+    return this.serializeMutation(session, async () => {
       try {
         const response = await session.driver.executeRawScpi(command);
         this.requireSameSession(session);
@@ -196,7 +195,10 @@ export class DmmRuntime {
     });
   }
 
-  private async serializeMutation<T>(operation: () => Promise<T>): Promise<T> {
+  private async serializeMutation<T>(
+    session: DmmSession,
+    operation: () => Promise<T>,
+  ): Promise<T> {
     const previous = this.mutationTail;
     let release!: () => void;
     this.mutationTail = new Promise<void>((resolve) => {
@@ -205,6 +207,7 @@ export class DmmRuntime {
 
     await previous;
     try {
+      this.requireSameSession(session);
       return await operation();
     } finally {
       release();
