@@ -1,4 +1,5 @@
 import {
+  DmmAcquisitionRate,
   DmmReadingKind,
   DmmReadingUnavailableReason,
   DmmUnit,
@@ -52,13 +53,31 @@ export function dmmUnitSymbol(value: DmmUnit): string {
   }
 }
 
-export function formatDmmValue(value: number, unit: DmmUnit): FormattedDmmValue {
+export function dmmMaximumSignificantDigits(
+  acquisitionRate: DmmAcquisitionRate | null,
+): number | null {
+  switch (acquisitionRate) {
+    case DmmAcquisitionRate.Slow:
+      return 6;
+    case DmmAcquisitionRate.Medium:
+    case DmmAcquisitionRate.Fast:
+      return 5;
+    case null:
+      return null;
+  }
+}
+
+export function formatDmmValue(
+  value: number,
+  unit: DmmUnit,
+  maximumSignificantDigits: number | null = null,
+): FormattedDmmValue {
   requireFinite(value);
 
   const prefix = prefixForUnit(value, unit);
   const scaled = value / 10 ** prefix.exponent;
   return {
-    value: formatSignificant(scaled),
+    value: formatConservative(scaled, maximumSignificantDigits),
     unit: `${prefix.symbol}${dmmUnitSymbol(unit)}`,
   };
 }
@@ -76,6 +95,7 @@ export function formatDmmRange(value: number, unit: DmmUnit): string {
 
 export function formatDmmReading(
   snapshot: DmmReadingSnapshot | null,
+  acquisitionRate: DmmAcquisitionRate | null = null,
 ): FormattedDmmReading {
   if (snapshot === null) {
     return { value: "—", unit: "", detail: "Waiting for reading", numeric: false };
@@ -83,7 +103,11 @@ export function formatDmmReading(
 
   switch (snapshot.kind) {
     case DmmReadingKind.Value: {
-      const formatted = formatDmmValue(snapshot.value, snapshot.unit);
+      const formatted = formatDmmValue(
+        snapshot.value,
+        snapshot.unit,
+        dmmMaximumSignificantDigits(acquisitionRate),
+      );
       return { ...formatted, detail: null, numeric: true };
     }
     case DmmReadingKind.Overload:
@@ -136,11 +160,13 @@ function engineeringPrefixFor(value: number): Prefix {
   return prefix;
 }
 
-function formatSignificant(value: number): string {
+function formatConservative(value: number, maximumSignificantDigits: number | null): string {
   if (value === 0) {
-    return "0.0000000";
+    return "0";
   }
-  return value.toPrecision(8);
+
+  const significantDigits = maximumSignificantDigits ?? 12;
+  return String(Number(value.toPrecision(significantDigits)));
 }
 
 function unavailableReasonLabel(value: DmmReadingUnavailableReason): string {
