@@ -6,7 +6,10 @@ import type {
 } from "../../shared/dmm-types.js";
 import { SupportedInstrument } from "../../shared/instrument-types.js";
 import { MessageType } from "../../shared/websocket-protocol.js";
-import { DmmControls } from "../components/dmm/dmm-controls.js";
+import {
+  DmmControls,
+  dmmControlMatchesState,
+} from "../components/dmm/dmm-controls.js";
 import { DmmReading } from "../components/dmm/dmm-reading.js";
 import { ScpiConsole } from "../components/scpi-console.js";
 import {
@@ -37,6 +40,8 @@ export type DmmLifecycleClient = Pick<
   ScopeWebSocketClient,
   "onTransportState" | "onDmmMessage" | "subscribeInstrument" | "unsubscribeInstrument"
 >;
+
+export type DmmControlClient = Pick<ScopeWebSocketClient, "setDmmControl">;
 
 export function bindDmmRoute(client: DmmLifecycleClient): () => void {
   useDmmStore.getState().setConnecting();
@@ -82,6 +87,30 @@ export function bindDmmRoute(client: DmmLifecycleClient): () => void {
   };
 }
 
+export async function applyDmmControl(
+  client: DmmControlClient,
+  control: DmmControlChange,
+): Promise<void> {
+  const store = useDmmStore.getState();
+  if (
+    store.connection.kind === DmmBrowserConnectionKind.Connected &&
+    dmmControlMatchesState(store.connection.state, control)
+  ) {
+    return;
+  }
+
+  const ownership = store.beginControl(control);
+  try {
+    await client.setDmmControl(control);
+    useDmmStore.getState().finishControl(ownership);
+  } catch (error) {
+    useDmmStore.getState().failControl(
+      ownership,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
 export function DmmRoute({ client }: DmmRouteProps) {
   const connection = useDmmStore((state) => state.connection);
   const latestReading = useDmmStore((state) => state.latestReading);
@@ -90,18 +119,6 @@ export function DmmRoute({ client }: DmmRouteProps) {
 
   useEffect(() => bindDmmRoute(client), [client]);
 
-  const applyControl = async (control: DmmControlChange): Promise<void> => {
-    useDmmStore.getState().beginControl(control);
-    try {
-      await client.setDmmControl(control);
-      useDmmStore.getState().finishControl();
-    } catch (error) {
-      useDmmStore.getState().failControl(
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-  };
-
   return (
     <DmmRouteView
       client={client}
@@ -109,7 +126,7 @@ export function DmmRoute({ client }: DmmRouteProps) {
       latestReading={latestReading}
       pending={pendingControl !== null}
       controlError={controlError}
-      onControl={(control) => void applyControl(control)}
+      onControl={(control) => void applyDmmControl(client, control)}
     />
   );
 }
