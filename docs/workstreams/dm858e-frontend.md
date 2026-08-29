@@ -29,7 +29,7 @@ The snapshot channel remains display-only. No statistics, history, persistence, 
 
 No package or hardware dependency was added for this workstream; incremental cost is $0.
 
-Repository `pnpm typecheck`, `pnpm test` and `pnpm build` still need to be run from an environment with the repository dependencies available. The execution environment used for PR #10 cannot resolve `github.com`, so the PR remains draft until that full gate is green.
+Repository `pnpm typecheck`, `pnpm test` and `pnpm build` still need to be run from an environment with the repository dependencies available. This execution environment has Node/Corepack but cannot resolve `registry.npmjs.org`, so Corepack cannot activate pnpm or install the dependency tree. No GitHub Actions/status checks are configured for the PR head. The PR therefore remains draft until the full repository gate is green.
 
 ## Read before changing code
 
