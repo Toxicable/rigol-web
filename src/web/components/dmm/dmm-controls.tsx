@@ -54,6 +54,33 @@ export function rateControlForState(
   };
 }
 
+export function dmmControlMatchesState(
+  state: DmmState,
+  control: DmmControlChange,
+): boolean {
+  switch (control.kind) {
+    case DmmControlKind.Function:
+      return state.function === control.value;
+    case DmmControlKind.Range:
+      return control.function === state.function &&
+        state.range !== null &&
+        sameRange(state.range, control.value);
+    case DmmControlKind.AcquisitionRate:
+      return control.function === state.function &&
+        state.acquisitionRate === control.value;
+  }
+}
+
+function sameRange(left: DmmRange, right: DmmRange): boolean {
+  if (left.mode !== right.mode) {
+    return false;
+  }
+  if (left.mode === DmmRangeMode.Auto || right.mode === DmmRangeMode.Auto) {
+    return true;
+  }
+  return left.value === right.value;
+}
+
 export function DmmControls({ state, pending, onControl }: DmmControlsProps) {
   const ranges = dmmFixedRanges(state.function);
   const rangeUnit = dmmRangeUnit(state.function);
@@ -67,19 +94,22 @@ export function DmmControls({ state, pending, onControl }: DmmControlsProps) {
         {pending ? <span className="status-pill">Applying…</span> : null}
       </div>
       <div className="dmm-function-grid">
-        {dmmFunctionOptions.map((option) => (
-          <button
-            type="button"
-            key={option.value}
-            className={state.function === option.value ? "dmm-choice active" : "dmm-choice"}
-            aria-pressed={state.function === option.value}
-            disabled={pending}
-            title={option.label}
-            onClick={() => onControl(functionControlForSelection(option.value))}
-          >
-            {option.shortLabel}
-          </button>
-        ))}
+        {dmmFunctionOptions.map((option) => {
+          const active = state.function === option.value;
+          return (
+            <button
+              type="button"
+              key={option.value}
+              className={active ? "dmm-choice active" : "dmm-choice"}
+              aria-pressed={active}
+              disabled={pending || active}
+              title={option.label}
+              onClick={() => onControl(functionControlForSelection(option.value))}
+            >
+              {option.shortLabel}
+            </button>
+          );
+        })}
       </div>
 
       {currentRange !== null ? (
@@ -90,7 +120,7 @@ export function DmmControls({ state, pending, onControl }: DmmControlsProps) {
               type="button"
               className={currentRange.mode === DmmRangeMode.Auto ? "dmm-choice active" : "dmm-choice"}
               aria-pressed={currentRange.mode === DmmRangeMode.Auto}
-              disabled={pending}
+              disabled={pending || currentRange.mode === DmmRangeMode.Auto}
               onClick={() => onControl(rangeControlForState(state, { mode: DmmRangeMode.Auto }))}
             >
               Auto
@@ -103,7 +133,7 @@ export function DmmControls({ state, pending, onControl }: DmmControlsProps) {
                   key={range}
                   className={active ? "dmm-choice active" : "dmm-choice"}
                   aria-pressed={active}
-                  disabled={pending}
+                  disabled={pending || active}
                   onClick={() => onControl(rangeControlForState(state, {
                     mode: DmmRangeMode.Fixed,
                     value: range,
@@ -125,18 +155,21 @@ export function DmmControls({ state, pending, onControl }: DmmControlsProps) {
               DmmAcquisitionRate.Slow,
               DmmAcquisitionRate.Medium,
               DmmAcquisitionRate.Fast,
-            ].map((rate) => (
-              <button
-                type="button"
-                key={rate}
-                className={currentRate === rate ? "dmm-choice active" : "dmm-choice"}
-                aria-pressed={currentRate === rate}
-                disabled={pending}
-                onClick={() => onControl(rateControlForState(state, rate))}
-              >
-                {dmmAcquisitionRateLabel(rate)}
-              </button>
-            ))}
+            ].map((rate) => {
+              const active = currentRate === rate;
+              return (
+                <button
+                  type="button"
+                  key={rate}
+                  className={active ? "dmm-choice active" : "dmm-choice"}
+                  aria-pressed={active}
+                  disabled={pending || active}
+                  onClick={() => onControl(rateControlForState(state, rate))}
+                >
+                  {dmmAcquisitionRateLabel(rate)}
+                </button>
+              );
+            })}
           </div>
           <p className="muted dmm-rate-note">Fast mode is specified up to 80 readings/s; effective rate depends on measurement configuration.</p>
         </div>
