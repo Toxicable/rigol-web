@@ -30,6 +30,7 @@ const reading = {
   kind: DmmReadingKind.Value,
   function: DmmMeasurementFunction.DcVoltage,
   value: 12.34,
+  resolution: 0.001,
   unit: DmmUnit.Volts,
 } as const;
 
