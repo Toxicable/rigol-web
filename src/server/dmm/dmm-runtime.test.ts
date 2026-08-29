@@ -316,6 +316,7 @@ describe("DmmRuntime integration", () => {
         kind: DmmReadingKind.Value,
         function: DmmMeasurementFunction.DcVoltage,
         value: -0.125,
+        resolution: 1e-4,
         unit: DmmUnit.Volts,
       });
       expect(fake.connections[0]?.commands).not.toContain("DATA:POINts?");
