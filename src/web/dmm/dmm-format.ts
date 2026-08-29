@@ -1,6 +1,4 @@
-import { dm858eMaximumSignificantDigits } from "../../shared/dm858e-capabilities.js";
 import {
-  DmmAcquisitionRate,
   DmmReadingKind,
   DmmReadingUnavailableReason,
   DmmUnit,
@@ -57,14 +55,18 @@ export function dmmUnitSymbol(value: DmmUnit): string {
 export function formatDmmValue(
   value: number,
   unit: DmmUnit,
-  maximumSignificantDigits: number | null = null,
+  resolution: number | null = null,
 ): FormattedDmmValue {
   requireFinite(value);
+  if (resolution !== null) {
+    requireResolution(resolution);
+  }
 
-  const prefix = prefixForUnit(value, unit);
-  const scaled = value / 10 ** prefix.exponent;
+  const rounded = resolution === null ? value : roundToQuantum(value, resolution);
+  const prefix = prefixForUnit(rounded, unit);
+  const scaled = rounded / 10 ** prefix.exponent;
   return {
-    value: formatConservative(scaled, maximumSignificantDigits),
+    value: formatConservative(scaled),
     unit: `${prefix.symbol}${dmmUnitSymbol(unit)}`,
   };
 }
@@ -82,7 +84,6 @@ export function formatDmmRange(value: number, unit: DmmUnit): string {
 
 export function formatDmmReading(
   snapshot: DmmReadingSnapshot | null,
-  acquisitionRate: DmmAcquisitionRate | null = null,
 ): FormattedDmmReading {
   if (snapshot === null) {
     return { value: "—", unit: "", detail: "Waiting for reading", numeric: false };
@@ -93,7 +94,7 @@ export function formatDmmReading(
       const formatted = formatDmmValue(
         snapshot.value,
         snapshot.unit,
-        dm858eMaximumSignificantDigits(snapshot.function, acquisitionRate),
+        snapshot.resolution,
       );
       return { ...formatted, detail: null, numeric: true };
     }
@@ -118,6 +119,20 @@ function requireFinite(value: number): void {
   if (!Number.isFinite(value)) {
     throw new Error("DMM reading must be finite");
   }
+}
+
+function requireResolution(value: number): void {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error("DMM reading resolution must be a positive finite number");
+  }
+}
+
+function roundToQuantum(value: number, resolution: number): number {
+  const quotient = value / resolution;
+  if (!Number.isFinite(quotient)) {
+    throw new Error("DMM reading cannot be represented at its resolution");
+  }
+  return Math.round(quotient) * resolution;
 }
 
 function prefixForUnit(value: number, unit: DmmUnit): Prefix {
@@ -147,21 +162,11 @@ function engineeringPrefixFor(value: number): Prefix {
   return prefix;
 }
 
-function formatConservative(value: number, maximumSignificantDigits: number | null): string {
+function formatConservative(value: number): string {
   if (value === 0) {
     return "0";
   }
-
-  const significantDigits = maximumSignificantDigits ?? 12;
-  const magnitude = Math.abs(value);
-  if (magnitude >= 1e9 || magnitude < 1e-6) {
-    const [mantissa, exponent] = value.toExponential(significantDigits - 1).split("e");
-    if (mantissa === undefined || exponent === undefined) {
-      throw new Error("Failed to format DMM exponent value");
-    }
-    return `${String(Number(mantissa))}e${exponent}`;
-  }
-  return String(Number(value.toPrecision(significantDigits)));
+  return String(Number(value.toPrecision(15)));
 }
 
 function unavailableReasonLabel(value: DmmReadingUnavailableReason): string {
@@ -172,5 +177,7 @@ function unavailableReasonLabel(value: DmmReadingUnavailableReason): string {
       return "Instrument returned an unclassified sentinel";
     case DmmReadingUnavailableReason.ConfigurationChanged:
       return "Configuration changed";
+    case DmmReadingUnavailableReason.ResolutionUnavailable:
+      return "Measurement resolution unavailable";
   }
 }
