@@ -47,6 +47,7 @@ const snapshot: DmmReadingSnapshot = {
   kind: DmmReadingKind.Value,
   function: DmmMeasurementFunction.DcVoltage,
   value: 1.234,
+  resolution: 1e-5,
   unit: DmmUnit.Volts,
 };
 
