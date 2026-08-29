@@ -323,9 +323,8 @@ export class DmmRuntime {
       return;
     }
 
-    const previousSnapshot = this.currentSnapshot;
     let invalidatedSnapshot: DmmReadingSnapshot | null = null;
-    if (previousSnapshot !== null && previousSnapshot.function !== state.function) {
+    if (this.currentSnapshot !== null) {
       invalidatedSnapshot = {
         kind: DmmReadingKind.Unavailable,
         function: state.function,
