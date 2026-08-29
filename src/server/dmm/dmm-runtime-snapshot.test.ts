@@ -7,6 +7,7 @@ import {
   DmmReadingKind,
   DmmReadingUnavailableReason,
   DmmUnit,
+  dmmUnitForFunction,
   type DmmReadingSnapshot,
   type DmmState,
 } from "../../shared/dmm-types.js";
@@ -52,13 +53,10 @@ function createHarness() {
 }
 
 function configurationChanged(functionValue: DmmMeasurementFunction): DmmReadingSnapshot {
-  const unit = functionValue === DmmMeasurementFunction.Resistance2Wire
-    ? DmmUnit.Ohms
-    : DmmUnit.Volts;
   return {
     kind: DmmReadingKind.Unavailable,
     function: functionValue,
-    unit,
+    unit: dmmUnitForFunction(functionValue),
     reason: DmmReadingUnavailableReason.ConfigurationChanged,
   };
 }
