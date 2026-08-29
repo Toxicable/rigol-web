@@ -76,7 +76,9 @@
 
 .dmm-reading-value {
   display: inline-block;
-  min-width: 10.5ch;
+  width: 14.5ch;
+  min-width: 14.5ch;
+  max-width: 14.5ch;
   text-align: right;
   font-size: clamp(3.2rem, 8vw, 7.2rem);
   font-weight: 500;
@@ -86,11 +88,13 @@
 
 .dmm-primary-reading:not(.numeric) .dmm-reading-value {
   text-align: center;
-  min-width: 6ch;
 }
 
 .dmm-reading-unit {
-  min-width: 2.5ch;
+  display: inline-block;
+  width: 3.5ch;
+  min-width: 3.5ch;
+  max-width: 3.5ch;
   font-size: clamp(1.4rem, 2.7vw, 2.5rem);
   color: #aeb9c4;
   line-height: 1;
@@ -239,7 +243,9 @@
   }
 
   .dmm-reading-value {
-    min-width: 9.5ch;
+    width: 14.5ch;
+    min-width: 14.5ch;
+    max-width: 14.5ch;
     font-size: clamp(2.8rem, 15vw, 5rem);
   }
 }
