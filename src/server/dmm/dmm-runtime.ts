@@ -114,6 +114,8 @@ export class DmmRuntime {
 
     this.running = false;
     this.currentSnapshot = null;
+    const session = this.session;
+    this.session = null;
     this.disconnectedReason = "DMM runtime inactive";
     this.publishConnection({
       kind: ServerDmmConnectionKind.Disconnected,
@@ -121,7 +123,7 @@ export class DmmRuntime {
     });
     this.wakeRetryDelay();
     this.initializingTransport?.disconnect();
-    this.session?.failure.fail(new Error("DMM runtime stopped"));
+    session?.failure.fail(new Error("DMM runtime stopped"));
 
     const loop = this.loopPromise;
     if (loop !== null) {
