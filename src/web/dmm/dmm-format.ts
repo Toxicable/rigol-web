@@ -166,6 +166,14 @@ function formatConservative(value: number, maximumSignificantDigits: number | nu
   }
 
   const significantDigits = maximumSignificantDigits ?? 12;
+  const magnitude = Math.abs(value);
+  if (magnitude >= 1e9 || magnitude < 1e-6) {
+    const [mantissa, exponent] = value.toExponential(significantDigits - 1).split("e");
+    if (mantissa === undefined || exponent === undefined) {
+      throw new Error("Failed to format DMM exponent value");
+    }
+    return `${String(Number(mantissa))}e${exponent}`;
+  }
   return String(Number(value.toPrecision(significantDigits)));
 }
 
