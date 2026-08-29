@@ -22,7 +22,11 @@ import {
   type BrowserTransportState,
   type ScopeWebSocketClient,
 } from "../websocket-client.js";
-import { DmmRoute, bindDmmRoute, type DmmLifecycleClient } from "./dmm-route.js";
+import {
+  DmmRouteView,
+  bindDmmRoute,
+  type DmmLifecycleClient,
+} from "./dmm-route.js";
 import { DmmBrowserConnectionKind, useDmmStore } from "./dmm-store.js";
 
 const info: DmmInfo = {
@@ -182,36 +186,51 @@ describe("DM858E route lifecycle", () => {
   });
 
   it("renders disconnected transport state without a plausible measurement", () => {
-    useDmmStore.getState().setTransportDisconnected("socket lost");
     const client = new FakeDmmLifecycleClient({
       kind: BrowserTransportKind.Disconnected,
       reason: "socket lost",
     });
 
-    const markup = renderToStaticMarkup(createElement(DmmRoute, {
+    const markup = renderToStaticMarkup(createElement(DmmRouteView, {
       client: client as unknown as ScopeWebSocketClient,
+      connection: {
+        kind: DmmBrowserConnectionKind.TransportDisconnected,
+        reason: "socket lost",
+      },
+      latestReading: null,
+      pending: false,
+      controlError: null,
+      onControl: () => undefined,
     }));
 
     expect(markup).toContain("Transport offline");
     expect(markup).toContain("socket lost");
-    expect(markup).not.toContain("Live snapshot");
+    expect(markup).not.toContain("Latest reading");
   });
 
   it("renders the connected reading and DM858E-targeted console", () => {
-    useDmmStore.getState().setConnected(info, dcState);
-    useDmmStore.getState().setLatestReading({
-      kind: DmmReadingKind.Value,
-      function: DmmMeasurementFunction.DcVoltage,
-      value: 12.34,
-      unit: DmmUnit.Volts,
-    });
     const client = new FakeDmmLifecycleClient({ kind: BrowserTransportKind.Connected });
 
-    const markup = renderToStaticMarkup(createElement(DmmRoute, {
+    const markup = renderToStaticMarkup(createElement(DmmRouteView, {
       client: client as unknown as ScopeWebSocketClient,
+      connection: {
+        kind: DmmBrowserConnectionKind.Connected,
+        info,
+        state: dcState,
+      },
+      latestReading: {
+        kind: DmmReadingKind.Value,
+        function: DmmMeasurementFunction.DcVoltage,
+        value: 12.34,
+        unit: DmmUnit.Volts,
+      },
+      pending: false,
+      controlError: null,
+      onControl: () => undefined,
     }));
 
     expect(markup).toContain("Connected");
+    expect(markup).toContain("Latest reading");
     expect(markup).toContain("12.340000");
     expect(markup).toContain("placeholder=\"DATA:LAST?\"");
   });
