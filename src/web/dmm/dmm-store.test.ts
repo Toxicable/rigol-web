@@ -26,6 +26,13 @@ const dcState: DmmState = {
   acquisitionRate: DmmAcquisitionRate.Slow,
 };
 
+const reading = {
+  kind: DmmReadingKind.Value,
+  function: DmmMeasurementFunction.DcVoltage,
+  value: 12.34,
+  unit: DmmUnit.Volts,
+} as const;
+
 beforeEach(() => {
   useDmmStore.getState().setConnecting();
 });
@@ -46,7 +53,11 @@ describe("DMM store", () => {
       throw new Error("Expected connected DMM");
     }
     expect(pending.connection.state.range).toEqual({ mode: DmmRangeMode.Auto });
-    expect(pending.pendingControl).not.toBeNull();
+    expect(pending.pendingControl?.control).toEqual({
+      kind: DmmControlKind.Range,
+      function: DmmMeasurementFunction.DcVoltage,
+      value: { mode: DmmRangeMode.Fixed, value: 10 },
+    });
 
     pending.replaceState({
       ...dcState,
@@ -66,12 +77,7 @@ describe("DMM store", () => {
   it("clears a displayed reading when the instrument disconnects", () => {
     const store = useDmmStore.getState();
     store.setConnected(info, dcState);
-    store.setLatestReading({
-      kind: DmmReadingKind.Value,
-      function: DmmMeasurementFunction.DcVoltage,
-      value: 12.34,
-      unit: DmmUnit.Volts,
-    });
+    store.setLatestReading(reading);
     expect(useDmmStore.getState().latestReading).not.toBeNull();
 
     useDmmStore.getState().setInstrumentDisconnected("meter offline");
@@ -87,12 +93,7 @@ describe("DMM store", () => {
   it("drops a stale reading when authoritative function changes", () => {
     const store = useDmmStore.getState();
     store.setConnected(info, dcState);
-    store.setLatestReading({
-      kind: DmmReadingKind.Value,
-      function: DmmMeasurementFunction.DcVoltage,
-      value: 12.34,
-      unit: DmmUnit.Volts,
-    });
+    store.setLatestReading(reading);
 
     store.replaceState({
       function: DmmMeasurementFunction.AcVoltage,
@@ -101,24 +102,59 @@ describe("DMM store", () => {
     });
 
     expect(useDmmStore.getState().latestReading).toBeNull();
-    store.setLatestReading({
-      kind: DmmReadingKind.Value,
-      function: DmmMeasurementFunction.DcVoltage,
-      value: 99,
-      unit: DmmUnit.Volts,
-    });
+    store.setLatestReading(reading);
     expect(useDmmStore.getState().latestReading).toBeNull();
   });
 
-  it("surfaces a failed function-bound control without changing state", () => {
+  it("drops the old reading before rendering a same-function range change", () => {
     const store = useDmmStore.getState();
     store.setConnected(info, dcState);
-    store.beginControl({
+    store.setLatestReading(reading);
+
+    store.replaceState({
+      ...dcState,
+      range: { mode: DmmRangeMode.Fixed, value: 10 },
+    });
+
+    expect(useDmmStore.getState().latestReading).toBeNull();
+  });
+
+  it("drops the old reading before rendering a same-function rate change", () => {
+    const store = useDmmStore.getState();
+    store.setConnected(info, dcState);
+    store.setLatestReading(reading);
+
+    store.replaceState({
+      ...dcState,
+      acquisitionRate: DmmAcquisitionRate.Fast,
+    });
+
+    expect(useDmmStore.getState().latestReading).toBeNull();
+  });
+
+  it("retains a reading across an equivalent authoritative state poll", () => {
+    const store = useDmmStore.getState();
+    store.setConnected(info, dcState);
+    store.setLatestReading(reading);
+
+    store.replaceState({
+      function: DmmMeasurementFunction.DcVoltage,
+      range: { mode: DmmRangeMode.Auto },
+      acquisitionRate: DmmAcquisitionRate.Slow,
+    });
+
+    expect(useDmmStore.getState().latestReading).toEqual(reading);
+  });
+
+  it("surfaces an owned failed control without changing authoritative state", () => {
+    const store = useDmmStore.getState();
+    store.setConnected(info, dcState);
+    const ownership = store.beginControl({
       kind: DmmControlKind.AcquisitionRate,
       function: DmmMeasurementFunction.DcVoltage,
       value: DmmAcquisitionRate.Fast,
     });
-    store.failControl("Stale DMM control");
+    store.failControl(ownership, "Stale DMM control");
 
     const failed = useDmmStore.getState();
     expect(failed.pendingControl).toBeNull();
@@ -129,16 +165,54 @@ describe("DMM store", () => {
     expect(failed.connection.state).toEqual(dcState);
   });
 
+  it("ignores an old-session rejection after a newer session control begins", () => {
+    const store = useDmmStore.getState();
+    store.setConnected(info, dcState);
+    const oldOwnership = store.beginControl({
+      kind: DmmControlKind.Range,
+      function: DmmMeasurementFunction.DcVoltage,
+      value: { mode: DmmRangeMode.Fixed, value: 10 },
+    });
+
+    store.setConnected(info, dcState);
+    const newOwnership = useDmmStore.getState().beginControl({
+      kind: DmmControlKind.AcquisitionRate,
+      function: DmmMeasurementFunction.DcVoltage,
+      value: DmmAcquisitionRate.Fast,
+    });
+    useDmmStore.getState().failControl(oldOwnership, "old session failed");
+
+    const current = useDmmStore.getState();
+    expect(current.pendingControl?.token).toBe(newOwnership.token);
+    expect(current.controlError).toBeNull();
+  });
+
+  it("ignores an old-route completion after unmount and remount", () => {
+    const store = useDmmStore.getState();
+    store.setConnected(info, dcState);
+    const oldOwnership = store.beginControl({
+      kind: DmmControlKind.Range,
+      function: DmmMeasurementFunction.DcVoltage,
+      value: { mode: DmmRangeMode.Fixed, value: 10 },
+    });
+
+    store.setAwaitingInstrument();
+    store.setConnected(info, dcState);
+    const newOwnership = useDmmStore.getState().beginControl({
+      kind: DmmControlKind.AcquisitionRate,
+      function: DmmMeasurementFunction.DcVoltage,
+      value: DmmAcquisitionRate.Fast,
+    });
+    useDmmStore.getState().finishControl(oldOwnership);
+
+    expect(useDmmStore.getState().pendingControl?.token).toBe(newOwnership.token);
+  });
+
   it("does not mutate the DHO804 store", () => {
     const scopeConnection = useScopeStore.getState().connection;
 
     useDmmStore.getState().setConnected(info, dcState);
-    useDmmStore.getState().setLatestReading({
-      kind: DmmReadingKind.Value,
-      function: DmmMeasurementFunction.DcVoltage,
-      value: 1.234,
-      unit: DmmUnit.Volts,
-    });
+    useDmmStore.getState().setLatestReading(reading);
 
     expect(useScopeStore.getState().connection).toBe(scopeConnection);
   });
