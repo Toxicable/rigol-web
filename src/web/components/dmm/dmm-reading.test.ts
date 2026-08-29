@@ -20,23 +20,47 @@ const state: DmmState = {
 };
 
 describe("DMM primary reading", () => {
-  it("renders a stable numeric value without exceeding the selected rate precision", () => {
+  it("renders using the authoritative snapshot resolution", () => {
     const markup = renderToStaticMarkup(createElement(DmmReading, {
       state,
       snapshot: {
         kind: DmmReadingKind.Value,
         function: DmmMeasurementFunction.DcVoltage,
         value: 0.012345678,
+        resolution: 1e-6,
         unit: DmmUnit.Volts,
       },
     }));
 
-    expect(markup).toContain("12.3457");
+    expect(markup).toContain("12.346");
     expect(markup).not.toContain("12.345678");
     expect(markup).toContain("mV");
     expect(markup).toContain("DC voltage");
     expect(markup).toContain("Auto");
     expect(markup).toContain("Slow · 5.5 digit");
+  });
+
+  it("uses actual Auto-range resolution rather than deriving precision from the rate label", () => {
+    const autoFastState: DmmState = {
+      function: DmmMeasurementFunction.AcVoltage,
+      range: { mode: DmmRangeMode.Auto },
+      acquisitionRate: DmmAcquisitionRate.Fast,
+    };
+    const markup = renderToStaticMarkup(createElement(DmmReading, {
+      state: autoFastState,
+      snapshot: {
+        kind: DmmReadingKind.Value,
+        function: DmmMeasurementFunction.AcVoltage,
+        value: 12.345678,
+        resolution: 0.1,
+        unit: DmmUnit.Volts,
+      },
+    }));
+
+    expect(markup).toContain(">12.3<");
+    expect(markup).not.toContain("12.346");
+    expect(markup).toContain("Auto");
+    expect(markup).toContain("Fast · 4.5 digit");
   });
 
   it("does not synthesize trailing zero precision", () => {
@@ -46,6 +70,7 @@ describe("DMM primary reading", () => {
         kind: DmmReadingKind.Value,
         function: DmmMeasurementFunction.DcVoltage,
         value: 12.34,
+        resolution: 0.001,
         unit: DmmUnit.Volts,
       },
     }));
@@ -67,7 +92,7 @@ describe("DMM primary reading", () => {
 
     expect(markup).toContain("Configuration changed");
     expect(markup).toContain("—");
-    expect(markup).not.toContain("12.3457");
+    expect(markup).not.toContain("12.346");
   });
 
   it("does not display a snapshot belonging to a stale function", () => {
@@ -77,6 +102,7 @@ describe("DMM primary reading", () => {
         kind: DmmReadingKind.Value,
         function: DmmMeasurementFunction.AcVoltage,
         value: 42,
+        resolution: 0.1,
         unit: DmmUnit.Volts,
       },
     }));
