@@ -348,7 +348,8 @@ export class DmmRuntime {
     if (
       session === null ||
       session.stateStore !== stateStore ||
-      snapshot.function !== stateStore.getState().function
+      snapshot.function !== stateStore.getState().function ||
+      sameSnapshot(snapshot, this.currentSnapshot)
     ) {
       return;
     }
@@ -438,6 +439,29 @@ export class DmmRuntime {
     const resolve = this.retryResolve;
     this.retryResolve = null;
     resolve?.();
+  }
+}
+
+function sameSnapshot(
+  left: DmmReadingSnapshot,
+  right: DmmReadingSnapshot | null,
+): boolean {
+  if (
+    right === null ||
+    left.kind !== right.kind ||
+    left.function !== right.function ||
+    left.unit !== right.unit
+  ) {
+    return false;
+  }
+
+  switch (left.kind) {
+    case DmmReadingKind.Value:
+      return right.kind === DmmReadingKind.Value && left.value === right.value;
+    case DmmReadingKind.Overload:
+      return right.kind === DmmReadingKind.Overload;
+    case DmmReadingKind.Unavailable:
+      return right.kind === DmmReadingKind.Unavailable && left.reason === right.reason;
   }
 }
 
