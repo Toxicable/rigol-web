@@ -6,6 +6,31 @@ This workstream starts after `dm858e-instrument-foundation.md` is complete and m
 
 Implement the DM858E browser UI against the shared DMM/protocol contracts. Use fakes/mocked WebSocket messages where necessary; do not wait for the physical instrument.
 
+## Implementation status
+
+Implemented in draft PR #10 from merged backend head `22bd0ac`.
+
+The current implementation includes:
+
+- a separate Zustand DMM store with explicit browser-transport, runtime-waiting, instrument-disconnected and connected states;
+- route-owned subscribe/unsubscribe lifecycle binding to the shared browser WebSocket;
+- a stable tabular primary-reading display with engineering-unit formatting and explicit unavailable/overload states;
+- stale-function snapshot rejection in both the store and presentation layer;
+- direct controls for every shared DM858E measurement function;
+- typed Auto/fixed range choices matching the backend's DM858E-specific limits, including the 3 A current maximum and 1 mF capacitance maximum;
+- Slow/Medium/Fast controls carrying their originating measurement-function context;
+- no optimistic mutation of authoritative function/range/rate state while a request is pending;
+- control-failure presentation while normal backend polling supplies authoritative follow-up state;
+- reuse of the shared instrument-aware SCPI console, targeted to `DM858E` with a DMM-specific prompt;
+- responsive desktop/lab and narrow-window layouts;
+- focused store, lifecycle, control-generation, rendered-control and reading-format/presentation tests.
+
+The snapshot channel remains display-only. No statistics, history, persistence, CSV export or logging UI has been added.
+
+No package or hardware dependency was added for this workstream; incremental cost is $0.
+
+Repository `pnpm typecheck`, `pnpm test` and `pnpm build` still need to be run from an environment with the repository dependencies available. The execution environment used for PR #10 cannot resolve `github.com`, so the PR remains draft until that full gate is green.
+
 ## Read before changing code
 
 - `docs/dm858e-ui-plan.md`
@@ -39,7 +64,6 @@ Primary ownership:
 ```text
 src/web/dmm/**
 src/web/components/dmm/**
-src/web/dmm-store.ts
 DM858E route component(s)
 DMM-specific tests/styles
 ```
