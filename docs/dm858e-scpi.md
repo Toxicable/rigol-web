@@ -125,7 +125,7 @@ Each snapshot observation is one scheduler operation and reads:
 - `DATA:LAST?`;
 - `UNIT:TEMPerature?` inside the same transaction when temperature is active.
 
-Operation Status bit 8 (`256`) is documented as **Configuration change**. If that bit is present, the function changes during the transaction, or the authoritative function no longer matches the state snapshot used by the poller, the observation is discarded and retried later rather than being labelled with stale state.
+Operation Status bit 8 (`256`) is documented as **Configuration change**. Function instability remains non-publishable: if the before/after function differs, or the authoritative function no longer matches the function expected by the poller, the observation returns no snapshot because its ownership cannot be attributed safely. If bit 8 is present while the function remains stable and authoritative, the driver instead publishes `Unavailable/ConfigurationChanged`. That explicit snapshot replaces any retained numeric display and resets display deduplication, so a later real measurement is published even when its numeric value equals the pre-change value.
 
 The Programming Guide gives `VDC` as an explicit `DATA:LAST?` function-token example. The backend does not invent other spellings. Unknown suffixes are treated as opaque and associated with a function only while `SENSe:FUNCtion?` is stable and authoritative; a token later observed under a different function is rejected.
 
@@ -150,26 +150,30 @@ This is not a claim of 10 samples/s effective acquisition.
 
 Multiple browser tabs can share one DM858E runtime. Range and acquisition-rate values are function-dependent, so those requests carry the measurement function under which the UI created them.
 
+Every browser mutation is also bound to the active DMM session at the moment it is enqueued. The runtime mutation queue re-checks that exact session before the queued operation is allowed to execute. If the instrument disconnects, the route stops, or a reconnect creates a replacement session while a request is waiting behind another mutation, the stale queued request is rejected before any SCPI reaches the replacement session. This applies to normal controls and raw SCPI alike; queued work is never replayed across reconnect.
+
 Under the runtime mutation queue, a function-dependent request:
 
-1. reads authoritative current DMM state;
-2. rejects the request if its expected function no longer matches;
-3. verifies the control is applicable to that function;
-4. enters the driver write operation;
-5. re-reads `SENSe:FUNCtion?` inside that same scheduler operation before deriving the write;
-6. rejects instead of writing if the front panel changed function in the meantime;
-7. for AC rate changes, samples physical Auto/fixed mode and effective range until two adjacent observations agree, retrying within a three-observation bound;
-8. rejects the rate write without `CONFigure:*` if the range state does not stabilize;
-9. re-checks `SENSe:FUNCtion?` immediately before `CONFigure:*`;
-10. performs authoritative state readback after a successful write.
+1. captures the active DMM session before entering the queue;
+2. verifies that the captured session is still current when it reaches the front of the queue;
+3. reads authoritative current DMM state;
+4. rejects the request if its expected function no longer matches;
+5. verifies the control is applicable to that function;
+6. enters the driver write operation;
+7. re-reads `SENSe:FUNCtion?` inside that same scheduler operation before deriving the write;
+8. rejects instead of writing if the front panel changed function in the meantime;
+9. for AC rate changes, samples physical Auto/fixed mode and effective range until two adjacent observations agree, retrying within a three-observation bound;
+10. rejects the rate write without `CONFigure:*` if the range state does not stabilize;
+11. re-checks `SENSe:FUNCtion?` immediately before `CONFigure:*`;
+12. performs authoritative state readback after a successful write.
 
-This prevents a stale range value from being reinterpreted under another function, prevents a stale AC-rate `CONFigure:*` request from restoring an old AC function, and prevents a rate-only change from overwriting a newer same-function front-panel range choice or a mixed Auto/fixed observation created while the front panel is changing.
+This prevents a stale range value from being reinterpreted under another function, prevents a stale AC-rate `CONFigure:*` request from restoring an old AC function, prevents a rate-only change from overwriting a newer same-function front-panel range choice or a mixed Auto/fixed observation created while the front panel is changing, and prevents queued mutations from crossing a DMM reconnect/session boundary.
 
-Function-change requests themselves are not function-bound because selecting a new function is their explicit intent.
+Function-change requests themselves are not function-bound because selecting a new function is their explicit intent, but they are still session-bound at queue entry.
 
 ## Raw SCPI
 
-Raw-SCPI mutations share the runtime mutation queue because they may alter DMM state. After a raw command/query, the runtime performs authoritative state readback.
+Raw-SCPI mutations share the runtime mutation queue because they may alter DMM state. Each raw request captures the active session before entering that queue and is rejected if that session has been replaced before execution. After a raw command/query that executes successfully, the runtime performs authoritative state readback.
 
 Program-message validation and command/query classification are generic SCPI infrastructure in `src/server/scpi/scpi-program-message.ts` and are shared by the DHO804 and DM858E drivers. The classifier rejects empty/multiline messages and detects query markers outside SCPI quoted strings.
 
