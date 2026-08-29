@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { dm858eMaximumSignificantDigits } from "../../shared/dm858e-capabilities.js";
 import {
   DmmAcquisitionRate,
   DmmMeasurementFunction,
@@ -8,7 +9,6 @@ import {
   DmmUnit,
 } from "../../shared/dmm-types.js";
 import {
-  dmmMaximumSignificantDigits,
   formatDmmRange,
   formatDmmReading,
   formatDmmValue,
@@ -34,10 +34,19 @@ describe("DMM value formatting", () => {
     });
   });
 
-  it("caps significant digits conservatively from the authoritative rate class", () => {
-    expect(dmmMaximumSignificantDigits(DmmAcquisitionRate.Slow)).toBe(6);
-    expect(dmmMaximumSignificantDigits(DmmAcquisitionRate.Medium)).toBe(5);
-    expect(dmmMaximumSignificantDigits(DmmAcquisitionRate.Fast)).toBe(5);
+  it("caps variable-rate functions from the authoritative rate class", () => {
+    expect(dm858eMaximumSignificantDigits(
+      DmmMeasurementFunction.DcVoltage,
+      DmmAcquisitionRate.Slow,
+    )).toBe(6);
+    expect(dm858eMaximumSignificantDigits(
+      DmmMeasurementFunction.DcVoltage,
+      DmmAcquisitionRate.Medium,
+    )).toBe(5);
+    expect(dm858eMaximumSignificantDigits(
+      DmmMeasurementFunction.DcVoltage,
+      DmmAcquisitionRate.Fast,
+    )).toBe(5);
 
     const snapshot = {
       kind: DmmReadingKind.Value,
@@ -49,6 +58,65 @@ describe("DMM value formatting", () => {
     expect(formatDmmReading(snapshot, DmmAcquisitionRate.Slow).value).toBe("12.3457");
     expect(formatDmmReading(snapshot, DmmAcquisitionRate.Medium).value).toBe("12.346");
     expect(formatDmmReading(snapshot, DmmAcquisitionRate.Fast).value).toBe("12.346");
+  });
+
+  it("caps fixed-resolution functions from shared DM858E capability metadata", () => {
+    expect(formatDmmReading({
+      kind: DmmReadingKind.Value,
+      function: DmmMeasurementFunction.Capacitance,
+      value: 1.23456789e-6,
+      unit: DmmUnit.Farads,
+    }).value).toBe("1.235");
+
+    expect(formatDmmReading({
+      kind: DmmReadingKind.Value,
+      function: DmmMeasurementFunction.Continuity,
+      value: 123.456789,
+      unit: DmmUnit.Ohms,
+    }).value).toBe("123.46");
+
+    expect(formatDmmReading({
+      kind: DmmReadingKind.Value,
+      function: DmmMeasurementFunction.Diode,
+      value: 1.23456789,
+      unit: DmmUnit.Volts,
+    }).value).toBe("1.2346");
+
+    expect(formatDmmReading({
+      kind: DmmReadingKind.Value,
+      function: DmmMeasurementFunction.Frequency,
+      value: 12_345.6789,
+      unit: DmmUnit.Hertz,
+    }).value).toBe("12.3457");
+
+    expect(formatDmmReading({
+      kind: DmmReadingKind.Value,
+      function: DmmMeasurementFunction.Period,
+      value: 0.00123456789,
+      unit: DmmUnit.Seconds,
+    }).value).toBe("1.23457");
+
+    expect(formatDmmReading({
+      kind: DmmReadingKind.Value,
+      function: DmmMeasurementFunction.Temperature,
+      value: 23.456789,
+      unit: DmmUnit.Celsius,
+    }).value).toBe("23.4568");
+  });
+
+  it("does not pad fixed-resolution readings with trailing zeroes", () => {
+    expect(formatDmmReading({
+      kind: DmmReadingKind.Value,
+      function: DmmMeasurementFunction.Capacitance,
+      value: 12.34e-6,
+      unit: DmmUnit.Farads,
+    }).value).toBe("12.34");
+    expect(formatDmmReading({
+      kind: DmmReadingKind.Value,
+      function: DmmMeasurementFunction.Temperature,
+      value: 12.34,
+      unit: DmmUnit.Celsius,
+    }).value).toBe("12.34");
   });
 
   it("keeps very small and very large values deterministic in exponent form", () => {
