@@ -20,7 +20,7 @@ const state: DmmState = {
 };
 
 describe("DMM primary reading", () => {
-  it("renders a stable numeric value with function, range and rate context", () => {
+  it("renders a stable numeric value without exceeding the selected rate precision", () => {
     const markup = renderToStaticMarkup(createElement(DmmReading, {
       state,
       snapshot: {
@@ -31,11 +31,27 @@ describe("DMM primary reading", () => {
       },
     }));
 
-    expect(markup).toContain("12.345678");
+    expect(markup).toContain("12.3457");
+    expect(markup).not.toContain("12.345678");
     expect(markup).toContain("mV");
     expect(markup).toContain("DC voltage");
     expect(markup).toContain("Auto");
     expect(markup).toContain("Slow · 5.5 digit");
+  });
+
+  it("does not synthesize trailing zero precision", () => {
+    const markup = renderToStaticMarkup(createElement(DmmReading, {
+      state,
+      snapshot: {
+        kind: DmmReadingKind.Value,
+        function: DmmMeasurementFunction.DcVoltage,
+        value: 12.34,
+        unit: DmmUnit.Volts,
+      },
+    }));
+
+    expect(markup).toContain(">12.34<");
+    expect(markup).not.toContain("12.3400");
   });
 
   it("replaces a numeric presentation with explicit unavailable state", () => {
@@ -51,7 +67,7 @@ describe("DMM primary reading", () => {
 
     expect(markup).toContain("Configuration changed");
     expect(markup).toContain("—");
-    expect(markup).not.toContain("12.345678");
+    expect(markup).not.toContain("12.3457");
   });
 
   it("does not display a snapshot belonging to a stale function", () => {
