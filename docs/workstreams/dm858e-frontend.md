@@ -18,7 +18,8 @@ The current implementation includes:
 - conservative reading precision from shared DM858E capability metadata: values are never padded with synthetic trailing significant digits; variable-rate functions use the Slow 5.5-digit / Medium-Fast 4.5-digit ceilings, while fixed-resolution capacitance, continuity/diode, frequency/period and temperature use their documented 3.5/4.5/5.5-digit classes;
 - stale-function snapshot rejection in both the store and presentation layer;
 - immediate local invalidation of a retained numeric reading whenever authoritative function, range or rate context changes, including same-function range/rate changes;
-- runtime ownership that replaces any retained current snapshot with explicit `Unavailable/ConfigurationChanged` on every real `DmmStateStore` change before that snapshot can be replayed to a new subscriber;
+- one server-side latest-reading owner: `DmmPoller` samples and forwards non-null snapshots, while `DmmRuntime.currentSnapshot` is the sole dedupe/replay baseline;
+- runtime invalidation that replaces the retained current snapshot with explicit `Unavailable/ConfigurationChanged` on every real `DmmStateStore` change before replay; because dedupe uses that same runtime baseline, an equal numeric value measured after the change is published again rather than suppressed;
 - lifecycle-generation plus request-token ownership for pending controls so completion/failure from an old DMM session or old route mount cannot mutate a newer request;
 - direct controls for every shared DM858E measurement function;
 - typed Auto/fixed range choices from the single shared `src/shared/dm858e-capabilities.ts` source used by both frontend and backend, including the 3 A current maximum and 1 mF capacitance maximum;
@@ -28,7 +29,7 @@ The current implementation includes:
 - control-failure presentation while normal backend polling supplies authoritative follow-up state;
 - reuse of the shared instrument-aware SCPI console, targeted to `DM858E` with a DMM-specific prompt;
 - responsive desktop/lab and narrow-window layouts;
-- focused store, lifecycle, control-generation, rendered-control, runtime snapshot, WebSocket replay and reading-format/presentation tests.
+- focused store, lifecycle, control-generation, rendered-control, runtime snapshot, poller ownership, WebSocket replay and reading-format/presentation tests.
 
 The snapshot channel remains display-only. No statistics, history, persistence, CSV export or logging UI has been added.
 
@@ -99,7 +100,7 @@ Pending control completion/failure must be owned by the route/session generation
 
 Any authoritative change to function, range or rate invalidates a retained numeric reading before the new metadata is rendered with it. Equivalent periodic state snapshots may retain the reading.
 
-This invariant also applies to the server runtime's retained `currentSnapshot`: a real `DmmStateStore` change must replace it with `Unavailable/ConfigurationChanged` before `subscriberAdded()` can replay it. A second browser subscription must never resurrect a numeric reading owned by the previous range/rate context.
+The server has one retained-snapshot owner. `DmmPoller` must not maintain a second dedupe cache; it forwards sampled snapshots to `DmmRuntime`, and `DmmRuntime.currentSnapshot` owns dedupe plus subscription replay. A real `DmmStateStore` change replaces that baseline with `Unavailable/ConfigurationChanged`. Therefore a subsequent valid reading must be compared against the invalidated runtime baseline and republished even when its numeric value equals the pre-change reading.
 
 ## Primary reading presentation
 
@@ -231,6 +232,9 @@ Cover at least:
 - same-function range/rate state changes invalidate a retained numeric reading immediately
 - a second subscriber after a same-function state change receives/replays `Unavailable/ConfigurationChanged`, never the pre-change numeric snapshot
 - equivalent DMM state polls preserve a valid current snapshot
+- poller forwards equal sampled snapshots and does not own a dedupe baseline
+- runtime deduplicates unchanged snapshots using `currentSnapshot`
+- `Value X -> same-function state change -> runtime Unavailable -> next physical Value X` republishes X without requiring an intervening driver-level configuration-change snapshot
 - function selection messages
 - range selection messages include the current function context
 - rate selection messages include the current function context
