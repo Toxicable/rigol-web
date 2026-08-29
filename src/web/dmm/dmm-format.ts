@@ -1,3 +1,4 @@
+import { dm858eMaximumSignificantDigits } from "../../shared/dm858e-capabilities.js";
 import {
   DmmAcquisitionRate,
   DmmReadingKind,
@@ -53,20 +54,6 @@ export function dmmUnitSymbol(value: DmmUnit): string {
   }
 }
 
-export function dmmMaximumSignificantDigits(
-  acquisitionRate: DmmAcquisitionRate | null,
-): number | null {
-  switch (acquisitionRate) {
-    case DmmAcquisitionRate.Slow:
-      return 6;
-    case DmmAcquisitionRate.Medium:
-    case DmmAcquisitionRate.Fast:
-      return 5;
-    case null:
-      return null;
-  }
-}
-
 export function formatDmmValue(
   value: number,
   unit: DmmUnit,
@@ -106,7 +93,7 @@ export function formatDmmReading(
       const formatted = formatDmmValue(
         snapshot.value,
         snapshot.unit,
-        dmmMaximumSignificantDigits(acquisitionRate),
+        dm858eMaximumSignificantDigits(snapshot.function, acquisitionRate),
       );
       return { ...formatted, detail: null, numeric: true };
     }
