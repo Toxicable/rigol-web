@@ -46,6 +46,7 @@ class ScriptedTransport {
 interface ReadingObservation {
   functionToken: string;
   response: string;
+  configuration?: string;
   operationStatus?: number;
 }
 
@@ -70,6 +71,39 @@ function respond(transport: ScriptedTransport, command: string, ...values: strin
   transport.text.set(command, values);
 }
 
+function defaultConfiguration(functionToken: string): string {
+  switch (functionToken.trim().replace(/^"|"$/g, "").toUpperCase()) {
+    case "VOLT":
+    case "VOLT:DC":
+      return "VOLT 1.00000000E+00,1.00000000E-05";
+    case "VOLT:AC":
+      return "VOLT:AC 1.00000000E+00,1.00000000E-05";
+    case "CURR":
+    case "CURR:DC":
+      return "CURR 1.00000000E+00,1.00000000E-05";
+    case "CURR:AC":
+      return "CURR:AC 1.00000000E+00,1.00000000E-05";
+    case "RES":
+      return "RES 1.00000000E+03,1.00000000E-02";
+    case "FRES":
+      return "FRES 1.00000000E+03,1.00000000E-02";
+    case "FREQ":
+      return "FREQ 1.00000000E+01,1.00000000E-01";
+    case "PER":
+      return "PER 1.00000000E+00,1.00000000E-05";
+    case "CAP":
+      return "CAP 1.00000000E-06,1.00000000E-09";
+    case "TEMP":
+      return "TEMP FRTD,385";
+    case "CONT":
+      return "CONT";
+    case "DIOD":
+      return "DIOD";
+    default:
+      throw new Error(`Missing default configuration for ${functionToken}`);
+  }
+}
+
 function scriptReadingObservations(
   transport: ScriptedTransport,
   ...observations: ReadingObservation[]
@@ -79,6 +113,14 @@ function scriptReadingObservations(
     "STATus:OPERation:CONDition?",
     ...observations.flatMap((observation) => {
       const value = String(observation.operationStatus ?? 0);
+      return [value, value];
+    }),
+  );
+  respond(
+    transport,
+    "CONFigure?",
+    ...observations.flatMap((observation) => {
+      const value = observation.configuration ?? defaultConfiguration(observation.functionToken);
       return [value, value];
     }),
   );
@@ -382,7 +424,7 @@ describe("Dm858eDriver", () => {
     expect(transport.commands).toEqual(["SENSe:FUNCtion?"]);
   });
 
-  it("publishes the first stable DATA:LAST value as a latest-reading snapshot", async () => {
+  it("publishes the first stable DATA:LAST value with its configured resolution", async () => {
     const transport = new ScriptedTransport();
     scriptReadingObservations(
       transport,
@@ -394,9 +436,48 @@ describe("Dm858eDriver", () => {
       kind: DmmReadingKind.Value,
       function: DmmMeasurementFunction.DcVoltage,
       value: -0.507,
+      resolution: 1e-5,
       unit: DmmUnit.Volts,
     });
     expect(transport.commands).not.toContain("DATA:POINts?");
+  });
+
+  it("carries the actual 100 V Fast AC resolution with the reading", async () => {
+    const transport = new ScriptedTransport();
+    scriptReadingObservations(
+      transport,
+      {
+        functionToken: "VOLT:AC",
+        response: "1.23456780E+01 OPAQUE_ACV",
+        configuration: "VOLT:AC 1.00000000E+02,1.00000000E-01",
+      },
+    );
+    const driver = scriptedDriver(transport);
+
+    await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.AcVoltage)).resolves.toEqual({
+      kind: DmmReadingKind.Value,
+      function: DmmMeasurementFunction.AcVoltage,
+      value: 12.345678,
+      resolution: 0.1,
+      unit: DmmUnit.Volts,
+    });
+  });
+
+  it("rejects a reading when configured range/resolution changes across DATA:LAST", async () => {
+    const transport = new ScriptedTransport();
+    respond(transport, "STATus:OPERation:CONDition?", "0", "0");
+    respond(
+      transport,
+      "CONFigure?",
+      "VOLT:AC 1.00000000E+01,1.00000000E-02",
+      "VOLT:AC 1.00000000E+02,1.00000000E-01",
+    );
+    respond(transport, "SENSe:FUNCtion?", "VOLT:AC", "VOLT:AC");
+    respond(transport, "DATA:LAST?", "1.23456780E+01 OPAQUE_ACV");
+
+    await expect(
+      scriptedDriver(transport).readPrimarySnapshot(DmmMeasurementFunction.AcVoltage),
+    ).resolves.toBeNull();
   });
 
   it("does not pretend repeated DATA:LAST snapshots are distinct samples", async () => {
@@ -412,6 +493,7 @@ describe("Dm858eDriver", () => {
       kind: DmmReadingKind.Value,
       function: DmmMeasurementFunction.DcVoltage,
       value: -0.507,
+      resolution: 1e-5,
       unit: DmmUnit.Volts,
     };
     await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.DcVoltage)).resolves.toEqual(expected);
@@ -432,6 +514,7 @@ describe("Dm858eDriver", () => {
       kind: DmmReadingKind.Value,
       function: DmmMeasurementFunction.Resistance2Wire,
       value: 1_000,
+      resolution: 0.01,
       unit: DmmUnit.Ohms,
     });
   });
@@ -449,11 +532,17 @@ describe("Dm858eDriver", () => {
     );
     const driver = scriptedDriver(transport);
 
-    await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.DcVoltage)).resolves.toBeNull();
+    await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.DcVoltage)).resolves.toEqual({
+      kind: DmmReadingKind.Unavailable,
+      function: DmmMeasurementFunction.DcVoltage,
+      unit: DmmUnit.Volts,
+      reason: DmmReadingUnavailableReason.ConfigurationChanged,
+    });
     await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.DcVoltage)).resolves.toEqual({
       kind: DmmReadingKind.Value,
       function: DmmMeasurementFunction.DcVoltage,
       value: -0.508,
+      resolution: 1e-5,
       unit: DmmUnit.Volts,
     });
   });
@@ -485,6 +574,7 @@ describe("Dm858eDriver", () => {
     await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.DcVoltage)).resolves.toMatchObject({
       kind: DmmReadingKind.Value,
       value: -0.508,
+      resolution: 1e-5,
     });
     expect(transport.commands).not.toContain("STATus:QUEStionable:EVENt?");
   });
@@ -517,6 +607,7 @@ describe("Dm858eDriver", () => {
       kind: DmmReadingKind.Value,
       function: DmmMeasurementFunction.Temperature,
       value: 100,
+      resolution: 0.001,
       unit: DmmUnit.Celsius,
     });
   });
