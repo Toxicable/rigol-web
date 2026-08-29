@@ -4,7 +4,7 @@
 
 Rigol Web uses one persistent WebSocket connection between each browser tab and the server.
 
-Protocol version 3 supports exactly two instrument identities:
+Protocol version 4 supports exactly two instrument identities:
 
 ```ts
 export enum SupportedInstrument {
@@ -25,12 +25,12 @@ Protocol discriminants and fixed values use numeric TypeScript enums. Object fie
 ## Protocol version
 
 ```ts
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 ```
 
-Version 3 is a hard-cut change from version 2 because the DMM surface now distinguishes a latest-reading snapshot from a sample stream, represents non-applicable controls explicitly, and binds function-dependent controls to the function under which the UI created them.
+Version 4 is a hard-cut change from version 3 because every numeric DMM latest-reading snapshot now carries a required positive `resolution` quantum from the same authoritative measurement observation. Browser formatting rounds to that quantum instead of reconstructing precision from rate, digit class or Auto-range state. Old browser/server bundles must therefore fail the hello version check rather than silently mixing snapshot shapes.
 
-Version 2 had already introduced instrument subscriptions, explicit raw-SCPI targets and DM858E lifecycle/control messages. Browser/server compatibility is checked before instrument traffic.
+Version 3 introduced the latest-reading snapshot contract, explicit non-applicable DMM controls and function-bound DMM controls. Version 2 introduced instrument subscriptions, explicit raw-SCPI targets and DM858E lifecycle/control messages.
 
 Do not renumber existing message values when changing names or adding messages unless a deliberate protocol break requires it.
 
@@ -191,6 +191,7 @@ type DmmReadingSnapshot =
       kind: DmmReadingKind.Value;
       function: DmmMeasurementFunction;
       value: number;
+      resolution: number;
       unit: DmmUnit;
     }
   | {
@@ -206,9 +207,13 @@ type DmmReadingSnapshot =
     };
 ```
 
+For `Value`, `resolution` is a positive finite measurement quantum authoritative for that observation. It is not a display hint or a digit-count estimate. The browser rounds the numeric value to this quantum before engineering-prefix formatting and must not infer a finer precision from `DmmState`. This is required for fixed ranges such as 100 V Fast (`0.1 V` resolution) and for Auto range where `DmmState.range` intentionally remains `{ mode: Auto }` and does not expose the effective physical range.
+
+If the backend cannot establish an authoritative numeric resolution for the stable observation, it sends `Unavailable/ResolutionUnavailable` rather than a numeric `Value` with guessed precision.
+
 Snapshot polling must not be used to derive sample count, statistics or a measurement timeline. A future sample-stream contract requires a verified one-event-per-physical-measurement acquisition boundary.
 
-`Unavailable` explicitly replaces a prior valid display when the backend knows no current usable value is available. The DM858E backend currently uses `NoData` for the documented bare `DATA:LAST?` no-data sentinel and `UnclassifiedSentinel` when a sentinel-sized response has no documented overload meaning.
+`Unavailable` explicitly replaces a prior valid display when the backend knows no current usable value is available. The DM858E backend uses `NoData` for the documented bare `DATA:LAST?` no-data sentinel, `UnclassifiedSentinel` when a sentinel-sized response has no documented overload meaning, `ConfigurationChanged` when the observation/configuration context is stale, and `ResolutionUnavailable` when a safe numeric display quantum is not available.
 
 ## DHO804 controls
 
