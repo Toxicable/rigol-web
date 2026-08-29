@@ -11,6 +11,8 @@ import {
   type DmmReadingSnapshot,
   type DmmState,
 } from "../../shared/dmm-types.js";
+import type { Dm858eDriver } from "./dm858e-driver.js";
+import { DmmPoller } from "./dmm-poller.js";
 import { DmmRuntime } from "./dmm-runtime.js";
 import { DmmStateStore } from "./dmm-state-store.js";
 
@@ -61,6 +63,18 @@ function configurationChanged(functionValue: DmmMeasurementFunction): DmmReading
   };
 }
 
+class EqualValueAfterStateChangeDriver {
+  private readonly snapshots: DmmReadingSnapshot[] = [valueSnapshot, valueSnapshot];
+
+  public async readDmmState(): Promise<DmmState> {
+    return initialState;
+  }
+
+  public async readPrimarySnapshot(): Promise<DmmReadingSnapshot | null> {
+    return this.snapshots.shift() ?? null;
+  }
+}
+
 describe("DmmRuntime current snapshot lifecycle", () => {
   it.each([
     {
@@ -105,6 +119,65 @@ describe("DmmRuntime current snapshot lifecycle", () => {
     expect(internals.currentSnapshot).toEqual(valueSnapshot);
     runtime.subscriberAdded();
     expect(snapshots).toEqual([valueSnapshot, valueSnapshot]);
+  });
+
+  it("deduplicates unchanged polled snapshots at the runtime ownership boundary", () => {
+    const { snapshots, stateStore, internals } = createHarness();
+
+    internals.acceptSnapshot(stateStore, valueSnapshot);
+
+    expect(snapshots).toEqual([valueSnapshot]);
+    expect(internals.currentSnapshot).toEqual(valueSnapshot);
+  });
+
+  it("publishes the same numeric value again after a same-function state change", async () => {
+    const states: DmmState[] = [];
+    const snapshots: DmmReadingSnapshot[] = [];
+    const nextState: DmmState = {
+      ...initialState,
+      range: { mode: DmmRangeMode.Fixed, value: 10 },
+    };
+    const stateStore = new DmmStateStore(initialState);
+    let poller!: DmmPoller;
+    const runtime = new DmmRuntime({
+      host: "dmm.test",
+      port: 5556,
+      publishConnection: () => {},
+      publishState: (state) => states.push(state),
+      publishSnapshot: (snapshot) => {
+        snapshots.push(snapshot);
+        if (snapshots.length === 1) {
+          stateStore.replaceState(nextState);
+        } else if (snapshots.length === 3) {
+          poller.stop();
+        }
+      },
+    });
+    const internals = runtime as unknown as RuntimeInternals;
+    internals.session = { stateStore };
+    stateStore.subscribe((state) => internals.acceptState(stateStore, state));
+
+    poller = new DmmPoller({
+      driver: new EqualValueAfterStateChangeDriver() as unknown as Dm858eDriver,
+      stateStore,
+      readingIntervalMs: 0,
+      stateIntervalMs: 60_000,
+      publishSnapshot: (snapshot) => internals.acceptSnapshot(stateStore, snapshot),
+      reportError: (error) => {
+        throw error;
+      },
+    });
+
+    poller.start();
+    await poller.waitForIdle();
+
+    expect(states).toEqual([nextState]);
+    expect(snapshots).toEqual([
+      valueSnapshot,
+      configurationChanged(DmmMeasurementFunction.DcVoltage),
+      valueSnapshot,
+    ]);
+    expect(internals.currentSnapshot).toEqual(valueSnapshot);
   });
 
   it("invalidates the retained snapshot when the authoritative function changes", () => {
