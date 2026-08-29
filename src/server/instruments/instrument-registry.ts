@@ -8,6 +8,7 @@ export interface InstrumentEndpoint {
 export interface InstrumentRuntime {
   start(): void | Promise<void>;
   stop(): void | Promise<void>;
+  subscriberAdded?(): void | Promise<void>;
 }
 
 interface InstrumentEntry {
@@ -71,6 +72,9 @@ export class InstrumentRegistry {
 
     try {
       await this.queueReconcile(entry);
+      if (entry.subscribers.has(session)) {
+        await entry.runtime.subscriberAdded?.();
+      }
     } catch (error) {
       if (entry.subscribers.delete(session)) {
         entry.revision += 1;

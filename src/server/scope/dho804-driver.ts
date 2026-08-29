@@ -20,6 +20,10 @@ import {
   type TriggerState,
 } from "../../shared/scope-types.js";
 import {
+  ScpiProgramMessageKind,
+  classifyScpiProgramMessage,
+} from "../scpi/scpi-program-message.js";
+import {
   ScpiOperationKind,
   ScpiPriority,
   type ScpiCoalesceKey,
@@ -352,9 +356,9 @@ export class Dho804Driver {
   }
 
   public async executeRawScpi(command: string): Promise<string> {
-    validateRawProgramMessage(command);
+    const messageKind = classifyScpiProgramMessage(command);
     try {
-      if (hasUnquotedQueryMarker(command)) {
+      if (messageKind === ScpiProgramMessageKind.Query) {
         return await this.scheduler.schedule({
           priority: ScpiPriority.Normal,
           kind: ScpiOperationKind.RawScpi,
@@ -742,43 +746,6 @@ function requireFinite(value: number, name: string): void {
   if (!Number.isFinite(value)) {
     throw new Error(`${name} must be finite`);
   }
-}
-
-function validateRawProgramMessage(command: string): void {
-  if (command.trim().length === 0) {
-    throw new Error("Raw SCPI command must not be empty");
-  }
-  if (command.includes("\n") || command.includes("\r")) {
-    throw new Error("Raw SCPI execution accepts exactly one program message");
-  }
-}
-
-function hasUnquotedQueryMarker(command: string): boolean {
-  let quote: "\"" | "'" | null = null;
-  for (let index = 0; index < command.length; index += 1) {
-    const character = command[index];
-    if (character === undefined) {
-      continue;
-    }
-    if (quote !== null) {
-      if (character === quote) {
-        if (command[index + 1] === quote) {
-          index += 1;
-        } else {
-          quote = null;
-        }
-      }
-      continue;
-    }
-    if (character === "\"" || character === "'") {
-      quote = character;
-      continue;
-    }
-    if (character === "?") {
-      return true;
-    }
-  }
-  return false;
 }
 
 function failToken(name: string, value: string): never {

@@ -44,6 +44,30 @@ export enum DmmUnit {
   Unitless = 8,
 }
 
+export function dmmUnitForFunction(value: DmmMeasurementFunction): DmmUnit {
+  switch (value) {
+    case DmmMeasurementFunction.DcVoltage:
+    case DmmMeasurementFunction.AcVoltage:
+    case DmmMeasurementFunction.Diode:
+      return DmmUnit.Volts;
+    case DmmMeasurementFunction.DcCurrent:
+    case DmmMeasurementFunction.AcCurrent:
+      return DmmUnit.Amps;
+    case DmmMeasurementFunction.Resistance2Wire:
+    case DmmMeasurementFunction.Resistance4Wire:
+    case DmmMeasurementFunction.Continuity:
+      return DmmUnit.Ohms;
+    case DmmMeasurementFunction.Frequency:
+      return DmmUnit.Hertz;
+    case DmmMeasurementFunction.Period:
+      return DmmUnit.Seconds;
+    case DmmMeasurementFunction.Capacitance:
+      return DmmUnit.Farads;
+    case DmmMeasurementFunction.Temperature:
+      return DmmUnit.Celsius;
+  }
+}
+
 export interface DmmInfo {
   manufacturer: string;
   model: string;
@@ -53,26 +77,39 @@ export interface DmmInfo {
 
 export interface DmmState {
   function: DmmMeasurementFunction;
-  range: DmmRange;
-  acquisitionRate: DmmAcquisitionRate;
+  range: DmmRange | null;
+  acquisitionRate: DmmAcquisitionRate | null;
 }
 
 export enum DmmReadingKind {
   Value = 1,
   Overload = 2,
+  Unavailable = 3,
 }
 
-export type DmmPrimaryReading =
+export enum DmmReadingUnavailableReason {
+  NoData = 1,
+  UnclassifiedSentinel = 2,
+  ConfigurationChanged = 3,
+}
+
+export type DmmReadingSnapshot =
   | {
       kind: DmmReadingKind.Value;
-      sequence: number;
+      function: DmmMeasurementFunction;
       value: number;
       unit: DmmUnit;
     }
   | {
       kind: DmmReadingKind.Overload;
-      sequence: number;
+      function: DmmMeasurementFunction;
       unit: DmmUnit;
+    }
+  | {
+      kind: DmmReadingKind.Unavailable;
+      function: DmmMeasurementFunction;
+      unit: DmmUnit;
+      reason: DmmReadingUnavailableReason;
     };
 
 export enum DmmControlKind {
@@ -88,9 +125,11 @@ export type DmmControlChange =
     }
   | {
       kind: DmmControlKind.Range;
+      function: DmmMeasurementFunction;
       value: DmmRange;
     }
   | {
       kind: DmmControlKind.AcquisitionRate;
+      function: DmmMeasurementFunction;
       value: DmmAcquisitionRate;
     };

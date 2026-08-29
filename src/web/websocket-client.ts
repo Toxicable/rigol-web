@@ -101,7 +101,7 @@ function asServerMessage(value: unknown): ServerJsonMessage {
     case MessageType.DmmConnected:
     case MessageType.DmmState:
     case MessageType.DmmDisconnected:
-    case MessageType.DmmReading:
+    case MessageType.DmmSnapshot:
     case MessageType.CommandCompleted:
     case MessageType.CommandFailed:
     case MessageType.ScpiResult:
@@ -453,7 +453,7 @@ export class ScopeWebSocketClient {
 
       case MessageType.DmmState:
       case MessageType.DmmDisconnected:
-      case MessageType.DmmReading:
+      case MessageType.DmmSnapshot:
         this.notifyDmm(message);
         return;
 

@@ -14,8 +14,8 @@ import {
   DmmRangeMode,
   type DmmControlChange,
   type DmmInfo,
-  type DmmPrimaryReading,
   type DmmRange,
+  type DmmReadingSnapshot,
   type DmmState,
 } from "../../shared/dmm-types.js";
 import { SupportedInstrument } from "../../shared/instrument-types.js";
@@ -391,11 +391,13 @@ function readDmmControl(value: unknown): DmmControlChange {
     case DmmControlKind.Range:
       return {
         kind: DmmControlKind.Range,
+        function: readDmmFunction(value.function),
         value: readDmmRange(value.value),
       };
     case DmmControlKind.AcquisitionRate:
       return {
         kind: DmmControlKind.AcquisitionRate,
+        function: readDmmFunction(value.function),
         value: readDmmAcquisitionRate(value.value),
       };
     default:
@@ -610,10 +612,10 @@ export class WebSocketGateway {
     });
   }
 
-  public broadcastDmmReading(reading: DmmPrimaryReading): void {
+  public broadcastDmmSnapshot(snapshot: DmmReadingSnapshot): void {
     this.broadcastJsonToInstrument(SupportedInstrument.Dm858e, {
-      type: MessageType.DmmReading,
-      reading,
+      type: MessageType.DmmSnapshot,
+      snapshot,
     });
   }
 

@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 
+import { DmmRuntime } from "./dmm/dmm-runtime.js";
 import { createHttpRequestHandler } from "./http-handler.js";
 import { InstrumentRegistry } from "./instruments/instrument-registry.js";
 import { ScopeRuntime } from "./scope-runtime.js";
@@ -60,11 +61,12 @@ const scopeRuntime = new ScopeRuntime({
   publishConnection: (connection) => gateway.setScopeConnection(connection),
   publishWaveform: (frame) => gateway.broadcastWaveform(frame),
 });
-
-const dmmRuntime = {
-  start: () => undefined,
-  stop: () => undefined,
-};
+const dmmRuntime = new DmmRuntime({
+  ...dmmEndpoint,
+  publishConnection: (connection) => gateway.setDmmConnection(connection),
+  publishState: (state) => gateway.publishDmmState(state),
+  publishSnapshot: (snapshot) => gateway.broadcastDmmSnapshot(snapshot),
+});
 
 const instruments = new InstrumentRegistry({
   dho804: {
@@ -81,19 +83,15 @@ gateway = new WebSocketGateway(server, initialScopeConnection, {
   instruments,
   initialDmmConnection: {
     kind: ServerDmmConnectionKind.Disconnected,
-    reason: "DM858E backend not implemented",
+    reason: "DMM runtime inactive",
   },
   waveformHandlers: {
     requestDeepCapture: (requestId) => scopeRuntime.requestDeepCapture(requestId),
     requestViewport: (request) => scopeRuntime.requestViewport(request),
   },
   dmmHandlers: {
-    setControl: async () => {
-      throw new Error("DM858E backend not implemented");
-    },
-    executeRawScpi: async () => {
-      throw new Error("DM858E backend not implemented");
-    },
+    setControl: (control) => dmmRuntime.setControl(control),
+    executeRawScpi: (command) => dmmRuntime.executeRawScpi(command),
   },
 });
 

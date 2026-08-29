@@ -37,11 +37,9 @@ Do this before adding DM858E-specific UI or runtime code.
 
 Scope code then owns scope-specific scheduler keys such as channel scale/offset, horizontal scale/position and trigger level.
 
-DMM code will own its own keys such as range, function or rate where coalescing is useful.
+DMM code owns DMM semantics. Raw SCPI program-message validation/query classification belongs in the generic SCPI layer and is shared by both instruments.
 
-Also extract/share any browser/server request-correlation or raw-SCPI plumbing that is currently scope-specific but is actually identical for both instruments.
-
-The raw SCPI console must always go through the selected instrument's scheduler.
+The raw SCPI console must always go through the selected instrument's scheduler/runtime serialization.
 
 ### Keep device-specific
 
@@ -52,7 +50,7 @@ Keep these separate:
 - `src/server/scope/**`
 - `src/server/dmm/**`
 - `src/shared/scope-types.ts`
-- new `src/shared/dmm-types.ts`
+- `src/shared/dmm-types.ts`
 - scope store/client facade
 - DMM store/client facade
 - DHO804 SCPI command mapping
@@ -104,20 +102,20 @@ Keep one browser/server WebSocket connection for the application shell.
 
 Route changes do not reconnect the browser WebSocket. Route components subscribe/unsubscribe instrument runtimes over the existing socket.
 
-The protocol should gain explicit instrument subscription messages plus DMM-specific messages. Generic request completion/failure and raw-SCPI result handling can be shared.
+The protocol has explicit instrument subscription messages plus DMM-specific messages. Generic request completion/failure and raw-SCPI result handling are shared.
 
 Scope commands are accepted only from sessions subscribed to the scope. DMM commands are accepted only from sessions subscribed to the DMM.
 
 ## Server configuration
 
-Use explicit configuration per registered instrument, for example:
+Use explicit configuration per registered instrument:
 
 - `RIGOL_SCOPE_HOST`
 - `RIGOL_SCOPE_PORT`
 - `RIGOL_DMM_HOST`
 - `RIGOL_DMM_PORT`
 
-This should be a hard cut from the existing single `RIGOL_HOST` / `RIGOL_PORT` configuration when implementation begins.
+This is a hard cut from the old single `RIGOL_HOST` / `RIGOL_PORT` configuration.
 
 ## DM858E backend shape
 
@@ -137,14 +135,14 @@ The runtime owns:
 - transport lifecycle while route-subscribed
 - identity validation
 - authoritative DMM state
-- reading acquisition
+- latest-reading snapshot acquisition
 - browser publication
 
 When the final route subscriber leaves, acquisition/polling stops and the SCPI transport closes.
 
 Do not add background logging lifecycle exceptions yet.
 
-Exact SCPI acquisition strategy must be verified against the Programming Guide and benchmarked on the physical DM858E. Do not assume repeated `READ?` is the optimal sustained acquisition path.
+The current `DATA:LAST?` path is deliberately a **latest-reading display snapshot**, not a uniquely identified sample stream. Exact sustained sample acquisition must be separately verified against the Programming Guide and benchmarked on the physical DM858E before statistics depend on it.
 
 ## Primary DM858E screen
 
@@ -152,11 +150,11 @@ The main screen should behave like a good bench DMM rather than a settings dashb
 
 Show prominently:
 
-- large stable primary reading
+- large stable primary reading or explicit unavailable/overload state
 - unit
 - selected function
-- active range / Auto
-- acquisition mode/resolution
+- active range / Auto when applicable
+- acquisition mode/resolution when applicable
 - optional secondary reading
 - connection state
 
@@ -184,11 +182,15 @@ Secondary-measurement choices must match combinations actually supported by the 
 
 Context-sensitive controls for:
 
-- Auto or fixed range
-- rate/resolution
+- Auto or fixed range when the selected function exposes range
+- rate/resolution when the selected function exposes the shared rate control
 - trigger source
 - samples per trigger
 - function-specific settings
+
+The shared DMM state uses `null` for range/rate when that control is not applicable. The UI must hide/disable the control rather than display a fabricated Auto/previous value.
+
+Range and rate writes carry the function context under which they were created. If another tab or the front panel changes function before the write is applied, the server rejects the stale request rather than reinterpreting it.
 
 Make the documented rate/resolution relationship explicit:
 
@@ -198,9 +200,9 @@ Make the documented rate/resolution relationship explicit:
 
 ## Host-side analysis
 
-Host-side analysis is useful because it avoids limitations in the meter's own UI.
+Host-side analysis remains desirable, but it must operate on a **verified sample stream**, not the latest-reading snapshot channel.
 
-Initial analysis can include:
+Once a one-event-per-physical-measurement acquisition path is established, analysis can include:
 
 - min
 - max
@@ -211,7 +213,7 @@ Initial analysis can include:
 - trend plot
 - limits
 
-Statistics should operate on the streamed readings rather than relying on the DM858E's built-in math screen, so they can remain available while the instrument is in Auto range.
+Until that sample path exists, the snapshot channel is display-only. Repeated identical snapshots do not prove there were no new measurements, and changed snapshots do not uniquely identify how many measurements occurred.
 
 Plot refresh rate should be independent from instrument acquisition rate.
 
@@ -224,9 +226,9 @@ No persistent/background logging is required in the current scope.
 3. Add the router, persistent instrument shell and `/dm858e` route.
 4. Add server instrument registration plus browser-session subscribe/unsubscribe/ref-count lifecycle.
 5. Split server configuration into scope and DMM endpoints and move scope runtime start/stop under subscription ownership.
-6. Add DM858E `*IDN?`, state model and one primary reading.
-7. Add function/range/rate controls.
-8. Add host-side statistics and trend plot.
+6. Add DM858E `*IDN?`, state model and latest-reading snapshot.
+7. Add function/range/rate controls with function-context rejection for stale range/rate requests.
+8. Establish and verify a true sample stream before adding host-side statistics and trend.
 9. Add trigger/sample configuration, secondary measurement and sensor workflows.
 10. Benchmark real DM858E SCPI acquisition throughput and adjust acquisition strategy.
 
@@ -242,11 +244,13 @@ No persistent/background logging is required in the current scope.
 
 ## Open verification items
 
-Before locking the exact DMM control model, verify against the current Programming Guide and then the physical unit:
+Before locking later DMM features, verify against the current Programming Guide and then the physical unit:
 
 - SCPI port and LAN connection behaviour
 - exact function/range/rate command/response forms
+- exact `DATA:LAST?` suffix forms beyond documented `VDC`
 - allowed secondary measurement combinations
-- best sustained reading acquisition strategy over LAN
-- behaviour when front-panel controls change during host streaming
+- a coherent one-event-per-measurement sample acquisition strategy for statistics/trends
+- best sustained acquisition throughput over LAN
+- behaviour when front-panel controls change during host use
 - which DMM state benefits from polling versus explicit readback

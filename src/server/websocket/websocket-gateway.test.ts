@@ -317,7 +317,7 @@ async function subscribe(
 }
 
 describe("WebSocketGateway", () => {
-  it("requires the v2 handshake before application messages", async () => {
+  it("requires the v3 handshake before application messages", async () => {
     const server = await createTestServer();
     const client = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
     server.clients.push(client);

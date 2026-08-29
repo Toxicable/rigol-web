@@ -11,8 +11,8 @@ import {
 } from "./websocket-protocol";
 
 describe("websocket protocol constants", () => {
-  it("keeps protocol version stable", () => {
-    expect(PROTOCOL_VERSION).toBe(2);
+  it("uses the hard-cut DMM snapshot protocol version", () => {
+    expect(PROTOCOL_VERSION).toBe(3);
   });
 
   it("keeps existing message type values stable and assigns instrument ranges", () => {
@@ -43,7 +43,7 @@ describe("websocket protocol constants", () => {
       MessageType.DmmConnected,
       MessageType.DmmState,
       MessageType.DmmDisconnected,
-      MessageType.DmmReading,
+      MessageType.DmmSnapshot,
       MessageType.DmmControlSet,
     ]).toEqual([25, 26, 30, 31, 40, 41, 42, 43, 50]);
   });
