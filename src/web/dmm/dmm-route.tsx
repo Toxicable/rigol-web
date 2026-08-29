@@ -1,6 +1,9 @@
 import { useEffect } from "react";
 
-import type { DmmControlChange } from "../../shared/dmm-types.js";
+import type {
+  DmmControlChange,
+  DmmReadingSnapshot,
+} from "../../shared/dmm-types.js";
 import { SupportedInstrument } from "../../shared/instrument-types.js";
 import { MessageType } from "../../shared/websocket-protocol.js";
 import { DmmControls } from "../components/dmm/dmm-controls.js";
@@ -19,6 +22,15 @@ import {
 
 interface DmmRouteProps {
   client: ScopeWebSocketClient;
+}
+
+interface DmmRouteViewProps {
+  client: ScopeWebSocketClient;
+  connection: DmmBrowserConnection;
+  latestReading: DmmReadingSnapshot | null;
+  pending: boolean;
+  controlError: string | null;
+  onControl(control: DmmControlChange): void;
 }
 
 export type DmmLifecycleClient = Pick<
@@ -91,6 +103,26 @@ export function DmmRoute({ client }: DmmRouteProps) {
   };
 
   return (
+    <DmmRouteView
+      client={client}
+      connection={connection}
+      latestReading={latestReading}
+      pending={pendingControl !== null}
+      controlError={controlError}
+      onControl={(control) => void applyControl(control)}
+    />
+  );
+}
+
+export function DmmRouteView({
+  client,
+  connection,
+  latestReading,
+  pending,
+  controlError,
+  onControl,
+}: DmmRouteViewProps) {
+  return (
     <>
       <header className="dmm-toolbar">
         <div>
@@ -110,8 +142,8 @@ export function DmmRoute({ client }: DmmRouteProps) {
             <DmmReading state={connection.state} snapshot={latestReading} />
             <DmmControls
               state={connection.state}
-              pending={pendingControl !== null}
-              onControl={(control) => void applyControl(control)}
+              pending={pending}
+              onControl={onControl}
             />
           </div>
           {controlError !== null ? (
