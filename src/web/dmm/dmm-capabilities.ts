@@ -1,3 +1,4 @@
+import { dm858eFixedRanges } from "../../shared/dm858e-capabilities.js";
 import {
   DmmAcquisitionRate,
   DmmMeasurementFunction,
@@ -25,13 +26,6 @@ export const dmmFunctionOptions: readonly DmmFunctionOption[] = [
   { value: DmmMeasurementFunction.Temperature, label: "Temperature", shortLabel: "Temp" },
 ];
 
-const dcVoltageRanges = [0.1, 1, 10, 100, 1_000] as const;
-const acVoltageRanges = [0.1, 1, 10, 100, 750] as const;
-const currentRanges = [1e-4, 1e-3, 1e-2, 1e-1, 1, 3] as const;
-const resistanceRanges = [100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000, 50_000_000] as const;
-const frequencyVoltageRanges = [0.1, 1, 10, 100, 750] as const;
-const capacitanceRanges = [1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3] as const;
-
 export function dmmFunctionLabel(value: DmmMeasurementFunction): string {
   const option = dmmFunctionOptions.find((candidate) => candidate.value === value);
   if (option === undefined) {
@@ -41,27 +35,7 @@ export function dmmFunctionLabel(value: DmmMeasurementFunction): string {
 }
 
 export function dmmFixedRanges(value: DmmMeasurementFunction): readonly number[] {
-  switch (value) {
-    case DmmMeasurementFunction.DcVoltage:
-      return dcVoltageRanges;
-    case DmmMeasurementFunction.AcVoltage:
-      return acVoltageRanges;
-    case DmmMeasurementFunction.DcCurrent:
-    case DmmMeasurementFunction.AcCurrent:
-      return currentRanges;
-    case DmmMeasurementFunction.Resistance2Wire:
-    case DmmMeasurementFunction.Resistance4Wire:
-      return resistanceRanges;
-    case DmmMeasurementFunction.Frequency:
-    case DmmMeasurementFunction.Period:
-      return frequencyVoltageRanges;
-    case DmmMeasurementFunction.Capacitance:
-      return capacitanceRanges;
-    case DmmMeasurementFunction.Continuity:
-    case DmmMeasurementFunction.Diode:
-    case DmmMeasurementFunction.Temperature:
-      return [];
-  }
+  return dm858eFixedRanges(value);
 }
 
 export function dmmRangeUnit(value: DmmMeasurementFunction): DmmUnit | null {
