@@ -11,6 +11,7 @@ import {
 } from "../../../shared/dmm-types.js";
 import {
   DmmControls,
+  dmmControlMatchesState,
   functionControlForSelection,
   rangeControlForState,
   rateControlForState,
@@ -55,6 +56,26 @@ describe("DMM controls", () => {
     });
   });
 
+  it("recognizes already-active controls as redundant", () => {
+    expect(dmmControlMatchesState(
+      dcVoltageState,
+      functionControlForSelection(DmmMeasurementFunction.DcVoltage),
+    )).toBe(true);
+    expect(dmmControlMatchesState(
+      dcVoltageState,
+      rangeControlForState(dcVoltageState, { mode: DmmRangeMode.Auto }),
+    )).toBe(true);
+    expect(dmmControlMatchesState(
+      dcVoltageState,
+      rateControlForState(dcVoltageState, DmmAcquisitionRate.Slow),
+    )).toBe(true);
+
+    expect(dmmControlMatchesState(
+      dcVoltageState,
+      functionControlForSelection(DmmMeasurementFunction.AcVoltage),
+    )).toBe(false);
+  });
+
   it("rejects controls that are not applicable to the current state", () => {
     expect(() => rangeControlForState(continuityState, { mode: DmmRangeMode.Auto }))
       .toThrow("does not expose range control");
@@ -86,5 +107,17 @@ describe("DMM controls", () => {
     expect(markup).toContain("1 kV");
     expect(markup).toContain("Slow · 5.5 digit");
     expect(markup).toContain("Fast · 4.5 digit");
+  });
+
+  it("disables the currently active choices so they cannot write the same setting again", () => {
+    const markup = renderToStaticMarkup(createElement(DmmControls, {
+      state: dcVoltageState,
+      pending: false,
+      onControl: () => undefined,
+    }));
+
+    expect(markup).toMatch(/aria-pressed="true" disabled=""[^>]*title="DC voltage"/);
+    expect(markup).toMatch(/aria-pressed="true" disabled=""[^>]*>Auto<\/button>/);
+    expect(markup).toMatch(/aria-pressed="true" disabled=""[^>]*>Slow · 5\.5 digit<\/button>/);
   });
 });
