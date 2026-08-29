@@ -1,3 +1,4 @@
+import { dm858eFixedRanges } from "../../shared/dm858e-capabilities.js";
 import {
   DmmAcquisitionRate,
   DmmMeasurementFunction,
@@ -46,13 +47,6 @@ interface ParsedLastReading {
 }
 
 type TemperatureUnit = "C" | "F" | "K";
-
-const dcVoltageRanges = [0.1, 1, 10, 100, 1_000] as const;
-const acVoltageRanges = [0.1, 1, 10, 100, 750] as const;
-const currentRanges = [1e-4, 1e-3, 1e-2, 1e-1, 1, 3] as const;
-const resistanceRanges = [100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000, 50_000_000] as const;
-const capacitanceRanges = [1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3] as const;
-const frequencyVoltageRanges = [0.1, 1, 10, 100, 750] as const;
 
 const noDataSentinel = 9.9e37;
 const operationConfigurationChanged = 256;
@@ -547,25 +541,26 @@ function configureCommandFor(value: DmmMeasurementFunction): string {
 }
 
 function rangeSpec(value: DmmMeasurementFunction): RangeSpec | null {
+  const values = dm858eFixedRanges(value);
   switch (value) {
     case DmmMeasurementFunction.DcVoltage:
-      return { command: "SENSe:VOLTage:DC:RANGe", values: dcVoltageRanges };
+      return { command: "SENSe:VOLTage:DC:RANGe", values };
     case DmmMeasurementFunction.AcVoltage:
-      return { command: "SENSe:VOLTage:AC:RANGe", values: acVoltageRanges };
+      return { command: "SENSe:VOLTage:AC:RANGe", values };
     case DmmMeasurementFunction.DcCurrent:
-      return { command: "SENSe:CURRent:DC:RANGe", values: currentRanges };
+      return { command: "SENSe:CURRent:DC:RANGe", values };
     case DmmMeasurementFunction.AcCurrent:
-      return { command: "SENSe:CURRent:AC:RANGe", values: currentRanges };
+      return { command: "SENSe:CURRent:AC:RANGe", values };
     case DmmMeasurementFunction.Resistance2Wire:
-      return { command: "SENSe:RESistance:RANGe", values: resistanceRanges };
+      return { command: "SENSe:RESistance:RANGe", values };
     case DmmMeasurementFunction.Resistance4Wire:
-      return { command: "SENSe:FRESistance:RANGe", values: resistanceRanges };
+      return { command: "SENSe:FRESistance:RANGe", values };
     case DmmMeasurementFunction.Frequency:
-      return { command: "SENSe:FREQuency:VOLTage:RANGe", values: frequencyVoltageRanges };
+      return { command: "SENSe:FREQuency:VOLTage:RANGe", values };
     case DmmMeasurementFunction.Period:
-      return { command: "SENSe:PERiod:VOLTage:RANGe", values: frequencyVoltageRanges };
+      return { command: "SENSe:PERiod:VOLTage:RANGe", values };
     case DmmMeasurementFunction.Capacitance:
-      return { command: "SENSe:CAPacitance:RANGe", values: capacitanceRanges };
+      return { command: "SENSe:CAPacitance:RANGe", values };
     case DmmMeasurementFunction.Continuity:
     case DmmMeasurementFunction.Diode:
     case DmmMeasurementFunction.Temperature:
