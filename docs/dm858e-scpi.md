@@ -33,7 +33,7 @@ Non-applicability is explicit in the shared contract:
 
 The backend does not send placeholder Auto ranges or carry an old rate through a function where those values have no meaning.
 
-For temperature, the driver reads `UNIT:TEMPerature?`. The Programming Guide defines the returned unit as `C`, `F`, or `K`. Browser-facing temperature snapshots are normalized to Celsius because the first shared DMM contract exposes `DmmUnit.Celsius`. Temperature snapshot transactions re-read the unit so a front-panel unit change cannot be converted using an older cached unit.
+For temperature, the driver reads `UNIT:TEMPerature?`. The Programming Guide defines the returned unit as `C`, `F`, or `K`. Browser-facing temperature values would be normalized to Celsius, but a numeric snapshot is published only when the backend also has an authoritative numeric measurement resolution for the same observation. A parameter such as `TEMP FRTD,385` is sensor configuration, not permission to treat `385` as a measurement resolution.
 
 ## Measurement function mapping
 
@@ -89,7 +89,9 @@ Programming Guide Table 3.14 defines:
 
 DC voltage, DC current, 2-wire resistance and 4-wire resistance expose direct `NPLC` commands, so the backend writes and reads the exact 20 / 5 / 0.4 PLC values.
 
-AC voltage/current speed is represented through the `CONFigure` resolution relationship from Table 3.14. Because `CONFigure:* <range>,<resolution>` also writes range, an AC rate-only request must not reuse a range captured by an earlier runtime state read. Inside the same Immediate scheduler operation that will perform `CONFigure:*`, the driver samples physical `RANGe:AUTO?` mode plus effective `RANGe?` repeatedly and requires two adjacent observations to agree on both mode and effective range before constructing the command. Up to three observations are allowed so a single front-panel transition can settle; if no adjacent pair is stable, the rate write fails without sending `CONFigure:*`. The driver then re-checks the measurement function immediately before the command. This prevents a mixed Auto/fixed observation, such as `AUTO? -> 1` followed by a front-panel change to fixed 100 V before `RANGe?`, from silently restoring Auto or an older fixed range.
+AC voltage/current speed is represented through the `CONFigure` resolution relationship from Table 3.14. Because `CONFigure:* <range>,<resolution>` also writes range, an AC rate-only request must not reuse a range captured by an earlier runtime state read. Inside the same Immediate scheduler operation that will perform `CONFigure:*`, the driver samples physical `RANGe:AUTO?` mode plus effective `RANGe?` repeatedly and requires two adjacent observations to agree on both mode and effective range before constructing the command. Up to three observations are allowed so a single front-panel transition can settle; if no adjacent pair is stable, the rate write fails without sending `CONFigure:*`. The driver then re-checks the measurement function immediately before the command.
+
+A concrete example is fixed 100 V AC Fast: Table 3.14 gives `100 V × 1e-3 = 0.1 V` configured resolution. A browser must not display a finer quantum simply because the JavaScript numeric value contains more digits.
 
 Continuity, diode, frequency, period, capacitance and temperature do not expose the shared three-rate control, so their `acquisitionRate` state is `null` and rate writes are rejected.
 
@@ -106,26 +108,54 @@ This boundary is deliberate. The Programming Guide defines:
 
 Those commands do not provide a coherent sample identity when queried independently. In particular, a point-count change cannot safely be paired with a separately queried `DATA:LAST?`, and raw SCPI can change the reading-memory count without creating a measurement. The backend therefore does **not** use `DATA:POINts?` to infer freshness and does not attach a browser sequence number to `DATA:LAST?`.
 
-A stable current snapshot can be published immediately, including an existing stopped/single-trigger reading present when the route first subscribes. The poller may suppress a byte-for-byte equivalent snapshot to reduce WebSocket traffic, but this is only display deduplication; it is not a claim that a new physical sample did or did not occur.
+`DmmPoller` does not own a retained snapshot or dedupe baseline. It forwards every non-null sampled observation to `DmmRuntime`. `DmmRuntime.currentSnapshot` is the single server-side latest-display owner and performs display dedupe plus subscriber replay. This one-owner rule is important because runtime-generated invalidation must immediately change the same baseline used for later dedupe.
 
-The active DMM runtime owns the latest applicable display snapshot for the lifetime of one connected instrument session. When another browser session subscribes while that runtime is already active, the registry invokes the runtime's subscriber-added hook after the gateway has sent the current DMM lifecycle message. The runtime then republishes its retained snapshot, so a second tab or reconnecting browser receives an unchanged stopped/stable reading without restarting the instrument session.
+A stable current snapshot can be published immediately, including an existing stopped/single-trigger reading present when the route first subscribes. When another browser session subscribes while that runtime is already active, the runtime republishes `currentSnapshot`, so a second tab or reconnecting browser receives the current stopped/stable display without restarting the instrument session.
 
 Snapshot state is session-scoped. Disconnect, stop, transport failure and session replacement clear the retained snapshot before a later session can replay anything.
 
-An authoritative measurement-function change invalidates a retained snapshot from the previous function immediately. The runtime publishes `DmmReadingKind.Unavailable` with `DmmReadingUnavailableReason.ConfigurationChanged`, the new function and its typed unit before any later valid `DATA:LAST?` snapshot replaces it. This prevents a previous function's numeric display from remaining current while `DATA:LAST?` is still unstable or suppressed during the transition.
+Every real `DmmStateStore` change invalidates a retained snapshot immediately, including same-function range or acquisition-rate changes. The runtime replaces `currentSnapshot` with `DmmReadingKind.Unavailable` / `ConfigurationChanged`, publishes the new state, then publishes the invalidation. Equivalent state replacements are suppressed by `DmmStateStore`, so unchanged periodic polls do not blank a valid reading.
+
+Because the invalidation updates the same runtime baseline used for dedupe, the next valid numeric reading is published even if its numeric value equals the pre-change value. There is no second poller cache that can suppress it.
 
 Host-side sample count, statistics and trend calculations must wait for a separately verified acquisition path that establishes one event per physical measurement. They must not infer samples from snapshot polling cadence or snapshot changes.
 
-### Snapshot validity
+### Snapshot validity and resolution ownership
 
 Each snapshot observation is one scheduler operation and reads:
 
-- `STATus:OPERation:CONDition?` before and after;
-- `SENSe:FUNCtion?` before and after `DATA:LAST?`;
-- `DATA:LAST?`;
-- `UNIT:TEMPerature?` inside the same transaction when temperature is active.
+1. `STATus:OPERation:CONDition?` before;
+2. `CONFigure?` before;
+3. `SENSe:FUNCtion?` before;
+4. `DATA:LAST?`;
+5. `SENSe:FUNCtion?` after;
+6. `CONFigure?` after;
+7. `UNIT:TEMPerature?` in the same transaction when temperature is active;
+8. `STATus:OPERation:CONDition?` after.
 
-Operation Status bit 8 (`256`) is documented as **Configuration change**. Function instability remains non-publishable: if the before/after function differs, or the authoritative function no longer matches the function expected by the poller, the observation returns no snapshot because its ownership cannot be attributed safely. If bit 8 is present while the function remains stable and authoritative, the driver instead publishes `Unavailable/ConfigurationChanged`. That explicit snapshot replaces any retained numeric display and resets display deduplication, so a later real measurement is published even when its numeric value equals the pre-change value.
+The before/after function must remain stable and match the function expected by the poller. The raw before/after `CONFigure?` response must also remain stable. A function or configuration transition during the observation returns no snapshot because the numeric value cannot safely be attributed to one configuration context.
+
+Operation Status bit 8 (`256`) is documented as **Configuration change**. If bit 8 is present while function/configuration ownership is stable, the driver publishes `Unavailable/ConfigurationChanged` rather than a numeric value.
+
+Protocol version 4 makes numeric display resolution part of the snapshot contract:
+
+```ts
+{
+  kind: DmmReadingKind.Value,
+  function,
+  value,
+  resolution,
+  unit,
+}
+```
+
+`resolution` is a positive finite measurement quantum authoritative for that stable observation. The browser rounds `value` to this quantum before engineering-prefix formatting. It does not reconstruct precision from digit class, acquisition-rate labels, numeric magnitude or `DmmState.range`.
+
+This also closes the Auto-range problem. Shared `DmmState.range` intentionally remains `{ mode: Auto }`, but the stable `CONFigure?` observation can still carry the effective configuration range/resolution. The numeric snapshot transports the resulting resolution quantum directly, so the browser does not need to guess which physical range Auto selected.
+
+The driver only emits a numeric `Value` when it can identify a trustworthy numeric resolution from that stable configuration observation. If it cannot, it publishes `Unavailable/ResolutionUnavailable` rather than fabricate precision. In particular, sensor configuration parameters such as the `385` in `TEMP FRTD,385` are not treated as measurement resolution. Continuity/diode/temperature therefore remain explicitly unavailable on the numeric display until a specification-backed or physically verified numeric resolution source is added.
+
+Runtime dedupe includes `resolution` as well as numeric `value`: an equal numeric value observed at a different resolution is a changed display snapshot and must be published.
 
 The Programming Guide gives `VDC` as an explicit `DATA:LAST?` function-token example. The backend does not invent other spellings. Unknown suffixes are treated as opaque and associated with a function only while `SENSe:FUNCtion?` is stable and authoritative; a token later observed under a different function is rejected.
 
@@ -184,6 +214,8 @@ Physical DM858E integration must verify at minimum:
 - LAN SCPI port/connection behavior;
 - exact real-instrument response spelling for every supported state query;
 - exact `DATA:LAST?` function suffixes beyond the guide's `VDC` example;
+- `CONFigure?` effective range/resolution behavior under fixed and Auto range for every function that currently emits numeric snapshots;
+- whether continuity, diode and temperature expose a separate authoritative numeric resolution source suitable for enabling numeric browser display;
 - a measurement-correlated overload/open-circuit representation for every supported function;
 - a coherent acquisition path if the frontend needs sample count/statistics/trends rather than only latest-value display;
 - sustained acquisition throughput for that future sample path;
