@@ -164,6 +164,7 @@ describe("DM858E route lifecycle", () => {
         kind: DmmReadingKind.Value,
         function: DmmMeasurementFunction.DcVoltage,
         value: 12.34,
+        resolution: 0.001,
         unit: DmmUnit.Volts,
       },
     });
@@ -185,6 +186,7 @@ describe("DM858E route lifecycle", () => {
         kind: DmmReadingKind.Value,
         function: DmmMeasurementFunction.DcVoltage,
         value: 9.9,
+        resolution: 0.001,
         unit: DmmUnit.Volts,
       },
     });
@@ -206,6 +208,7 @@ describe("DM858E route lifecycle", () => {
         kind: DmmReadingKind.Value,
         function: DmmMeasurementFunction.DcVoltage,
         value: 1,
+        resolution: 0.001,
         unit: DmmUnit.Volts,
       },
     });
@@ -344,6 +347,7 @@ describe("DM858E route lifecycle", () => {
         kind: DmmReadingKind.Value,
         function: DmmMeasurementFunction.DcVoltage,
         value: 12.34,
+        resolution: 0.001,
         unit: DmmUnit.Volts,
       },
       pending: false,
