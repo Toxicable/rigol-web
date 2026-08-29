@@ -15,9 +15,10 @@ The current implementation includes:
 - a separate Zustand DMM store with explicit browser-transport, runtime-waiting, instrument-disconnected and connected states;
 - route-owned subscribe/unsubscribe lifecycle binding to the shared browser WebSocket;
 - a stable tabular primary-reading display with engineering-unit formatting and explicit unavailable/overload states;
-- conservative reading precision: values are never padded with synthetic trailing significant digits, and functions with authoritative Slow/Medium/Fast state are capped to the corresponding 5.5/4.5-digit class;
+- conservative reading precision from shared DM858E capability metadata: values are never padded with synthetic trailing significant digits; variable-rate functions use the Slow 5.5-digit / Medium-Fast 4.5-digit ceilings, while fixed-resolution capacitance, continuity/diode, frequency/period and temperature use their documented 3.5/4.5/5.5-digit classes;
 - stale-function snapshot rejection in both the store and presentation layer;
 - immediate local invalidation of a retained numeric reading whenever authoritative function, range or rate context changes, including same-function range/rate changes;
+- runtime ownership that replaces any retained current snapshot with explicit `Unavailable/ConfigurationChanged` on every real `DmmStateStore` change before that snapshot can be replayed to a new subscriber;
 - lifecycle-generation plus request-token ownership for pending controls so completion/failure from an old DMM session or old route mount cannot mutate a newer request;
 - direct controls for every shared DM858E measurement function;
 - typed Auto/fixed range choices from the single shared `src/shared/dm858e-capabilities.ts` source used by both frontend and backend, including the 3 A current maximum and 1 mF capacitance maximum;
@@ -27,7 +28,7 @@ The current implementation includes:
 - control-failure presentation while normal backend polling supplies authoritative follow-up state;
 - reuse of the shared instrument-aware SCPI console, targeted to `DM858E` with a DMM-specific prompt;
 - responsive desktop/lab and narrow-window layouts;
-- focused store, lifecycle, control-generation, rendered-control and reading-format/presentation tests, including old-session/old-route completion races and same-function context invalidation.
+- focused store, lifecycle, control-generation, rendered-control, runtime snapshot, WebSocket replay and reading-format/presentation tests.
 
 The snapshot channel remains display-only. No statistics, history, persistence, CSV export or logging UI has been added.
 
@@ -74,7 +75,7 @@ DM858E route component(s)
 DMM-specific tests/styles
 ```
 
-The server driver may consume shared typed device capabilities, but SCPI command strings, parsing and instrument behavior stay server-only.
+The server driver/runtime may consume shared typed device capabilities and enforce snapshot ownership, but SCPI command strings, parsing and instrument behavior stay server-only.
 
 Reuse shared app-shell/router code. Do not redesign the global router, subscription protocol or server lifecycle.
 
@@ -98,6 +99,8 @@ Pending control completion/failure must be owned by the route/session generation
 
 Any authoritative change to function, range or rate invalidates a retained numeric reading before the new metadata is rendered with it. Equivalent periodic state snapshots may retain the reading.
 
+This invariant also applies to the server runtime's retained `currentSnapshot`: a real `DmmStateStore` change must replace it with `Unavailable/ConfigurationChanged` before `subscriberAdded()` can replay it. A second browser subscription must never resurrect a numeric reading owned by the previous range/rate context.
+
 ## Primary reading presentation
 
 The primary reading is the visual focus.
@@ -114,7 +117,8 @@ Requirements:
 - rate/resolution visible only when `state.acquisitionRate !== null`
 - disconnected/connecting state cannot be mistaken for a valid reading
 - do not append trailing zeroes that imply precision not carried by the measurement value
-- where the authoritative state exposes Slow/Medium/Fast, do not display more significant digits than the corresponding 5.5/4.5-digit class
+- variable-rate DCV/DCI/ACV/ACI/2WR/4WR must not exceed the authoritative Slow 5.5-digit or Medium/Fast 4.5-digit class
+- fixed-resolution functions use the DM858 Series User Guide §5.2 class: temperature and frequency/period 5.5 digit, continuity/diode 4.5 digit, capacitance 3.5 digit
 
 The web UI should specifically avoid the owner-reported DM858 numeric-layout jumping problem.
 
@@ -222,8 +226,11 @@ Cover at least:
 - connection/disconnection rendering
 - stable primary value formatting for positive, negative, small, large and exponent-form values
 - Slow versus Medium/Fast precision caps do not manufacture significant digits
+- fixed-resolution capacitance, continuity/diode, frequency/period and temperature obey their shared 3.5/4.5/5.5-digit ceilings without adding trailing zeroes
 - unavailable snapshot clears/replaces the prior numeric presentation
 - same-function range/rate state changes invalidate a retained numeric reading immediately
+- a second subscriber after a same-function state change receives/replays `Unavailable/ConfigurationChanged`, never the pre-change numeric snapshot
+- equivalent DMM state polls preserve a valid current snapshot
 - function selection messages
 - range selection messages include the current function context
 - rate selection messages include the current function context
@@ -246,4 +253,4 @@ pnpm build
 
 ## Completion criteria
 
-This stream is complete when `/dm858e` is a usable fake-data DMM interface driven entirely through the shared protocol/contracts, with no dependency on the physical DM858E and no new backend instrument behavior required. The small backend import of shared capability data is allowed so device limits have one source of truth.
+This stream is complete when `/dm858e` is a usable fake-data DMM interface driven entirely through the shared protocol/contracts, with no dependency on the physical DM858E and no new backend instrument behavior required beyond enforcing ownership of the shared latest-reading snapshot. The small backend imports of shared capability data are allowed so device limits and display-resolution policy have one source of truth.
