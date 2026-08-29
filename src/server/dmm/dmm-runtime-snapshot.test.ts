@@ -33,6 +33,7 @@ const valueSnapshot: DmmReadingSnapshot = {
   kind: DmmReadingKind.Value,
   function: DmmMeasurementFunction.DcVoltage,
   value: 1.25,
+  resolution: 1e-5,
   unit: DmmUnit.Volts,
 };
 
@@ -128,6 +129,19 @@ describe("DmmRuntime current snapshot lifecycle", () => {
 
     expect(snapshots).toEqual([valueSnapshot]);
     expect(internals.currentSnapshot).toEqual(valueSnapshot);
+  });
+
+  it("publishes an equal numeric value when its authoritative resolution changes", () => {
+    const { snapshots, stateStore, internals } = createHarness();
+    const changedResolution: DmmReadingSnapshot = {
+      ...valueSnapshot,
+      resolution: 0.001,
+    };
+
+    internals.acceptSnapshot(stateStore, changedResolution);
+
+    expect(snapshots).toEqual([valueSnapshot, changedResolution]);
+    expect(internals.currentSnapshot).toEqual(changedResolution);
   });
 
   it("publishes the same numeric value again after a same-function state change", async () => {
