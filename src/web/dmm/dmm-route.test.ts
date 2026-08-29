@@ -4,10 +4,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   DmmAcquisitionRate,
+  DmmControlKind,
   DmmMeasurementFunction,
   DmmRangeMode,
   DmmReadingKind,
   DmmUnit,
+  type DmmControlChange,
   type DmmInfo,
   type DmmState,
 } from "../../shared/dmm-types.js";
@@ -24,7 +26,9 @@ import {
 } from "../websocket-client.js";
 import {
   DmmRouteView,
+  applyDmmControl,
   bindDmmRoute,
+  type DmmControlClient,
   type DmmLifecycleClient,
 } from "./dmm-route.js";
 import { DmmBrowserConnectionKind, useDmmStore } from "./dmm-store.js";
@@ -85,6 +89,44 @@ class FakeDmmLifecycleClient implements DmmLifecycleClient {
   public emitDmm(message: DmmLifecycleMessage): void {
     this.dmmListener?.(message);
   }
+}
+
+interface Deferred {
+  readonly promise: Promise<void>;
+  resolve(): void;
+  reject(error: Error): void;
+}
+
+function deferred(): Deferred {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
+function queuedControlClient(...operations: Deferred[]): {
+  readonly client: DmmControlClient;
+  readonly sent: DmmControlChange[];
+} {
+  const sent: DmmControlChange[] = [];
+  let next = 0;
+  return {
+    sent,
+    client: {
+      setDmmControl: (control) => {
+        sent.push(control);
+        const operation = operations[next];
+        next += 1;
+        if (operation === undefined) {
+          throw new Error("Missing deferred control operation");
+        }
+        return operation.promise;
+      },
+    },
+  };
 }
 
 beforeEach(() => {
@@ -185,6 +227,86 @@ describe("DM858E route lifecycle", () => {
     });
   });
 
+  it("ignores an old-session rejection after a new session control begins", async () => {
+    const first = deferred();
+    const second = deferred();
+    const { client } = queuedControlClient(first, second);
+    useDmmStore.getState().setConnected(info, dcState);
+
+    const oldRequest = applyDmmControl(client, {
+      kind: DmmControlKind.Range,
+      function: DmmMeasurementFunction.DcVoltage,
+      value: { mode: DmmRangeMode.Fixed, value: 10 },
+    });
+
+    useDmmStore.getState().setConnected(info, dcState);
+    const newRequest = applyDmmControl(client, {
+      kind: DmmControlKind.AcquisitionRate,
+      function: DmmMeasurementFunction.DcVoltage,
+      value: DmmAcquisitionRate.Fast,
+    });
+
+    first.reject(new Error("old session failed"));
+    await oldRequest;
+
+    expect(useDmmStore.getState().pendingControl?.control).toEqual({
+      kind: DmmControlKind.AcquisitionRate,
+      function: DmmMeasurementFunction.DcVoltage,
+      value: DmmAcquisitionRate.Fast,
+    });
+    expect(useDmmStore.getState().controlError).toBeNull();
+
+    second.resolve();
+    await newRequest;
+    expect(useDmmStore.getState().pendingControl).toBeNull();
+  });
+
+  it("ignores an old-route completion after unmount and remount", async () => {
+    const first = deferred();
+    const second = deferred();
+    const { client } = queuedControlClient(first, second);
+    useDmmStore.getState().setConnected(info, dcState);
+
+    const oldRequest = applyDmmControl(client, {
+      kind: DmmControlKind.Range,
+      function: DmmMeasurementFunction.DcVoltage,
+      value: { mode: DmmRangeMode.Fixed, value: 10 },
+    });
+
+    useDmmStore.getState().setAwaitingInstrument();
+    useDmmStore.getState().setConnected(info, dcState);
+    const newRequest = applyDmmControl(client, {
+      kind: DmmControlKind.AcquisitionRate,
+      function: DmmMeasurementFunction.DcVoltage,
+      value: DmmAcquisitionRate.Fast,
+    });
+
+    first.resolve();
+    await oldRequest;
+    expect(useDmmStore.getState().pendingControl?.control).toEqual({
+      kind: DmmControlKind.AcquisitionRate,
+      function: DmmMeasurementFunction.DcVoltage,
+      value: DmmAcquisitionRate.Fast,
+    });
+
+    second.resolve();
+    await newRequest;
+  });
+
+  it("does not send a control that already matches authoritative state", async () => {
+    const operation = deferred();
+    const { client, sent } = queuedControlClient(operation);
+    useDmmStore.getState().setConnected(info, dcState);
+
+    await applyDmmControl(client, {
+      kind: DmmControlKind.Function,
+      value: DmmMeasurementFunction.DcVoltage,
+    });
+
+    expect(sent).toEqual([]);
+    expect(useDmmStore.getState().pendingControl).toBeNull();
+  });
+
   it("renders disconnected transport state without a plausible measurement", () => {
     const client = new FakeDmmLifecycleClient({
       kind: BrowserTransportKind.Disconnected,
@@ -231,7 +353,8 @@ describe("DM858E route lifecycle", () => {
 
     expect(markup).toContain("Connected");
     expect(markup).toContain("Latest reading");
-    expect(markup).toContain("12.340000");
+    expect(markup).toContain(">12.34<");
+    expect(markup).not.toContain("12.3400");
     expect(markup).toContain("placeholder=\"DATA:LAST?\"");
   });
 });
