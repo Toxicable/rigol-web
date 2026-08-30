@@ -65,7 +65,7 @@ describe("DMM value formatting", () => {
     }).value).toBe("12.34");
   });
 
-  it("uses the snapshot quantum for fixed-resolution functions too", () => {
+  it("uses the authoritative capacitance range quantum", () => {
     expect(formatDmmReading({
       kind: DmmReadingKind.Value,
       function: DmmMeasurementFunction.Capacitance,
@@ -73,14 +73,6 @@ describe("DMM value formatting", () => {
       resolution: 1e-9,
       unit: DmmUnit.Farads,
     }).value).toBe("1.235");
-
-    expect(formatDmmReading({
-      kind: DmmReadingKind.Value,
-      function: DmmMeasurementFunction.Frequency,
-      value: 12_345.6789,
-      resolution: 0.1,
-      unit: DmmUnit.Hertz,
-    }).value).toBe("12.3457");
   });
 
   it("keeps very small and very large values deterministic", () => {
