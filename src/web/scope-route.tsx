@@ -17,13 +17,20 @@ interface ScopeRouteProps {
   controller: WaveformController;
 }
 
+export type ScopeLifecycleClient = Pick<
+  ScopeWebSocketClient,
+  "subscribeInstrument" | "unsubscribeInstrument"
+>;
+
+export function bindScopeRoute(client: ScopeLifecycleClient): () => void {
+  client.subscribeInstrument(SupportedInstrument.Dho804);
+  return () => client.unsubscribeInstrument(SupportedInstrument.Dho804);
+}
+
 export function ScopeRoute({ client, controller }: ScopeRouteProps) {
   const connection = useScopeStore((state) => state.connection);
 
-  useEffect(() => {
-    client.subscribeInstrument(SupportedInstrument.Dho804);
-    return () => client.unsubscribeInstrument(SupportedInstrument.Dho804);
-  }, [client]);
+  useEffect(() => bindScopeRoute(client), [client]);
 
   useEffect(() => {
     if (connection.kind === BrowserConnectionKind.ScopeConnected) {
