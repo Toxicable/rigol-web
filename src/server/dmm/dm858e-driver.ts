@@ -1,4 +1,9 @@
-import { dm858eFixedRanges } from "../../shared/dm858e-capabilities.js";
+import {
+  Dm858eReadingResolutionSource,
+  dm858eCapacitanceResolutionRatio,
+  dm858eFixedRanges,
+  dm858eReadingResolutionSource,
+} from "../../shared/dm858e-capabilities.js";
 import {
   DmmAcquisitionRate,
   DmmMeasurementFunction,
@@ -214,6 +219,10 @@ export class Dm858eDriver {
         );
         const configurationTextBefore = (await transport.queryText("CONFigure?")).trim();
         const configurationBefore = parseConfiguration(configurationTextBefore);
+        const resolutionBefore = await readSnapshotResolutionObservation(
+          transport,
+          configurationBefore,
+        );
         const functionBefore = parseFunctionToken(
           await transport.queryText("SENSe:FUNCtion?"),
         );
@@ -223,6 +232,10 @@ export class Dm858eDriver {
         );
         const configurationTextAfter = (await transport.queryText("CONFigure?")).trim();
         const configurationAfter = parseConfiguration(configurationTextAfter);
+        const resolutionAfter = await readSnapshotResolutionObservation(
+          transport,
+          configurationAfter,
+        );
 
         let readingTemperatureUnit = this.temperatureUnit;
         if (functionAfter === DmmMeasurementFunction.Temperature) {
@@ -242,7 +255,8 @@ export class Dm858eDriver {
           functionAfter !== measurementFunction ||
           configurationBefore.function !== functionBefore ||
           configurationAfter.function !== functionAfter ||
-          configurationTextBefore !== configurationTextAfter
+          configurationTextBefore !== configurationTextAfter ||
+          !sameResolutionObservation(resolutionBefore, resolutionAfter)
         ) {
           return null;
         }
@@ -282,8 +296,7 @@ export class Dm858eDriver {
         const value = functionAfter === DmmMeasurementFunction.Temperature
           ? temperatureToCelsius(parsed.value, readingTemperatureUnit)
           : parsed.value;
-        const resolution = snapshotResolution(functionAfter, configurationAfter);
-        if (resolution === null) {
+        if (resolutionAfter === null) {
           return {
             kind: DmmReadingKind.Unavailable,
             function: functionAfter,
@@ -296,7 +309,7 @@ export class Dm858eDriver {
           kind: DmmReadingKind.Value,
           function: functionAfter,
           value,
-          resolution,
+          resolution: resolutionAfter,
           unit,
         };
       },
@@ -481,6 +494,32 @@ async function readAcquisitionRate(
   return null;
 }
 
+async function readSnapshotResolutionObservation(
+  transport: ScpiTransport,
+  configuration: ParsedConfiguration,
+): Promise<number | null> {
+  switch (dm858eReadingResolutionSource(configuration.function)) {
+    case Dm858eReadingResolutionSource.Configure:
+      return configuration.resolution ?? null;
+    case Dm858eReadingResolutionSource.CapacitanceRange: {
+      const effectiveRange = parsePositiveNumber(
+        await transport.queryText("SENSe:CAPacitance:RANGe?"),
+        "capacitance range",
+      );
+      return effectiveRange * dm858eCapacitanceResolutionRatio;
+    }
+    case Dm858eReadingResolutionSource.Unverified:
+      return null;
+  }
+}
+
+function sameResolutionObservation(left: number | null, right: number | null): boolean {
+  if (left === null || right === null) {
+    return left === right;
+  }
+  return nearlyEqual(left, right);
+}
+
 function parseConfiguration(value: string): ParsedConfiguration {
   const trimmed = value.trim();
   const separator = trimmed.search(/\s/);
@@ -660,40 +699,6 @@ function rateFromResolution(range: number, resolution: number): DmmAcquisitionRa
     return DmmAcquisitionRate.Fast;
   }
   throw new Error(`Unsupported DM858E resolution/range ratio: ${ratio}`);
-}
-
-function snapshotResolution(
-  measurementFunction: DmmMeasurementFunction,
-  configuration: ParsedConfiguration,
-): number | null {
-  if (
-    configuration.resolution === undefined ||
-    !configuredResolutionIsMeasurementResolution(measurementFunction)
-  ) {
-    return null;
-  }
-  return configuration.resolution;
-}
-
-function configuredResolutionIsMeasurementResolution(
-  measurementFunction: DmmMeasurementFunction,
-): boolean {
-  switch (measurementFunction) {
-    case DmmMeasurementFunction.DcVoltage:
-    case DmmMeasurementFunction.AcVoltage:
-    case DmmMeasurementFunction.DcCurrent:
-    case DmmMeasurementFunction.AcCurrent:
-    case DmmMeasurementFunction.Resistance2Wire:
-    case DmmMeasurementFunction.Resistance4Wire:
-    case DmmMeasurementFunction.Frequency:
-    case DmmMeasurementFunction.Period:
-    case DmmMeasurementFunction.Capacitance:
-      return true;
-    case DmmMeasurementFunction.Continuity:
-    case DmmMeasurementFunction.Diode:
-    case DmmMeasurementFunction.Temperature:
-      return false;
-  }
 }
 
 function requireSupportedRange(
