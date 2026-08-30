@@ -2,9 +2,10 @@
 
 This document records the specification-backed choices used by the first Rigol DM858E backend implementation.
 
-Primary specification:
+Primary specifications:
 
 - Rigol, **DM858 Series Programming Guide**: https://download.rigol.com/en/Manual/Digital%20Multimeters/DM858/DM858_ProgrammingGuide_EN.pdf
+- Rigol, **DM858 Series User Guide**: https://download.rigol.com/en/Manual/Digital%20Multimeters/DM858/DM858_UserGuide_EN.pdf
 
 The DM858 and DM858E share the command set, but they do not share every range/capability. The backend validates the DM858E subset rather than accepting the larger DM858 limits.
 
@@ -77,6 +78,8 @@ Important DM858E limits from the guide:
 
 Continuity, diode and temperature have no first-pass numeric `DmmRange`; their shared `range` state is `null` and range writes are rejected.
 
+Frequency and period expose a programmable **input-voltage** range. That range is not a Hz/s measurement range and must never be repurposed as a primary-reading resolution source.
+
 ## Acquisition-rate mapping
 
 Programming Guide Table 3.14 defines:
@@ -122,18 +125,20 @@ Host-side sample count, statistics and trend calculations must wait for a separa
 
 ### Snapshot validity and resolution ownership
 
-Each snapshot observation is one scheduler operation and reads:
+Each snapshot observation is one scheduler operation. The common ownership checks read:
 
 1. `STATus:OPERation:CONDition?` before;
 2. `CONFigure?` before;
-3. `SENSe:FUNCtion?` before;
-4. `DATA:LAST?`;
-5. `SENSe:FUNCtion?` after;
-6. `CONFigure?` after;
-7. `UNIT:TEMPerature?` in the same transaction when temperature is active;
-8. `STATus:OPERation:CONDition?` after.
+3. function-specific resolution context before, when required;
+4. `SENSe:FUNCtion?` before;
+5. `DATA:LAST?`;
+6. `SENSe:FUNCtion?` after;
+7. `CONFigure?` after;
+8. function-specific resolution context after, when required;
+9. `UNIT:TEMPerature?` in the same transaction when temperature is active;
+10. `STATus:OPERation:CONDition?` after.
 
-The before/after function must remain stable and match the function expected by the poller. The raw before/after `CONFigure?` response must also remain stable. A function or configuration transition during the observation returns no snapshot because the numeric value cannot safely be attributed to one configuration context.
+The before/after function must remain stable and match the function expected by the poller. The raw before/after `CONFigure?` response must also remain stable. Any additional function-specific resolution context must also agree before/after. A function, configuration or effective-resolution transition during the observation returns no snapshot because the numeric value cannot safely be attributed to one context.
 
 Operation Status bit 8 (`256`) is documented as **Configuration change**. If bit 8 is present while function/configuration ownership is stable, the driver publishes `Unavailable/ConfigurationChanged` rather than a numeric value.
 
@@ -151,9 +156,20 @@ Protocol version 4 makes numeric display resolution part of the snapshot contrac
 
 `resolution` is a positive finite measurement quantum authoritative for that stable observation. The browser rounds `value` to this quantum before engineering-prefix formatting. It does not reconstruct precision from digit class, acquisition-rate labels, numeric magnitude or `DmmState.range`.
 
-This also closes the Auto-range problem. Shared `DmmState.range` intentionally remains `{ mode: Auto }`, but the stable `CONFigure?` observation can still carry the effective configuration range/resolution. The numeric snapshot transports the resulting resolution quantum directly, so the browser does not need to guess which physical range Auto selected.
+Resolution ownership is explicitly per function in `src/shared/dm858e-capabilities.ts`:
 
-The driver only emits a numeric `Value` when it can identify a trustworthy numeric resolution from that stable configuration observation. If it cannot, it publishes `Unavailable/ResolutionUnavailable` rather than fabricate precision. In particular, sensor configuration parameters such as the `385` in `TEMP FRTD,385` are not treated as measurement resolution. Continuity/diode/temperature therefore remain explicitly unavailable on the numeric display until a specification-backed or physically verified numeric resolution source is added.
+| Function group | Authoritative numeric-resolution source |
+| --- | --- |
+| DCV, ACV, DCI, ACI, 2WR, 4WR | `CONFigure?` resolution field |
+| Capacitance | effective `SENSe:CAPacitance:RANGe?` × `1e-3` |
+| Frequency, period | unverified; numeric snapshot unavailable |
+| Continuity, diode, temperature | unverified; numeric snapshot unavailable |
+
+For capacitance, Programming Guide §3.10.1 documents `CONFigure?` as range-only (`CAP <range>`), not range+resolution. The User Guide capacitance table expresses the ranges as `1.000 nF`, `10.00 nF`, `100.0 nF`, `1.000 µF`, and so on. Those 3.5-digit range displays establish a least-significant quantum of `1e-3 × effective capacitance range`. The snapshot transaction therefore reads `SENSe:CAPacitance:RANGe?` before and after `DATA:LAST?`; a range transition discards the observation. This also handles capacitance Auto range without guessing in the browser.
+
+Programming Guide §3.10.6 and §3.10.8 document `CONFigure?` as exactly `FREQ` and `PER` for frequency and period. The guide does not expose a measurement range/resolution field there. The programmable frequency/period voltage range is input conditioning, not Hz/s resolution. The User Guide's 5.5-digit class alone is not promoted into a fabricated numeric quantum. Frequency and period therefore publish `Unavailable/ResolutionUnavailable` until a specification-backed or physically verified resolution source is established.
+
+The same conservative rule remains for continuity, diode and temperature. Sensor configuration parameters such as the `385` in `TEMP FRTD,385` are not measurement resolution.
 
 Runtime dedupe includes `resolution` as well as numeric `value`: an equal numeric value observed at a different resolution is a changed display snapshot and must be published.
 
@@ -214,7 +230,9 @@ Physical DM858E integration must verify at minimum:
 - LAN SCPI port/connection behavior;
 - exact real-instrument response spelling for every supported state query;
 - exact `DATA:LAST?` function suffixes beyond the guide's `VDC` example;
-- `CONFigure?` effective range/resolution behavior under fixed and Auto range for every function that currently emits numeric snapshots;
+- `CONFigure?` effective range/resolution behavior under fixed and Auto range for functions that report resolution;
+- capacitance `RANGe?` behavior under Auto while reading `DATA:LAST?`;
+- whether frequency/period expose any separate authoritative Hz/s resolution source suitable for enabling numeric browser display;
 - whether continuity, diode and temperature expose a separate authoritative numeric resolution source suitable for enabling numeric browser display;
 - a measurement-correlated overload/open-circuit representation for every supported function;
 - a coherent acquisition path if the frontend needs sample count/statistics/trends rather than only latest-value display;
