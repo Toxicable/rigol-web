@@ -14,16 +14,15 @@ Initial integration audit confirms the merged server already constructs `DmmRunt
 
 Current automated integration coverage includes:
 
-- `src/server/instruments/route-lifecycle.integration.test.ts`: one-session DHO804/DM858E route switching, shared two-tab scope lifetime, independent scope+DMM tabs, disconnected-session cleanup, and rapid switching convergence;
+- `src/web/instrument-lifecycle.integration.test.ts`: actual `bindScopeRoute` / `bindDmmRoute` subscriptions through `ScopeWebSocketClient`, protocol handshake, real WebSocket transport, `WebSocketGateway`, `InstrumentRegistry`, and runtime spies; covers scope -> DMM -> scope switching, shared two-tab scope lifetime, independent simultaneous scope+DMM tabs, socket-close cleanup, and reconnect convergence to the browser client's final desired subscription set;
 - `src/server/http-handler.test.ts`: direct `/dm858e` production SPA navigation without turning arbitrary missing assets into SPA responses;
-- existing WebSocket gateway tests: protocol-gated subscriptions, one shared scope runtime across subscribers, subscription-required commands, and instrument-targeted raw SCPI.
+- existing `instrument-registry.test.ts`: delayed start/stop reconciliation races and first/last-subscriber ownership remain unit-level registry coverage rather than being duplicated by the integration harness.
 
 Repository mechanical-gate execution remains `UNKNOWN` in environments that cannot resolve `github.com`; do not treat the presence of tests as a passing `pnpm typecheck`, `pnpm test`, or `pnpm build` result. Physical DM858E/DHO804 verification remains required.
 
 Remaining stream-E work is deliberately verification-led:
 
 - run the normal repository mechanical gates;
-- exercise the complete route/subscription lifecycle against both runtimes;
 - verify the documented DM858E SCPI assumptions on the physical instrument;
 - measure sustained reading throughput and interactive control latency in Slow/Medium/Fast;
 - add only regression fixes/tests for concrete mismatches found during those checks;
