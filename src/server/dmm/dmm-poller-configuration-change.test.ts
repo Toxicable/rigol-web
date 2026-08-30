@@ -24,6 +24,7 @@ const valueSnapshot: DmmReadingSnapshot = {
   kind: DmmReadingKind.Value,
   function: DmmMeasurementFunction.DcVoltage,
   value: 1.25,
+  resolution: 1e-5,
   unit: DmmUnit.Volts,
 };
 
@@ -35,11 +36,7 @@ const configurationChangedSnapshot: DmmReadingSnapshot = {
 };
 
 class SnapshotSequenceDriver {
-  private readonly snapshots: DmmReadingSnapshot[] = [
-    valueSnapshot,
-    configurationChangedSnapshot,
-    valueSnapshot,
-  ];
+  public constructor(private readonly snapshots: DmmReadingSnapshot[]) {}
 
   public async readDmmState(): Promise<DmmState> {
     return state;
@@ -50,32 +47,49 @@ class SnapshotSequenceDriver {
   }
 }
 
-describe("DmmPoller configuration-change dedupe", () => {
-  it("publishes Value X -> ConfigurationChanged -> the same Value X again", async () => {
-    const published: DmmReadingSnapshot[] = [];
-    let poller!: DmmPoller;
-    poller = new DmmPoller({
-      driver: new SnapshotSequenceDriver() as unknown as Dm858eDriver,
-      stateStore: new DmmStateStore(state),
-      readingIntervalMs: 0,
-      stateIntervalMs: 60_000,
-      publishSnapshot: (snapshot) => {
-        published.push(snapshot);
-        if (published.length === 3) {
-          poller.stop();
-        }
-      },
-      reportError: (error) => {
-        throw error;
-      },
-    });
+async function collectSnapshots(sequence: DmmReadingSnapshot[]): Promise<DmmReadingSnapshot[]> {
+  const published: DmmReadingSnapshot[] = [];
+  let poller!: DmmPoller;
+  poller = new DmmPoller({
+    driver: new SnapshotSequenceDriver([...sequence]) as unknown as Dm858eDriver,
+    stateStore: new DmmStateStore(state),
+    readingIntervalMs: 0,
+    stateIntervalMs: 60_000,
+    publishSnapshot: (snapshot) => {
+      published.push(snapshot);
+      if (published.length === sequence.length) {
+        poller.stop();
+      }
+    },
+    reportError: (error) => {
+      throw error;
+    },
+  });
 
-    poller.start();
-    await poller.waitForIdle();
+  poller.start();
+  await poller.waitForIdle();
+  return published;
+}
 
-    expect(published).toEqual([
+describe("DmmPoller snapshot forwarding", () => {
+  it("forwards Value X -> ConfigurationChanged -> the same Value X again", async () => {
+    expect(await collectSnapshots([
       valueSnapshot,
       configurationChangedSnapshot,
+      valueSnapshot,
+    ])).toEqual([
+      valueSnapshot,
+      configurationChangedSnapshot,
+      valueSnapshot,
+    ]);
+  });
+
+  it("forwards equal snapshots so runtime owns dedupe and replay state", async () => {
+    expect(await collectSnapshots([
+      valueSnapshot,
+      valueSnapshot,
+    ])).toEqual([
+      valueSnapshot,
       valueSnapshot,
     ]);
   });

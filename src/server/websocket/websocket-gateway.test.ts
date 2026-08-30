@@ -317,7 +317,7 @@ async function subscribe(
 }
 
 describe("WebSocketGateway", () => {
-  it("requires the v3 handshake before application messages", async () => {
+  it("requires the protocol handshake before application messages", async () => {
     const server = await createTestServer();
     const client = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
     server.clients.push(client);
@@ -432,197 +432,215 @@ describe("WebSocketGateway", () => {
       ],
     });
 
-    const scpi = waitForJson(client, (message) => message.type === MessageType.ScpiResult && message.requestId === 21);
+    const rawResult = waitForJson(client, (message) => message.type === MessageType.ScpiResult && message.requestId === 21);
     client.send(JSON.stringify({
       type: MessageType.ScpiExecute,
       requestId: 21,
       instrument: SupportedInstrument.Dho804,
       command: "*IDN?",
     }));
-    expect(await scpi).toEqual({
+    expect(await rawResult).toEqual({
       type: MessageType.ScpiResult,
       requestId: 21,
       response: "response:*IDN?",
     });
+  });
 
-    await subscribe(client, SupportedInstrument.Dm858e);
-    const dmmScpi = waitForJson(client, (message) => message.type === MessageType.ScpiResult && message.requestId === 22);
+  it("rejects raw SCPI when the client is not subscribed to the requested instrument", async () => {
+    const server = await createTestServer();
+    const client = await connect(server);
+    const failure = waitForJson(client, (message) => message.type === MessageType.CommandFailed && message.requestId === 22);
+
     client.send(JSON.stringify({
       type: MessageType.ScpiExecute,
       requestId: 22,
       instrument: SupportedInstrument.Dm858e,
       command: "*IDN?",
     }));
-    expect(await dmmScpi).toEqual({
-      type: MessageType.ScpiResult,
+
+    expect(await failure).toMatchObject({
+      type: MessageType.CommandFailed,
       requestId: 22,
-      response: "dmm:*IDN?",
+      error: expect.stringContaining("not subscribed"),
     });
   });
 
-  it("dispatches deep capture and viewport requests and publishes binary live frames", async () => {
+  it("routes DMM control and raw SCPI only for DM858E subscribers", async () => {
     const server = await createTestServer();
     const client = await connect(server);
-    await subscribe(client, SupportedInstrument.Dho804);
+    await subscribe(client, SupportedInstrument.Dm858e);
 
-    const ready = waitForJson(client, (message) => message.type === MessageType.DeepCaptureReady && message.requestId === 30);
-    client.send(JSON.stringify({ type: MessageType.DeepCaptureRequest, requestId: 30 }));
-    expect(await ready).toMatchObject({ type: MessageType.DeepCaptureReady, requestId: 30, captureId: 1 });
-
-    const viewport = waitForBinary(client);
+    const controlDone = waitForJson(client, (message) => (
+      message.type === MessageType.CommandCompleted && message.requestId === 30
+    ));
     client.send(JSON.stringify({
-      type: MessageType.WaveformViewportRequest,
+      type: MessageType.DmmControlSet,
+      requestId: 30,
+      control: { kind: 1, value: 1 },
+    }));
+    expect(await controlDone).toEqual({ type: MessageType.CommandCompleted, requestId: 30 });
+    expect(server.dmmHandlers.setControl).toHaveBeenCalledOnce();
+
+    const scpiResult = waitForJson(client, (message) => (
+      message.type === MessageType.ScpiResult && message.requestId === 31
+    ));
+    client.send(JSON.stringify({
+      type: MessageType.ScpiExecute,
       requestId: 31,
-      captureId: 1,
-      channel: Channel.Ch1,
-      startSample: 0,
-      endSample: 100,
-      pixelWidth: 50,
+      instrument: SupportedInstrument.Dm858e,
+      command: "DATA:LAST?",
     }));
-    expect(new DataView((await viewport).buffer).getUint8(5)).toBe(WaveformKind.DeepViewport);
-
-    const live = waitForBinary(client);
-    server.gateway.broadcastWaveform(createWaveformFrame(WaveformKind.Live, Channel.Ch2, 0));
-    const liveFrame = await live;
-    expect(new DataView(liveFrame.buffer).getUint8(5)).toBe(WaveformKind.Live);
-    expect(new DataView(liveFrame.buffer).getUint8(6)).toBe(Channel.Ch2);
+    expect(await scpiResult).toEqual({
+      type: MessageType.ScpiResult,
+      requestId: 31,
+      response: "dmm:DATA:LAST?",
+    });
   });
 
-  it("fails superseded viewport requests instead of sending stale binary", async () => {
-    const resolvers = new Map<number, (frame: Uint8Array) => void>();
-    const handlers: WaveformRequestHandlers = {
-      requestDeepCapture: vi.fn(),
-      requestViewport: (request: WaveformViewportRequestMessage) => new Promise((resolve) => {
-        resolvers.set(request.requestId, resolve);
-      }),
-    };
-    const server = await createTestServer(handlers);
-    const client = await connect(server);
-    await subscribe(client, SupportedInstrument.Dho804);
-
-    const superseded = waitForJson(client, (message) => message.type === MessageType.CommandFailed && message.requestId === 40);
-    client.send(JSON.stringify({
-      type: MessageType.WaveformViewportRequest,
-      requestId: 40,
-      captureId: 1,
-      channel: Channel.Ch1,
-      startSample: 0,
-      endSample: 100,
-      pixelWidth: 50,
-    }));
-    client.send(JSON.stringify({
-      type: MessageType.WaveformViewportRequest,
-      requestId: 41,
-      captureId: 1,
-      channel: Channel.Ch1,
-      startSample: 50,
-      endSample: 150,
-      pixelWidth: 50,
-    }));
-
-    await vi.waitFor(() => expect(resolvers.size).toBe(2));
-    resolvers.get(40)!(createWaveformFrame(WaveformKind.DeepViewport, Channel.Ch1, 1));
-    expect(await superseded).toMatchObject({ requestId: 40, error: expect.stringContaining("superseded") });
-
-    const latest = waitForBinary(client);
-    resolvers.get(41)!(createWaveformFrame(WaveformKind.DeepViewport, Channel.Ch1, 1, 2));
-    expect(new DataView((await latest).buffer).getUint32(8, true)).toBe(2);
-  });
-
-  it("keeps viewport supersession independent per channel", async () => {
-    const resolvers = new Map<number, (frame: Uint8Array) => void>();
-    const handlers: WaveformRequestHandlers = {
-      requestDeepCapture: vi.fn(),
-      requestViewport: (request: WaveformViewportRequestMessage) => new Promise((resolve) => {
-        resolvers.set(request.requestId, resolve);
-      }),
-    };
-    const server = await createTestServer(handlers);
-    const client = await connect(server);
-    await subscribe(client, SupportedInstrument.Dho804);
-
-    const ch1Result = Promise.race([
-      waitForBinary(client).then((frame) => ({ kind: "binary" as const, frame })),
-      waitForJson(
-        client,
-        (message) => message.type === MessageType.CommandFailed && message.requestId === 42,
-      ).then((message) => ({ kind: "failure" as const, message })),
-    ]);
-
-    client.send(JSON.stringify({
-      type: MessageType.WaveformViewportRequest,
-      requestId: 42,
-      captureId: 1,
-      channel: Channel.Ch1,
-      startSample: 0,
-      endSample: 100,
-      pixelWidth: 50,
-    }));
-    client.send(JSON.stringify({
-      type: MessageType.WaveformViewportRequest,
-      requestId: 43,
-      captureId: 1,
-      channel: Channel.Ch2,
-      startSample: 0,
-      endSample: 100,
-      pixelWidth: 50,
-    }));
-
-    await vi.waitFor(() => expect(resolvers.size).toBe(2));
-    resolvers.get(42)!(createWaveformFrame(WaveformKind.DeepViewport, Channel.Ch1, 1, 3));
-
-    const firstResult = await ch1Result;
-    expect(firstResult.kind).toBe("binary");
-    if (firstResult.kind !== "binary") {
-      throw new Error("CH1 viewport was incorrectly superseded by CH2");
-    }
-    expect(new DataView(firstResult.frame.buffer).getUint8(6)).toBe(Channel.Ch1);
-
-    const ch2 = waitForBinary(client);
-    resolvers.get(43)!(createWaveformFrame(WaveformKind.DeepViewport, Channel.Ch2, 1, 4));
-    expect(new DataView((await ch2).buffer).getUint8(6)).toBe(Channel.Ch2);
-  });
-
-  it("replaces pending live frames and drops them when a newer frame can send directly", async () => {
+  it("rejects stale DMM command completion after the connection revision changes", async () => {
     const server = await createTestServer();
-    let bufferedAmount = 300_000;
-    const send = vi.fn();
-    const socket = {
-      readyState: WebSocket.OPEN,
-      get bufferedAmount() {
-        return bufferedAmount;
-      },
-      send,
-    } as unknown as WebSocket;
-    const client = {
-      socket,
-      protocolReady: true,
-      subscriptions: new Set([SupportedInstrument.Dho804]),
-      pendingLiveFrames: new Map<Channel, Uint8Array>(),
-      liveSendInFlight: false,
-      viewportGenerations: new Map<Channel, number>(),
+    let resolveControl!: () => void;
+    server.dmmHandlers.setControl = vi.fn(() => new Promise<void>((resolve) => {
+      resolveControl = resolve;
+    }));
+    const client = await connect(server);
+    await subscribe(client, SupportedInstrument.Dm858e);
+
+    const failure = waitForJson(client, (message) => (
+      message.type === MessageType.CommandFailed && message.requestId === 32
+    ));
+    client.send(JSON.stringify({
+      type: MessageType.DmmControlSet,
+      requestId: 32,
+      control: { kind: 1, value: 1 },
+    }));
+    await vi.waitFor(() => expect(server.dmmHandlers.setControl).toHaveBeenCalledOnce());
+    server.gateway.setDmmConnection({
+      kind: ServerDmmConnectionKind.Disconnected,
+      reason: "reconnected",
+    });
+    resolveControl();
+
+    expect(await failure).toMatchObject({
+      type: MessageType.CommandFailed,
+      requestId: 32,
+      error: expect.stringContaining("DMM connection changed"),
+    });
+  });
+
+  it("rejects stale DMM raw-SCPI completion after the connection revision changes", async () => {
+    const server = await createTestServer();
+    let resolveScpi!: (response: string) => void;
+    server.dmmHandlers.executeRawScpi = vi.fn(() => new Promise<string>((resolve) => {
+      resolveScpi = resolve;
+    }));
+    const client = await connect(server);
+    await subscribe(client, SupportedInstrument.Dm858e);
+
+    const failure = waitForJson(client, (message) => (
+      message.type === MessageType.CommandFailed && message.requestId === 33
+    ));
+    client.send(JSON.stringify({
+      type: MessageType.ScpiExecute,
+      requestId: 33,
+      instrument: SupportedInstrument.Dm858e,
+      command: "*IDN?",
+    }));
+    await vi.waitFor(() => expect(server.dmmHandlers.executeRawScpi).toHaveBeenCalledOnce());
+    server.gateway.setDmmConnection({
+      kind: ServerDmmConnectionKind.Disconnected,
+      reason: "reconnected",
+    });
+    resolveScpi("late-response");
+
+    expect(await failure).toMatchObject({
+      type: MessageType.CommandFailed,
+      requestId: 33,
+      error: expect.stringContaining("DMM connection changed"),
+    });
+  });
+
+  it("keeps only the newest pending live frame per channel while a send is in flight", async () => {
+    const server = await createTestServer();
+    const client = await connect(server);
+    await subscribe(client, SupportedInstrument.Dho804);
+
+    const internal = server.gateway as unknown as {
+      clients: Map<WebSocket, {
+        socket: { readyState: number; send: (data: Uint8Array, options: unknown, callback: (error?: Error) => void) => void };
+        protocolReady: boolean;
+        subscriptions: Set<SupportedInstrument>;
+        pendingLiveFrames: Map<Channel, Uint8Array>;
+        liveSendInFlight: boolean;
+        viewportGenerations: Map<Channel, number>;
+      }>;
     };
-    const queueLiveFrame = (server.gateway as unknown as {
-      queueLiveFrame(
-        clientState: typeof client,
-        channel: Channel,
-        frame: Uint8Array,
-      ): void;
-    }).queueLiveFrame.bind(server.gateway);
-    const first = createWaveformFrame(WaveformKind.Live, Channel.Ch1, 0, 10);
-    const pendingLatest = createWaveformFrame(WaveformKind.Live, Channel.Ch1, 0, 11);
-    const directLatest = createWaveformFrame(WaveformKind.Live, Channel.Ch1, 0, 12);
+    const state = internal.clients.get(client);
+    if (state === undefined) throw new Error("missing test client");
 
-    queueLiveFrame(client, Channel.Ch1, first);
-    queueLiveFrame(client, Channel.Ch1, pendingLatest);
-    expect(client.pendingLiveFrames.size).toBe(1);
-    expect(client.pendingLiveFrames.get(Channel.Ch1)).toBe(pendingLatest);
+    const callbacks: Array<(error?: Error) => void> = [];
+    const sends: Uint8Array[] = [];
+    state.socket = {
+      readyState: WebSocket.OPEN,
+      send: (data, _options, callback) => {
+        sends.push(data);
+        callbacks.push(callback);
+      },
+    };
 
-    bufferedAmount = 0;
-    queueLiveFrame(client, Channel.Ch1, directLatest);
+    server.gateway.broadcastWaveform(createWaveformFrame(WaveformKind.Live, Channel.Ch1, 0, 1));
+    server.gateway.broadcastWaveform(createWaveformFrame(WaveformKind.Live, Channel.Ch1, 0, 2));
+    server.gateway.broadcastWaveform(createWaveformFrame(WaveformKind.Live, Channel.Ch1, 0, 3));
 
-    expect(client.pendingLiveFrames.has(Channel.Ch1)).toBe(false);
-    expect(send).toHaveBeenCalledOnce();
-    expect(send.mock.calls[0]?.[0]).toBe(directLatest);
+    expect(sends).toHaveLength(1);
+    expect(readSequence(sends[0]!)).toBe(1);
+
+    callbacks.shift()?.();
+    expect(sends).toHaveLength(2);
+    expect(readSequence(sends[1]!)).toBe(3);
+    callbacks.shift()?.();
+  });
+
+  it("supersedes older viewport responses for the same channel", async () => {
+    const pending = new Map<number, (frame: Uint8Array) => void>();
+    const server = await createTestServer({
+      requestDeepCapture: async () => { throw new Error("unused"); },
+      requestViewport: (request: WaveformViewportRequestMessage) => new Promise((resolve) => {
+        pending.set(request.requestId, resolve);
+      }),
+    });
+    const client = await connect(server);
+    await subscribe(client, SupportedInstrument.Dho804);
+
+    const request = (requestId: number, startSample: number): void => {
+      client.send(JSON.stringify({
+        type: MessageType.WaveformViewportRequest,
+        requestId,
+        captureId: 9,
+        channel: Channel.Ch1,
+        startSample,
+        endSample: startSample + 100,
+        pixelWidth: 100,
+      }));
+    };
+
+    request(40, 0);
+    request(41, 100);
+    await vi.waitFor(() => expect(pending.size).toBe(2));
+
+    const newer = waitForBinary(client);
+    pending.get(41)?.(createWaveformFrame(WaveformKind.DeepViewport, Channel.Ch1, 9, 41));
+    expect(readSequence(await newer)).toBe(41);
+
+    pending.get(40)?.(createWaveformFrame(WaveformKind.DeepViewport, Channel.Ch1, 9, 40));
+    const unexpected = await Promise.race([
+      waitForBinary(client).then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
+    ]);
+    expect(unexpected).toBe(false);
   });
 });
+
+function readSequence(frame: Uint8Array): number {
+  return new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint32(8, true);
+}

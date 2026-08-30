@@ -11,8 +11,8 @@ import {
 } from "./websocket-protocol";
 
 describe("websocket protocol constants", () => {
-  it("uses the hard-cut DMM snapshot protocol version", () => {
-    expect(PROTOCOL_VERSION).toBe(3);
+  it("uses the hard-cut DMM resolution snapshot protocol version", () => {
+    expect(PROTOCOL_VERSION).toBe(4);
   });
 
   it("keeps existing message type values stable and assigns instrument ranges", () => {

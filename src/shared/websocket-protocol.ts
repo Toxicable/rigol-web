@@ -16,7 +16,7 @@ import type {
   TriggerType,
 } from "./scope-types.js";
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 export type NonEmptyArray<T> = [T, ...T[]];
 

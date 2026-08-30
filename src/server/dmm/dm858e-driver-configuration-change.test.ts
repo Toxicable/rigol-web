@@ -67,6 +67,12 @@ describe("Dm858eDriver configuration-change snapshots", () => {
   it("publishes stable same-function configuration changes as unavailable", async () => {
     const transport = new ScriptedTransport();
     respond(transport, "STATus:OPERation:CONDition?", "256", "256");
+    respond(
+      transport,
+      "CONFigure?",
+      "VOLT 1.00000000E+01,1.00000000E-04",
+      "VOLT 1.00000000E+01,1.00000000E-04",
+    );
     respond(transport, "SENSe:FUNCtion?", "VOLT", "VOLT");
     respond(transport, "DATA:LAST?", "-5.08000000E-01 VDC");
 
@@ -83,6 +89,12 @@ describe("Dm858eDriver configuration-change snapshots", () => {
   it("keeps function-instability observations unpublished", async () => {
     const transport = new ScriptedTransport();
     respond(transport, "STATus:OPERation:CONDition?", "256", "256");
+    respond(
+      transport,
+      "CONFigure?",
+      "VOLT 1.00000000E+01,1.00000000E-04",
+      "VOLT 1.00000000E+01,1.00000000E-04",
+    );
     respond(transport, "SENSe:FUNCtion?", "VOLT", "RES");
     respond(transport, "DATA:LAST?", "-5.08000000E-01 VDC");
 
@@ -93,7 +105,18 @@ describe("Dm858eDriver configuration-change snapshots", () => {
 
   it("publishes Value X -> ConfigurationChanged -> the same Value X through the poller", async () => {
     const transport = new ScriptedTransport();
-    respond(transport, "CONFigure?", "VOLT 1.00000000E+01,1.00000000E-04");
+    const configuration = "VOLT 1.00000000E+01,1.00000000E-04";
+    respond(
+      transport,
+      "CONFigure?",
+      configuration,
+      configuration,
+      configuration,
+      configuration,
+      configuration,
+      configuration,
+      configuration,
+    );
     respond(transport, "SENSe:VOLTage:DC:RANGe:AUTO?", "1");
     respond(transport, "SENSe:VOLTage:DC:RANGe?", "1.00000000E+01");
     respond(transport, "SENSe:VOLTage:DC:NPLC?", "2.00000000E+01");
@@ -156,6 +179,7 @@ describe("Dm858eDriver configuration-change snapshots", () => {
         kind: DmmReadingKind.Value,
         function: DmmMeasurementFunction.DcVoltage,
         value: 1.25,
+        resolution: 1e-4,
         unit: DmmUnit.Volts,
       },
       {
@@ -168,6 +192,7 @@ describe("Dm858eDriver configuration-change snapshots", () => {
         kind: DmmReadingKind.Value,
         function: DmmMeasurementFunction.DcVoltage,
         value: 1.25,
+        resolution: 1e-4,
         unit: DmmUnit.Volts,
       },
     ]);

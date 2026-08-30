@@ -13,9 +13,14 @@ interface ScpiEntry {
 interface ScpiConsoleProps {
   client: ScopeWebSocketClient;
   instrument: SupportedInstrument;
+  placeholder?: string;
 }
 
-export function ScpiConsole({ client, instrument }: ScpiConsoleProps) {
+export function ScpiConsole({
+  client,
+  instrument,
+  placeholder = ":MEASure:VPP? CHANnel1",
+}: ScpiConsoleProps) {
   const [command, setCommand] = useState("");
   const [history, setHistory] = useState<ScpiEntry[]>([]);
   const [nextId, setNextId] = useState(0);
@@ -55,7 +60,7 @@ export function ScpiConsole({ client, instrument }: ScpiConsoleProps) {
         <input
           type="text"
           value={command}
-          placeholder=":MEASure:VPP? CHANnel1"
+          placeholder={placeholder}
           onChange={(event: ChangeEvent<HTMLInputElement>) => setCommand(event.target.value)}
           onKeyDown={(event: KeyboardEvent<HTMLInputElement>) => {
             if (event.key === "Enter") {

@@ -1,7 +1,4 @@
-import {
-  DmmReadingKind,
-  type DmmReadingSnapshot,
-} from "../../shared/dmm-types.js";
+import type { DmmReadingSnapshot } from "../../shared/dmm-types.js";
 import { ScpiPriority } from "../scpi/scpi-scheduler.js";
 import type { Dm858eDriver } from "./dm858e-driver.js";
 import type { DmmStateStore } from "./dmm-state-store.js";
@@ -29,7 +26,6 @@ export class DmmPoller {
   private loopPromise: Promise<void> | null = null;
   private delayTimer: ReturnType<typeof setTimeout> | null = null;
   private wakeDelay: (() => void) | null = null;
-  private lastSnapshot: DmmReadingSnapshot | null = null;
 
   public constructor(options: DmmPollerOptions) {
     validateInterval(options.readingIntervalMs ?? DEFAULT_READING_INTERVAL_MS, "readingIntervalMs");
@@ -79,9 +75,6 @@ export class DmmPoller {
         }
 
         const state = this.stateStore.getState();
-        if (this.lastSnapshot !== null && this.lastSnapshot.function !== state.function) {
-          this.lastSnapshot = null;
-        }
         const snapshot = await this.driver.readPrimarySnapshot(
           state.function,
           ScpiPriority.Background,
@@ -89,8 +82,7 @@ export class DmmPoller {
         if (!this.running) {
           break;
         }
-        if (snapshot !== null && !sameSnapshot(snapshot, this.lastSnapshot)) {
-          this.lastSnapshot = snapshot;
+        if (snapshot !== null) {
           this.publishSnapshot(snapshot);
         }
       } catch (error) {
@@ -133,29 +125,6 @@ export class DmmPoller {
     const wake = this.wakeDelay;
     this.wakeDelay = null;
     wake?.();
-  }
-}
-
-function sameSnapshot(
-  left: DmmReadingSnapshot,
-  right: DmmReadingSnapshot | null,
-): boolean {
-  if (
-    right === null ||
-    left.kind !== right.kind ||
-    left.function !== right.function ||
-    left.unit !== right.unit
-  ) {
-    return false;
-  }
-
-  switch (left.kind) {
-    case DmmReadingKind.Value:
-      return right.kind === DmmReadingKind.Value && left.value === right.value;
-    case DmmReadingKind.Overload:
-      return right.kind === DmmReadingKind.Overload;
-    case DmmReadingKind.Unavailable:
-      return right.kind === DmmReadingKind.Unavailable && left.reason === right.reason;
   }
 }
 

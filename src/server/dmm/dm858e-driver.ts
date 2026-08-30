@@ -1,4 +1,10 @@
 import {
+  Dm858eReadingResolutionSource,
+  dm858eCapacitanceResolutionRatio,
+  dm858eFixedRanges,
+  dm858eReadingResolutionSource,
+} from "../../shared/dm858e-capabilities.js";
+import {
   DmmAcquisitionRate,
   DmmMeasurementFunction,
   DmmRangeMode,
@@ -46,13 +52,6 @@ interface ParsedLastReading {
 }
 
 type TemperatureUnit = "C" | "F" | "K";
-
-const dcVoltageRanges = [0.1, 1, 10, 100, 1_000] as const;
-const acVoltageRanges = [0.1, 1, 10, 100, 750] as const;
-const currentRanges = [1e-4, 1e-3, 1e-2, 1e-1, 1, 3] as const;
-const resistanceRanges = [100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000, 50_000_000] as const;
-const capacitanceRanges = [1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3] as const;
-const frequencyVoltageRanges = [0.1, 1, 10, 100, 750] as const;
 
 const noDataSentinel = 9.9e37;
 const operationConfigurationChanged = 256;
@@ -218,12 +217,24 @@ export class Dm858eDriver {
           await transport.queryText("STATus:OPERation:CONDition?"),
           "DM858E operation status",
         );
+        const configurationTextBefore = (await transport.queryText("CONFigure?")).trim();
+        const configurationBefore = parseConfiguration(configurationTextBefore);
+        const resolutionBefore = await readSnapshotResolutionObservation(
+          transport,
+          configurationBefore,
+        );
         const functionBefore = parseFunctionToken(
           await transport.queryText("SENSe:FUNCtion?"),
         );
         const response = (await transport.queryText("DATA:LAST?")).trim();
         const functionAfter = parseFunctionToken(
           await transport.queryText("SENSe:FUNCtion?"),
+        );
+        const configurationTextAfter = (await transport.queryText("CONFigure?")).trim();
+        const configurationAfter = parseConfiguration(configurationTextAfter);
+        const resolutionAfter = await readSnapshotResolutionObservation(
+          transport,
+          configurationAfter,
         );
 
         let readingTemperatureUnit = this.temperatureUnit;
@@ -241,7 +252,11 @@ export class Dm858eDriver {
 
         if (
           functionBefore !== functionAfter ||
-          functionAfter !== measurementFunction
+          functionAfter !== measurementFunction ||
+          configurationBefore.function !== functionBefore ||
+          configurationAfter.function !== functionAfter ||
+          configurationTextBefore !== configurationTextAfter ||
+          !sameResolutionObservation(resolutionBefore, resolutionAfter)
         ) {
           return null;
         }
@@ -269,9 +284,6 @@ export class Dm858eDriver {
           return null;
         }
 
-        // DATA:LAST? only documents the bare 9.9E37 response as "no data".
-        // A non-bare sentinel-sized value has no documented DATA:LAST? meaning, so
-        // expose it as unavailable rather than inventing an overload classification.
         if (Math.abs(parsed.value) >= noDataSentinel) {
           return {
             kind: DmmReadingKind.Unavailable,
@@ -281,12 +293,23 @@ export class Dm858eDriver {
           };
         }
 
+        const value = functionAfter === DmmMeasurementFunction.Temperature
+          ? temperatureToCelsius(parsed.value, readingTemperatureUnit)
+          : parsed.value;
+        if (resolutionAfter === null) {
+          return {
+            kind: DmmReadingKind.Unavailable,
+            function: functionAfter,
+            unit,
+            reason: DmmReadingUnavailableReason.ResolutionUnavailable,
+          };
+        }
+
         return {
           kind: DmmReadingKind.Value,
           function: functionAfter,
-          value: functionAfter === DmmMeasurementFunction.Temperature
-            ? temperatureToCelsius(parsed.value, readingTemperatureUnit)
-            : parsed.value,
+          value,
+          resolution: resolutionAfter,
           unit,
         };
       },
@@ -326,9 +349,6 @@ export class Dm858eDriver {
   ): boolean {
     const normalized = token.trim().toUpperCase();
 
-    // VDC is the only DATA:LAST? function token explicitly exemplified by the
-    // Programming Guide. Other spellings are treated as opaque and learned only
-    // while the instrument reports a stable, authoritative current function.
     if (normalized === "VDC") {
       return measurementFunction === DmmMeasurementFunction.DcVoltage;
     }
@@ -474,6 +494,32 @@ async function readAcquisitionRate(
   return null;
 }
 
+async function readSnapshotResolutionObservation(
+  transport: ScpiTransport,
+  configuration: ParsedConfiguration,
+): Promise<number | null> {
+  switch (dm858eReadingResolutionSource(configuration.function)) {
+    case Dm858eReadingResolutionSource.Configure:
+      return configuration.resolution ?? null;
+    case Dm858eReadingResolutionSource.CapacitanceRange: {
+      const effectiveRange = parsePositiveNumber(
+        await transport.queryText("SENSe:CAPacitance:RANGe?"),
+        "capacitance range",
+      );
+      return effectiveRange * dm858eCapacitanceResolutionRatio;
+    }
+    case Dm858eReadingResolutionSource.Unverified:
+      return null;
+  }
+}
+
+function sameResolutionObservation(left: number | null, right: number | null): boolean {
+  if (left === null || right === null) {
+    return left === right;
+  }
+  return nearlyEqual(left, right);
+}
+
 function parseConfiguration(value: string): ParsedConfiguration {
   const trimmed = value.trim();
   const separator = trimmed.search(/\s/);
@@ -547,25 +593,26 @@ function configureCommandFor(value: DmmMeasurementFunction): string {
 }
 
 function rangeSpec(value: DmmMeasurementFunction): RangeSpec | null {
+  const values = dm858eFixedRanges(value);
   switch (value) {
     case DmmMeasurementFunction.DcVoltage:
-      return { command: "SENSe:VOLTage:DC:RANGe", values: dcVoltageRanges };
+      return { command: "SENSe:VOLTage:DC:RANGe", values };
     case DmmMeasurementFunction.AcVoltage:
-      return { command: "SENSe:VOLTage:AC:RANGe", values: acVoltageRanges };
+      return { command: "SENSe:VOLTage:AC:RANGe", values };
     case DmmMeasurementFunction.DcCurrent:
-      return { command: "SENSe:CURRent:DC:RANGe", values: currentRanges };
+      return { command: "SENSe:CURRent:DC:RANGe", values };
     case DmmMeasurementFunction.AcCurrent:
-      return { command: "SENSe:CURRent:AC:RANGe", values: currentRanges };
+      return { command: "SENSe:CURRent:AC:RANGe", values };
     case DmmMeasurementFunction.Resistance2Wire:
-      return { command: "SENSe:RESistance:RANGe", values: resistanceRanges };
+      return { command: "SENSe:RESistance:RANGe", values };
     case DmmMeasurementFunction.Resistance4Wire:
-      return { command: "SENSe:FRESistance:RANGe", values: resistanceRanges };
+      return { command: "SENSe:FRESistance:RANGe", values };
     case DmmMeasurementFunction.Frequency:
-      return { command: "SENSe:FREQuency:VOLTage:RANGe", values: frequencyVoltageRanges };
+      return { command: "SENSe:FREQuency:VOLTage:RANGe", values };
     case DmmMeasurementFunction.Period:
-      return { command: "SENSe:PERiod:VOLTage:RANGe", values: frequencyVoltageRanges };
+      return { command: "SENSe:PERiod:VOLTage:RANGe", values };
     case DmmMeasurementFunction.Capacitance:
-      return { command: "SENSe:CAPacitance:RANGe", values: capacitanceRanges };
+      return { command: "SENSe:CAPacitance:RANGe", values };
     case DmmMeasurementFunction.Continuity:
     case DmmMeasurementFunction.Diode:
     case DmmMeasurementFunction.Temperature:
