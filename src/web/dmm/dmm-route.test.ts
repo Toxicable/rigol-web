@@ -25,11 +25,13 @@ import {
   type ScopeWebSocketClient,
 } from "../websocket-client.js";
 import {
+  bindDmmRoute,
+  type DmmLifecycleClient,
+} from "./dmm-route-binding.js";
+import {
   DmmRouteView,
   applyDmmControl,
-  bindDmmRoute,
   type DmmControlClient,
-  type DmmLifecycleClient,
 } from "./dmm-route.js";
 import { DmmBrowserConnectionKind, useDmmStore } from "./dmm-store.js";
 

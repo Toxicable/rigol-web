@@ -7,6 +7,7 @@ import { MeasurementPanel } from "./components/measurement-panel.js";
 import { ScpiConsole } from "./components/scpi-console.js";
 import { ScopeToolbar } from "./components/scope-toolbar.js";
 import { TriggerControls } from "./components/trigger-controls.js";
+import { bindScopeRoute } from "./scope-route-binding.js";
 import { BrowserConnectionKind, useScopeStore } from "./scope-store.js";
 import type { ScopeWebSocketClient } from "./websocket-client.js";
 import type { WaveformController } from "./waveform/waveform-controller.js";
@@ -20,10 +21,7 @@ interface ScopeRouteProps {
 export function ScopeRoute({ client, controller }: ScopeRouteProps) {
   const connection = useScopeStore((state) => state.connection);
 
-  useEffect(() => {
-    client.subscribeInstrument(SupportedInstrument.Dho804);
-    return () => client.unsubscribeInstrument(SupportedInstrument.Dho804);
-  }, [client]);
+  useEffect(() => bindScopeRoute(client), [client]);
 
   useEffect(() => {
     if (connection.kind === BrowserConnectionKind.ScopeConnected) {

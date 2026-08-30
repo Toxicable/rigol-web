@@ -5,18 +5,15 @@ import type {
   DmmReadingSnapshot,
 } from "../../shared/dmm-types.js";
 import { SupportedInstrument } from "../../shared/instrument-types.js";
-import { MessageType } from "../../shared/websocket-protocol.js";
 import {
   DmmControls,
   dmmControlMatchesState,
 } from "../components/dmm/dmm-controls.js";
 import { DmmReading } from "../components/dmm/dmm-reading.js";
 import { ScpiConsole } from "../components/scpi-console.js";
-import {
-  BrowserTransportKind,
-  type ScopeWebSocketClient,
-} from "../websocket-client.js";
+import type { ScopeWebSocketClient } from "../websocket-client.js";
 import "./dmm.css";
+import { bindDmmRoute } from "./dmm-route-binding.js";
 import {
   DmmBrowserConnectionKind,
   type DmmBrowserConnection,
@@ -36,56 +33,7 @@ interface DmmRouteViewProps {
   onControl(control: DmmControlChange): void;
 }
 
-export type DmmLifecycleClient = Pick<
-  ScopeWebSocketClient,
-  "onTransportState" | "onDmmMessage" | "subscribeInstrument" | "unsubscribeInstrument"
->;
-
 export type DmmControlClient = Pick<ScopeWebSocketClient, "setDmmControl">;
-
-export function bindDmmRoute(client: DmmLifecycleClient): () => void {
-  useDmmStore.getState().setConnecting();
-
-  const stopTransportListening = client.onTransportState((transport) => {
-    switch (transport.kind) {
-      case BrowserTransportKind.Connecting:
-        useDmmStore.getState().setConnecting();
-        return;
-      case BrowserTransportKind.Connected:
-        useDmmStore.getState().setAwaitingInstrument();
-        return;
-      case BrowserTransportKind.Disconnected:
-        useDmmStore.getState().setTransportDisconnected(transport.reason);
-        return;
-    }
-  });
-
-  const stopDmmListening = client.onDmmMessage((message) => {
-    switch (message.type) {
-      case MessageType.DmmConnected:
-        useDmmStore.getState().setConnected(message.info, message.state);
-        return;
-      case MessageType.DmmState:
-        useDmmStore.getState().replaceState(message.state);
-        return;
-      case MessageType.DmmDisconnected:
-        useDmmStore.getState().setInstrumentDisconnected(message.reason);
-        return;
-      case MessageType.DmmSnapshot:
-        useDmmStore.getState().setLatestReading(message.snapshot);
-        return;
-    }
-  });
-
-  client.subscribeInstrument(SupportedInstrument.Dm858e);
-
-  return () => {
-    client.unsubscribeInstrument(SupportedInstrument.Dm858e);
-    stopDmmListening();
-    stopTransportListening();
-    useDmmStore.getState().setAwaitingInstrument();
-  };
-}
 
 export async function applyDmmControl(
   client: DmmControlClient,
