@@ -290,12 +290,18 @@ describe("route lifecycle through browser WebSocket and gateway", () => {
       expect(runningDelta(harness.dmmRuntime)).toBe(0);
     });
 
+    const scopeStartsBeforeDrop = harness.scopeRuntime.start.mock.calls.length;
+    const scopeStopsBeforeDrop = harness.scopeRuntime.stop.mock.calls.length;
     const firstSocket = harness.adapters.at(-1);
     expect(firstSocket).toBeDefined();
     firstSocket?.terminate();
 
     await vi.waitFor(() => expect(harness.adapters.length).toBeGreaterThanOrEqual(2));
     await vi.waitFor(() => {
+      expect(harness.scopeRuntime.stop.mock.calls.length).toBeGreaterThan(scopeStopsBeforeDrop);
+    });
+    await vi.waitFor(() => {
+      expect(harness.scopeRuntime.start.mock.calls.length).toBeGreaterThan(scopeStartsBeforeDrop);
       expect(runningDelta(harness.scopeRuntime)).toBe(1);
       expect(runningDelta(harness.dmmRuntime)).toBe(0);
     });
