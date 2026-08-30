@@ -23,6 +23,45 @@ export const dm858eCapacitanceRanges = [
 ] as const;
 export const dm858eFrequencyVoltageRanges = [0.1, 1, 10, 100, 750] as const;
 
+/**
+ * Resolution source for the primary numeric display.
+ *
+ * Configure means CONFigure? reports a measurement resolution for the function.
+ * CapacitanceRange means the User Guide's capacitance range table defines a
+ * 3.5-digit display quantum of 1e-3 x the effective capacitance range.
+ * Unverified means no authoritative numeric quantum has been established yet;
+ * the backend must publish ResolutionUnavailable rather than infer one.
+ */
+export enum Dm858eReadingResolutionSource {
+  Configure = 1,
+  CapacitanceRange = 2,
+  Unverified = 3,
+}
+
+export const dm858eCapacitanceResolutionRatio = 1e-3;
+
+export function dm858eReadingResolutionSource(
+  measurementFunction: DmmMeasurementFunction,
+): Dm858eReadingResolutionSource {
+  switch (measurementFunction) {
+    case DmmMeasurementFunction.DcVoltage:
+    case DmmMeasurementFunction.AcVoltage:
+    case DmmMeasurementFunction.DcCurrent:
+    case DmmMeasurementFunction.AcCurrent:
+    case DmmMeasurementFunction.Resistance2Wire:
+    case DmmMeasurementFunction.Resistance4Wire:
+      return Dm858eReadingResolutionSource.Configure;
+    case DmmMeasurementFunction.Capacitance:
+      return Dm858eReadingResolutionSource.CapacitanceRange;
+    case DmmMeasurementFunction.Continuity:
+    case DmmMeasurementFunction.Diode:
+    case DmmMeasurementFunction.Frequency:
+    case DmmMeasurementFunction.Period:
+    case DmmMeasurementFunction.Temperature:
+      return Dm858eReadingResolutionSource.Unverified;
+  }
+}
+
 export function dm858eFixedRanges(
   measurementFunction: DmmMeasurementFunction,
 ): readonly number[] {
