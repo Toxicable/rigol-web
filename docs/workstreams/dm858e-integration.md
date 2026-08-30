@@ -12,6 +12,14 @@ In progress on `dm858e-integration`, based on `main` at `82f821e` after DM858E b
 
 Initial integration audit confirms the merged server already constructs `DmmRuntime`, registers it as `dm858e`, and routes DMM controls/raw SCPI through the shared `WebSocketGateway`. Stream E therefore starts from an already wired application rather than introducing a second integration layer.
 
+Current automated integration coverage includes:
+
+- `src/server/instruments/route-lifecycle.integration.test.ts`: one-session DHO804/DM858E route switching, shared two-tab scope lifetime, independent scope+DMM tabs, disconnected-session cleanup, and rapid switching convergence;
+- `src/server/http-handler.test.ts`: direct `/dm858e` production SPA navigation without turning arbitrary missing assets into SPA responses;
+- existing WebSocket gateway tests: protocol-gated subscriptions, one shared scope runtime across subscribers, subscription-required commands, and instrument-targeted raw SCPI.
+
+Repository mechanical-gate execution remains `UNKNOWN` in environments that cannot resolve `github.com`; do not treat the presence of tests as a passing `pnpm typecheck`, `pnpm test`, or `pnpm build` result. Physical DM858E/DHO804 verification remains required.
+
 Remaining stream-E work is deliberately verification-led:
 
 - run the normal repository mechanical gates;
