@@ -14,9 +14,11 @@ Initial integration audit confirms the merged server already constructs `DmmRunt
 
 Current automated integration coverage includes:
 
-- `src/web/instrument-lifecycle.integration.test.ts`: actual `bindScopeRoute` / `bindDmmRoute` subscriptions through `ScopeWebSocketClient`, protocol handshake, real WebSocket transport, `WebSocketGateway`, `InstrumentRegistry`, and runtime spies; covers scope -> DMM -> scope switching, shared two-tab scope lifetime, independent simultaneous scope+DMM tabs, socket-close cleanup, and reconnect convergence to the browser client's final desired subscription set;
+- `src/web/instrument-lifecycle.integration.test.ts`: the same lightweight `bindScopeRoute` / `bindDmmRoute` functions used by the React routes drive `ScopeWebSocketClient` desired subscriptions through protocol handshake, a real local WebSocket connection, `WebSocketGateway`, `InstrumentRegistry`, and runtime spies; covers scope -> DMM -> scope switching, shared two-tab scope lifetime, independent simultaneous scope+DMM tabs, socket-close cleanup, and reconnect convergence to the browser client's final desired subscription set;
 - `src/server/http-handler.test.ts`: direct `/dm858e` production SPA navigation without turning arbitrary missing assets into SPA responses;
 - existing `instrument-registry.test.ts`: delayed start/stop reconciliation races and first/last-subscriber ownership remain unit-level registry coverage rather than being duplicated by the integration harness.
+
+`subscriberAdded` probes in the cross-boundary harness confirm each browser subscription has reached the registry before assertions that depend on subscriber count, avoiding timing-only two-tab assertions.
 
 Repository mechanical-gate execution remains `UNKNOWN` in environments that cannot resolve `github.com`; do not treat the presence of tests as a passing `pnpm typecheck`, `pnpm test`, or `pnpm build` result. Physical DM858E/DHO804 verification remains required.
 
