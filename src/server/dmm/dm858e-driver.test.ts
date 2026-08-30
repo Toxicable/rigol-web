@@ -47,6 +47,7 @@ interface ReadingObservation {
   functionToken: string;
   response: string;
   configuration?: string;
+  effectiveRange?: number;
   operationStatus?: number;
 }
 
@@ -88,11 +89,11 @@ function defaultConfiguration(functionToken: string): string {
     case "FRES":
       return "FRES 1.00000000E+03,1.00000000E-02";
     case "FREQ":
-      return "FREQ 1.00000000E+01,1.00000000E-01";
+      return "FREQ";
     case "PER":
-      return "PER 1.00000000E+00,1.00000000E-05";
+      return "PER";
     case "CAP":
-      return "CAP 1.00000000E-06,1.00000000E-09";
+      return "CAP 1.00000000E-06";
     case "TEMP":
       return "TEMP FRTD,385";
     case "CONT":
@@ -102,6 +103,10 @@ function defaultConfiguration(functionToken: string): string {
     default:
       throw new Error(`Missing default configuration for ${functionToken}`);
   }
+}
+
+function isCapacitanceToken(functionToken: string): boolean {
+  return functionToken.trim().replace(/^"|"$/g, "").toUpperCase() === "CAP";
 }
 
 function scriptReadingObservations(
@@ -124,6 +129,17 @@ function scriptReadingObservations(
       return [value, value];
     }),
   );
+  const capacitanceRanges = observations.flatMap((observation) => {
+    if (!isCapacitanceToken(observation.functionToken)) {
+      return [];
+    }
+    const range = observation.effectiveRange ?? 1e-6;
+    const value = range.toExponential(8).toUpperCase();
+    return [value, value];
+  });
+  if (capacitanceRanges.length > 0) {
+    respond(transport, "SENSe:CAPacitance:RANGe?", ...capacitanceRanges);
+  }
   respond(
     transport,
     "SENSe:FUNCtion?",
@@ -461,6 +477,83 @@ describe("Dm858eDriver", () => {
       resolution: 0.1,
       unit: DmmUnit.Volts,
     });
+  });
+
+  it("derives capacitance resolution from the effective capacitance range", async () => {
+    const transport = new ScriptedTransport();
+    scriptReadingObservations(
+      transport,
+      {
+        functionToken: "CAP",
+        response: "1.23456789E-06 OPAQUE_CAP",
+        configuration: "CAP 1.00000000E-06",
+        effectiveRange: 1e-6,
+      },
+    );
+    const driver = scriptedDriver(transport);
+
+    await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.Capacitance)).resolves.toEqual({
+      kind: DmmReadingKind.Value,
+      function: DmmMeasurementFunction.Capacitance,
+      value: 1.23456789e-6,
+      resolution: 1e-9,
+      unit: DmmUnit.Farads,
+    });
+    expect(transport.commands.filter((command) => (
+      command === "SENSe:CAPacitance:RANGe?"
+    ))).toHaveLength(2);
+  });
+
+  it("rejects a capacitance reading when the effective range changes across DATA:LAST", async () => {
+    const transport = new ScriptedTransport();
+    respond(transport, "STATus:OPERation:CONDition?", "0", "0");
+    respond(transport, "CONFigure?", "CAP 1.00000000E-06", "CAP 1.00000000E-06");
+    respond(
+      transport,
+      "SENSe:CAPacitance:RANGe?",
+      "1.00000000E-06",
+      "1.00000000E-05",
+    );
+    respond(transport, "SENSe:FUNCtion?", "CAP", "CAP");
+    respond(transport, "DATA:LAST?", "1.23456789E-06 OPAQUE_CAP");
+
+    await expect(
+      scriptedDriver(transport).readPrimarySnapshot(DmmMeasurementFunction.Capacitance),
+    ).resolves.toBeNull();
+  });
+
+  it.each([
+    {
+      name: "frequency",
+      measurementFunction: DmmMeasurementFunction.Frequency,
+      functionToken: "FREQ",
+      response: "1.23456789E+03 OPAQUE_FREQ",
+      unit: DmmUnit.Hertz,
+    },
+    {
+      name: "period",
+      measurementFunction: DmmMeasurementFunction.Period,
+      functionToken: "PER",
+      response: "1.23456789E-03 OPAQUE_PER",
+      unit: DmmUnit.Seconds,
+    },
+  ])("keeps $name numeric display unavailable without a verified quantum", async ({
+    measurementFunction,
+    functionToken,
+    response,
+    unit,
+  }) => {
+    const transport = new ScriptedTransport();
+    scriptReadingObservations(transport, { functionToken, response });
+
+    await expect(scriptedDriver(transport).readPrimarySnapshot(measurementFunction)).resolves.toEqual({
+      kind: DmmReadingKind.Unavailable,
+      function: measurementFunction,
+      unit,
+      reason: DmmReadingUnavailableReason.ResolutionUnavailable,
+    });
+    expect(transport.commands).not.toContain("SENSe:FREQuency:VOLTage:RANGe?");
+    expect(transport.commands).not.toContain("SENSe:PERiod:VOLTage:RANGe?");
   });
 
   it("rejects a reading when configured range/resolution changes across DATA:LAST", async () => {
