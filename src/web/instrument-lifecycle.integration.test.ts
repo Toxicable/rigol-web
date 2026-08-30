@@ -16,8 +16,8 @@ import {
   ServerScopeConnectionKind,
   WebSocketGateway,
 } from "../server/websocket/websocket-gateway.js";
-import { bindDmmRoute } from "./dmm/dmm-route.js";
-import { bindScopeRoute } from "./scope-route.js";
+import { bindDmmRoute } from "./dmm/dmm-route-binding.js";
+import { bindScopeRoute } from "./scope-route-binding.js";
 import {
   ScopeWebSocketClient,
   type WebSocketLike,
