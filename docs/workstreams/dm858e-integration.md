@@ -20,7 +20,7 @@ Current automated integration coverage includes:
 
 `subscriberAdded` probes in the cross-boundary harness confirm each browser subscription has reached the registry before assertions that depend on subscriber count, avoiding timing-only two-tab assertions.
 
-Repository mechanical-gate execution remains `UNKNOWN` in environments that cannot resolve `github.com`; do not treat the presence of tests as a passing `pnpm typecheck`, `pnpm test`, or `pnpm build` result. Physical DM858E/DHO804 verification remains required.
+Repository mechanical-gate execution is `UNKNOWN` in the current agent environment: a clean HTTPS clone fails because `github.com` cannot be resolved, and the branch head has no GitHub status checks or workflow runs. Do not treat the presence of tests as a passing `pnpm typecheck`, `pnpm test`, or `pnpm build` result. Physical DM858E/DHO804 verification remains required.
 
 Remaining stream-E work is deliberately verification-led:
 
