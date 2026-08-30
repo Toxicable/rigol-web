@@ -6,6 +6,23 @@ Start after both `dm858e-backend.md` and `dm858e-frontend.md` are complete and m
 
 This stream wires the real DM858E backend to the completed route/UI, verifies the route-driven transport lifecycle against both instruments, and performs the first real-device SCPI behaviour/throughput pass.
 
+## Implementation status
+
+In progress on `dm858e-integration`, based on `main` at `82f821e` after DM858E backend PR #9 and frontend PR #10 were merged.
+
+Initial integration audit confirms the merged server already constructs `DmmRuntime`, registers it as `dm858e`, and routes DMM controls/raw SCPI through the shared `WebSocketGateway`. Stream E therefore starts from an already wired application rather than introducing a second integration layer.
+
+Remaining stream-E work is deliberately verification-led:
+
+- run the normal repository mechanical gates;
+- exercise the complete route/subscription lifecycle against both runtimes;
+- verify the documented DM858E SCPI assumptions on the physical instrument;
+- measure sustained reading throughput and interactive control latency in Slow/Medium/Fast;
+- add only regression fixes/tests for concrete mismatches found during those checks;
+- run the DHO804 regression pass after any correction.
+
+No logging is part of this stream.
+
 ## Read before changing code
 
 - `docs/dm858e-ui-plan.md`
