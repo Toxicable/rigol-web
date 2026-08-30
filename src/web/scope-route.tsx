@@ -7,6 +7,7 @@ import { MeasurementPanel } from "./components/measurement-panel.js";
 import { ScpiConsole } from "./components/scpi-console.js";
 import { ScopeToolbar } from "./components/scope-toolbar.js";
 import { TriggerControls } from "./components/trigger-controls.js";
+import { bindScopeRoute } from "./scope-route-binding.js";
 import { BrowserConnectionKind, useScopeStore } from "./scope-store.js";
 import type { ScopeWebSocketClient } from "./websocket-client.js";
 import type { WaveformController } from "./waveform/waveform-controller.js";
@@ -15,16 +16,6 @@ import { WaveformPlot } from "./waveform/waveform-plot.js";
 interface ScopeRouteProps {
   client: ScopeWebSocketClient;
   controller: WaveformController;
-}
-
-export type ScopeLifecycleClient = Pick<
-  ScopeWebSocketClient,
-  "subscribeInstrument" | "unsubscribeInstrument"
->;
-
-export function bindScopeRoute(client: ScopeLifecycleClient): () => void {
-  client.subscribeInstrument(SupportedInstrument.Dho804);
-  return () => client.unsubscribeInstrument(SupportedInstrument.Dho804);
 }
 
 export function ScopeRoute({ client, controller }: ScopeRouteProps) {
