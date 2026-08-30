@@ -27,12 +27,14 @@ import { WaveformController } from "./waveform/waveform-controller.js";
 interface RuntimeSpy extends InstrumentRuntime {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
+  subscriberAdded: ReturnType<typeof vi.fn>;
 }
 
 function runtime(): RuntimeSpy {
   return {
     start: vi.fn(async () => undefined),
     stop: vi.fn(async () => undefined),
+    subscriberAdded: vi.fn(async () => undefined),
   };
 }
 
@@ -213,21 +215,24 @@ describe("route lifecycle through browser WebSocket and gateway", () => {
     const harness = await createHarness();
     const client = harness.createClient();
 
+    expect(harness.scopeRuntime.start).not.toHaveBeenCalled();
+    expect(harness.dmmRuntime.start).not.toHaveBeenCalled();
+
     const leaveScope = bindScopeRoute(client);
-    await vi.waitFor(() => expect(harness.scopeRuntime.start).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(harness.scopeRuntime.subscriberAdded).toHaveBeenCalledOnce());
 
     leaveScope();
     const leaveDmm = bindDmmRoute(client);
     await vi.waitFor(() => {
       expect(harness.scopeRuntime.stop).toHaveBeenCalledOnce();
-      expect(harness.dmmRuntime.start).toHaveBeenCalledOnce();
+      expect(harness.dmmRuntime.subscriberAdded).toHaveBeenCalledOnce();
     });
 
     leaveDmm();
     const leaveScopeAgain = bindScopeRoute(client);
     await vi.waitFor(() => {
       expect(harness.dmmRuntime.stop).toHaveBeenCalledOnce();
-      expect(harness.scopeRuntime.start).toHaveBeenCalledTimes(2);
+      expect(harness.scopeRuntime.subscriberAdded).toHaveBeenCalledTimes(2);
       expect(runningDelta(harness.scopeRuntime)).toBe(1);
       expect(runningDelta(harness.dmmRuntime)).toBe(0);
     });
@@ -242,7 +247,10 @@ describe("route lifecycle through browser WebSocket and gateway", () => {
     const leaveFirst = bindScopeRoute(first);
     const leaveSecond = bindScopeRoute(second);
 
-    await vi.waitFor(() => expect(harness.scopeRuntime.start).toHaveBeenCalledOnce());
+    await vi.waitFor(() => {
+      expect(harness.scopeRuntime.start).toHaveBeenCalledOnce();
+      expect(harness.scopeRuntime.subscriberAdded).toHaveBeenCalledTimes(2);
+    });
 
     leaveFirst();
     await new Promise((resolve) => globalThis.setTimeout(resolve, 20));
@@ -260,8 +268,8 @@ describe("route lifecycle through browser WebSocket and gateway", () => {
     bindDmmRoute(dmmClient);
 
     await vi.waitFor(() => {
-      expect(harness.scopeRuntime.start).toHaveBeenCalledOnce();
-      expect(harness.dmmRuntime.start).toHaveBeenCalledOnce();
+      expect(harness.scopeRuntime.subscriberAdded).toHaveBeenCalledOnce();
+      expect(harness.dmmRuntime.subscriberAdded).toHaveBeenCalledOnce();
     });
 
     scopeClient.dispose();
@@ -278,7 +286,7 @@ describe("route lifecycle through browser WebSocket and gateway", () => {
     const client = harness.createClient();
     const leaveScope = bindScopeRoute(client);
 
-    await vi.waitFor(() => expect(harness.scopeRuntime.start).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(harness.scopeRuntime.subscriberAdded).toHaveBeenCalledOnce());
 
     leaveScope();
     const leaveDmm = bindDmmRoute(client);
@@ -290,7 +298,7 @@ describe("route lifecycle through browser WebSocket and gateway", () => {
       expect(runningDelta(harness.dmmRuntime)).toBe(0);
     });
 
-    const scopeStartsBeforeDrop = harness.scopeRuntime.start.mock.calls.length;
+    const scopeSubscribersBeforeDrop = harness.scopeRuntime.subscriberAdded.mock.calls.length;
     const scopeStopsBeforeDrop = harness.scopeRuntime.stop.mock.calls.length;
     const firstSocket = harness.adapters.at(-1);
     expect(firstSocket).toBeDefined();
@@ -301,7 +309,9 @@ describe("route lifecycle through browser WebSocket and gateway", () => {
       expect(harness.scopeRuntime.stop.mock.calls.length).toBeGreaterThan(scopeStopsBeforeDrop);
     });
     await vi.waitFor(() => {
-      expect(harness.scopeRuntime.start.mock.calls.length).toBeGreaterThan(scopeStartsBeforeDrop);
+      expect(harness.scopeRuntime.subscriberAdded.mock.calls.length).toBeGreaterThan(
+        scopeSubscribersBeforeDrop,
+      );
       expect(runningDelta(harness.scopeRuntime)).toBe(1);
       expect(runningDelta(harness.dmmRuntime)).toBe(0);
     });
