@@ -113,6 +113,15 @@ describe("WebSocket client", () => {
       lastError: null,
     });
     client.connect();
+    socket.receive({
+      type: MessageType.ProtocolHello,
+      protocolVersion: PROTOCOL_VERSION,
+    });
+    expect(socket.sent).toEqual([{
+      type: MessageType.ProtocolHelloAck,
+      protocolVersion: PROTOCOL_VERSION,
+    }]);
+    socket.sent.length = 0;
   });
 
   it("sets arraybuffer mode and associates monotonically increasing request IDs", async () => {

@@ -1,8 +1,11 @@
 import { createServer } from "node:http";
 
+import { DmmRuntime } from "./dmm/dmm-runtime.js";
 import { createHttpRequestHandler } from "./http-handler.js";
+import { InstrumentRegistry } from "./instruments/instrument-registry.js";
 import { ScopeRuntime } from "./scope-runtime.js";
 import {
+  ServerDmmConnectionKind,
   ServerScopeConnectionKind,
   WebSocketGateway,
   type ServerScopeConnection,
@@ -18,45 +21,78 @@ function readHttpPort(): number {
   return value;
 }
 
-function readRigolHost(): string {
-  const value = process.env.RIGOL_HOST?.trim();
+function readInstrumentHost(name: "RIGOL_SCOPE_HOST" | "RIGOL_DMM_HOST"): string {
+  const value = process.env[name]?.trim();
   if (value === undefined || value.length === 0) {
-    throw new Error("RIGOL_HOST must be a non-empty string");
+    throw new Error(`${name} must be a non-empty string`);
   }
   return value;
 }
 
-function readRigolPort(): number {
-  const raw = process.env.RIGOL_PORT;
+function readInstrumentPort(name: "RIGOL_SCOPE_PORT" | "RIGOL_DMM_PORT"): number {
+  const raw = process.env[name];
   const value = Number(raw);
   if (raw === undefined || raw.trim().length === 0 || !Number.isInteger(value) || value < 1 || value > 65_535) {
-    throw new Error("RIGOL_PORT must be an integer from 1 through 65535");
+    throw new Error(`${name} must be an integer from 1 through 65535`);
   }
   return value;
 }
 
 const httpPort = readHttpPort();
-const rigolHost = readRigolHost();
-const rigolPort = readRigolPort();
+const scopeEndpoint = {
+  host: readInstrumentHost("RIGOL_SCOPE_HOST"),
+  port: readInstrumentPort("RIGOL_SCOPE_PORT"),
+};
+const dmmEndpoint = {
+  host: readInstrumentHost("RIGOL_DMM_HOST"),
+  port: readInstrumentPort("RIGOL_DMM_PORT"),
+};
 
 const server = createServer(createHttpRequestHandler());
 
-const initialConnection: ServerScopeConnection = {
+const initialScopeConnection: ServerScopeConnection = {
   kind: ServerScopeConnectionKind.Disconnected,
-  reason: "Scope connection pending",
+  reason: "Scope runtime inactive",
 };
 
 let gateway!: WebSocketGateway;
-const runtime = new ScopeRuntime({
-  host: rigolHost,
-  port: rigolPort,
+const scopeRuntime = new ScopeRuntime({
+  ...scopeEndpoint,
   publishConnection: (connection) => gateway.setScopeConnection(connection),
   publishWaveform: (frame) => gateway.broadcastWaveform(frame),
 });
+const dmmRuntime = new DmmRuntime({
+  ...dmmEndpoint,
+  publishConnection: (connection) => gateway.setDmmConnection(connection),
+  publishState: (state) => gateway.publishDmmState(state),
+  publishSnapshot: (snapshot) => gateway.broadcastDmmSnapshot(snapshot),
+});
 
-gateway = new WebSocketGateway(server, initialConnection, {
-  requestDeepCapture: (requestId) => runtime.requestDeepCapture(requestId),
-  requestViewport: (request) => runtime.requestViewport(request),
+const instruments = new InstrumentRegistry({
+  dho804: {
+    endpoint: scopeEndpoint,
+    runtime: scopeRuntime,
+  },
+  dm858e: {
+    endpoint: dmmEndpoint,
+    runtime: dmmRuntime,
+  },
+});
+
+gateway = new WebSocketGateway(server, initialScopeConnection, {
+  instruments,
+  initialDmmConnection: {
+    kind: ServerDmmConnectionKind.Disconnected,
+    reason: "DMM runtime inactive",
+  },
+  waveformHandlers: {
+    requestDeepCapture: (requestId) => scopeRuntime.requestDeepCapture(requestId),
+    requestViewport: (request) => scopeRuntime.requestViewport(request),
+  },
+  dmmHandlers: {
+    setControl: (control) => dmmRuntime.setControl(control),
+    executeRawScpi: (command) => dmmRuntime.executeRawScpi(command),
+  },
 });
 
 let shuttingDown = false;
@@ -81,7 +117,7 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`Rigol Web shutting down on ${signal}`);
 
   try {
-    await runtime.stop();
+    await instruments.stopAll();
     await gateway.close();
     await closeHttpServer();
   } catch (error) {
@@ -104,5 +140,4 @@ server.once("error", (error) => {
 
 server.listen(httpPort, () => {
   console.log(`Rigol Web server listening on http://localhost:${httpPort}`);
-  runtime.start();
 });

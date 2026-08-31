@@ -1,0 +1,251 @@
+.dmm-toolbar {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid #282f37;
+  background: #111419;
+  position: sticky;
+  top: 46px;
+  z-index: 10;
+}
+
+.dmm-toolbar > div {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.dmm-identity {
+  color: #9aa6b2;
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dmm-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.65fr);
+  gap: 0.75rem;
+  padding: 0.75rem;
+  align-items: start;
+}
+
+.dmm-reading-panel {
+  min-height: 390px;
+  display: flex;
+  flex-direction: column;
+}
+
+.dmm-reading-header,
+.dmm-section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.dmm-reading-header h1 {
+  margin: 0.15rem 0 0;
+  font-size: 1.05rem;
+}
+
+.dmm-eyebrow {
+  color: #8e9aa6;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.dmm-primary-reading {
+  flex: 1;
+  min-height: 210px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35em;
+  padding: 1rem 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.dmm-reading-value {
+  display: inline-block;
+  width: 14.5ch;
+  min-width: 14.5ch;
+  max-width: 14.5ch;
+  text-align: right;
+  font-size: clamp(3.2rem, 8vw, 7.2rem);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -0.055em;
+}
+
+.dmm-primary-reading:not(.numeric) .dmm-reading-value {
+  text-align: center;
+}
+
+.dmm-reading-unit {
+  display: inline-block;
+  width: 3.5ch;
+  min-width: 3.5ch;
+  max-width: 3.5ch;
+  font-size: clamp(1.4rem, 2.7vw, 2.5rem);
+  color: #aeb9c4;
+  line-height: 1;
+}
+
+.dmm-reading-detail {
+  min-height: 1.4em;
+  text-align: center;
+  color: #8e9aa6;
+  font-size: 0.82rem;
+}
+
+.dmm-reading-metadata {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin: 1rem 0 0;
+}
+
+.dmm-reading-metadata div {
+  padding: 0.55rem 0.65rem;
+  border: 1px solid #242a31;
+  border-radius: 6px;
+  background: #0d1014;
+  min-width: 0;
+}
+
+.dmm-reading-metadata dt {
+  margin: 0 0 0.2rem;
+  color: #8e9aa6;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.dmm-reading-metadata dd {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+}
+
+.dmm-controls-panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.dmm-section-heading h2,
+.dmm-control-group h2 {
+  margin: 0 0 0.65rem;
+}
+
+.dmm-function-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.dmm-control-group {
+  padding-top: 0.9rem;
+  border-top: 1px solid #242a31;
+}
+
+.dmm-choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.dmm-rate-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.dmm-choice {
+  min-height: 2.45rem;
+  white-space: nowrap;
+}
+
+.dmm-choice.active {
+  border-color: #8092a5;
+  background: #222a33;
+  box-shadow: inset 0 0 0 1px #526171;
+}
+
+.dmm-rate-note {
+  margin: 0.55rem 0 0;
+  line-height: 1.4;
+}
+
+.dmm-control-error {
+  margin: 0 0.75rem 0.75rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid #754242;
+  border-radius: 6px;
+  background: #261517;
+  color: #ff9c9c;
+  font-size: 0.84rem;
+}
+
+.dmm-bottom {
+  padding: 0 0.75rem 0.75rem;
+}
+
+@media (max-width: 1050px) {
+  .dmm-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .dmm-reading-panel {
+    min-height: 330px;
+  }
+}
+
+@media (max-width: 620px) {
+  .dmm-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .dmm-toolbar > div {
+    width: 100%;
+  }
+
+  .dmm-layout,
+  .dmm-bottom {
+    padding-left: 0.4rem;
+    padding-right: 0.4rem;
+  }
+
+  .dmm-function-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .dmm-rate-grid,
+  .dmm-reading-metadata {
+    grid-template-columns: 1fr;
+  }
+
+  .dmm-primary-reading {
+    min-height: 170px;
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+
+  .dmm-reading-value {
+    width: 14.5ch;
+    min-width: 14.5ch;
+    max-width: 14.5ch;
+    font-size: clamp(2.8rem, 15vw, 5rem);
+  }
+}

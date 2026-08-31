@@ -54,7 +54,7 @@ function scriptedDriver(transport: ScriptedTransport): Dho804Driver {
     schedule: run,
     scheduleInteractive: <T>(_kind: ScpiOperationKind, _key: unknown, execute: ScpiOperation<T>["execute"]) => execute(transport as unknown as ScpiTransport, recorder),
     scheduleImmediate: <T>(_kind: ScpiOperationKind, _key: unknown, execute: ScpiOperation<T>["execute"]) => execute(transport as unknown as ScpiTransport, recorder),
-    scheduleLive: <T>(_kind: ScpiOperationKind, execute: ScpiOperation<T>["execute"]) => execute(transport as unknown as ScpiTransport, recorder),
+    scheduleLatest: <T>(_priority: ScpiPriority, _key: unknown, _kind: ScpiOperationKind, execute: ScpiOperation<T>["execute"]) => execute(transport as unknown as ScpiTransport, recorder),
   } as unknown as ScpiScheduler;
   return new Dho804Driver(scheduler);
 }

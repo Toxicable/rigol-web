@@ -20,6 +20,32 @@ button:disabled { opacity: 0.45; cursor: default; }
 input, select { padding: 0.35rem 0.45rem; min-width: 0; }
 
 .app-shell { min-height: 100vh; }
+.instrument-shell {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.45rem 1rem;
+  border-bottom: 1px solid #282f37;
+  background: #0d1014;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.instrument-switcher { display: flex; gap: 0.35rem; }
+.instrument-link {
+  color: #9aa6b2;
+  text-decoration: none;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+.instrument-link:hover { color: #e8edf2; border-color: #343b44; }
+.instrument-link.active {
+  color: #e8edf2;
+  background: #171b20;
+  border-color: #47515c;
+}
 .scope-toolbar {
   min-height: 54px;
   display: flex;
@@ -29,7 +55,7 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   border-bottom: 1px solid #282f37;
   background: #111419;
   position: sticky;
-  top: 0;
+  top: 46px;
   z-index: 10;
 }
 .scope-identity { color: #9aa6b2; font-size: 0.9rem; }
@@ -144,6 +170,8 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
 .scpi-entry pre { margin: 0.25rem 0 0; white-space: pre-wrap; color: #8fdaa8; }
 .scpi-entry.failed pre { color: #ff8c8c; }
 .empty-state { min-height: 70vh; display: grid; place-content: center; text-align: center; color: #8e9aa6; }
+.dmm-route-shell { padding: 1rem; }
+.dmm-route-shell h1 { color: #e8edf2; margin-bottom: 0.4rem; }
 
 @media (max-width: 1050px) {
   .scope-layout { grid-template-columns: 1fr; }
@@ -153,6 +181,7 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
 }
 
 @media (max-width: 620px) {
+  .instrument-shell { flex-wrap: wrap; gap: 0.4rem; }
   .scope-toolbar { flex-wrap: wrap; }
   .toolbar-actions { width: 100%; margin-left: 0; }
   .channel-grid { grid-template-columns: 1fr; }

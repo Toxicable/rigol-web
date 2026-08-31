@@ -1,4 +1,11 @@
 import type {
+  DmmControlChange,
+  DmmInfo,
+  DmmReadingSnapshot,
+  DmmState,
+} from "./dmm-types.js";
+import type { SupportedInstrument } from "./instrument-types.js";
+import type {
   Channel,
   ChannelUnit,
   EdgeSlope,
@@ -9,7 +16,7 @@ import type {
   TriggerType,
 } from "./scope-types.js";
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 4;
 
 export type NonEmptyArray<T> = [T, ...T[]];
 
@@ -32,6 +39,18 @@ export enum MessageType {
   ScpiResult = 22,
   MeasurementResult = 23,
   DeepCaptureReady = 24,
+  ProtocolHello = 25,
+  ProtocolHelloAck = 26,
+
+  InstrumentSubscribe = 30,
+  InstrumentUnsubscribe = 31,
+
+  DmmConnected = 40,
+  DmmState = 41,
+  DmmDisconnected = 42,
+  DmmSnapshot = 43,
+
+  DmmControlSet = 50,
 }
 
 export enum AcquisitionAction {
@@ -105,6 +124,26 @@ export type InteractiveControl =
   | Extract<ControlChange, { kind: ControlKind.HorizontalPosition }>
   | Extract<ControlChange, { kind: ControlKind.TriggerLevel }>;
 
+export interface ProtocolHelloMessage {
+  type: MessageType.ProtocolHello;
+  protocolVersion: number;
+}
+
+export interface ProtocolHelloAckMessage {
+  type: MessageType.ProtocolHelloAck;
+  protocolVersion: number;
+}
+
+export interface InstrumentSubscribeMessage {
+  type: MessageType.InstrumentSubscribe;
+  instrument: SupportedInstrument;
+}
+
+export interface InstrumentUnsubscribeMessage {
+  type: MessageType.InstrumentUnsubscribe;
+  instrument: SupportedInstrument;
+}
+
 export interface ControlSetMessage {
   type: MessageType.ControlSet;
   requestId: number;
@@ -174,6 +213,7 @@ export interface WaveformViewportRequestMessage {
 export interface ScpiExecuteMessage {
   type: MessageType.ScpiExecute;
   requestId: number;
+  instrument: SupportedInstrument;
   command: string;
 }
 
@@ -205,6 +245,40 @@ export type ScopeLifecycleMessage =
   | ScopeStateMessage
   | ScopeDisconnectedMessage;
 
+export interface DmmConnectedMessage {
+  type: MessageType.DmmConnected;
+  protocolVersion: number;
+  info: DmmInfo;
+  state: DmmState;
+}
+
+export interface DmmStateMessage {
+  type: MessageType.DmmState;
+  state: DmmState;
+}
+
+export interface DmmDisconnectedMessage {
+  type: MessageType.DmmDisconnected;
+  reason: string;
+}
+
+export interface DmmSnapshotMessage {
+  type: MessageType.DmmSnapshot;
+  snapshot: DmmReadingSnapshot;
+}
+
+export interface DmmControlSetMessage {
+  type: MessageType.DmmControlSet;
+  requestId: number;
+  control: DmmControlChange;
+}
+
+export type DmmLifecycleMessage =
+  | DmmConnectedMessage
+  | DmmStateMessage
+  | DmmDisconnectedMessage
+  | DmmSnapshotMessage;
+
 export interface CommandCompletedMessage {
   type: MessageType.CommandCompleted;
   requestId: number;
@@ -219,6 +293,9 @@ export interface CommandFailedMessage {
 export type CommandResult = CommandCompletedMessage | CommandFailedMessage;
 
 export type ClientMessage =
+  | ProtocolHelloAckMessage
+  | InstrumentSubscribeMessage
+  | InstrumentUnsubscribeMessage
   | ControlSetMessage
   | InteractionUpdateMessage
   | InteractionCommitMessage
@@ -226,10 +303,13 @@ export type ClientMessage =
   | DeepCaptureRequestMessage
   | WaveformViewportRequestMessage
   | ScpiExecuteMessage
-  | MeasurementReadMessage;
+  | MeasurementReadMessage
+  | DmmControlSetMessage;
 
 export type ServerJsonMessage =
+  | ProtocolHelloMessage
   | ScopeLifecycleMessage
+  | DmmLifecycleMessage
   | CommandResult
   | ScpiResultMessage
   | MeasurementResultMessage

@@ -4,7 +4,7 @@
 
 These conventions describe how Rigol Web should be implemented at the project level.
 
-Rigol Web is a personal local-network tool for one known oscilloscope. Prefer code that is direct, easy to debug and fast to change over abstractions intended for hypothetical future users, instruments or deployment environments.
+Rigol Web is a personal local-network tool for two known instruments: the DHO804 and DM858E. Prefer code that is direct, easy to debug and fast to change over abstractions intended for hypothetical future users, arbitrary instruments or deployment environments.
 
 TypeScript-specific type and naming conventions are documented separately in `typescript-practices.md`.
 
@@ -14,7 +14,7 @@ Do not add architecture merely because it is common in larger systems.
 
 Avoid by default:
 
-- generic instrument frameworks
+- generic instrument/plugin frameworks
 - dependency injection frameworks
 - generic event buses
 - repository/service/domain layers that add no useful boundary
@@ -22,9 +22,11 @@ Avoid by default:
 - circuit breakers
 - per-command retry policies
 - complex degraded-mode handling
-- abstraction for hardware that Rigol Web does not support
+- abstraction for hardware Rigol Web does not support
 
-Add complexity when a measured problem or concrete requirement justifies it.
+Share a boundary when the DHO804 and DM858E have a real common need, such as SCPI transport/scheduling or subscription-owned runtime activation. Keep device state, controls and exact command semantics separate when they differ.
+
+Add complexity only when a concrete requirement or measurement justifies it.
 
 ## Fail loudly
 
@@ -35,8 +37,9 @@ If a required condition is not met, fail clearly rather than continuing with par
 Examples:
 
 - malformed SCPI response: fail the transaction
-- broken SCPI framing: close the connection rather than guessing where the next response begins
+- broken SCPI framing: close the affected instrument connection rather than guessing where the next response begins
 - missing required configuration: fail startup rather than inventing a default
+- protocol version mismatch: close the browser socket clearly before instrument traffic
 - invalid protocol message: reject it rather than accepting a partial interpretation
 
 The project does not need high-availability behaviour. A visible failure that can be diagnosed and fixed is preferable to code that silently limps along.
@@ -49,19 +52,32 @@ Prefer a small number of concrete modules with clear ownership.
 
 Avoid bypassing module boundaries for convenience. In particular:
 
-- application code must not write directly to the scope socket
+- application code must not write directly to an instrument socket
 - DHO804-specific command knowledge belongs in the DHO804 driver
-- application control semantics belong above the driver
-- waveform acquisition/downsampling belongs in the waveform layer
-- the WebSocket layer transports application messages and should not become the scope-control implementation
+- DM858E-specific command knowledge belongs in the DM858E driver
+- scope application semantics remain above the DHO804 driver
+- DMM application semantics remain above the DM858E driver
+- waveform acquisition/downsampling remains DHO804-specific
+- the instrument registry owns activation/subscription lifecycle, not instrument commands
+- the WebSocket layer transports and routes application messages; it does not become device-control logic
 
 See `server-architecture.md` for the detailed server boundaries.
 
+## Interface changes
+
+The project owns browser and server callers together. Make hard cuts when a shared contract changes rather than keeping compatibility defaults or dual protocol surfaces.
+
+Examples:
+
+- raw SCPI requires an explicit instrument target everywhere
+- protocol version changes are explicit and handshake-validated
+- old configuration names are not retained as aliases when endpoint configuration changes
+
 ## Performance
 
-Responsiveness is a primary requirement, especially for continuous interaction.
+Responsiveness is a primary requirement, especially for DHO804 continuous interaction.
 
-Prefer designs that avoid unnecessary work in the critical path:
+Prefer designs that avoid unnecessary work in critical paths:
 
 - optimistic local UI updates during dragging
 - latest-value-wins coalescing for continuous SCPI writes
@@ -79,17 +95,19 @@ The application runs on a local network, so low interaction latency is generally
 Keep ownership obvious.
 
 - the DHO804 is authoritative for live scope state
-- the server owns the cached `ScopeState`
-- the server owns complete deep captures
+- the DM858E is authoritative for DMM state/readings
+- the server owns cached authoritative instrument state
+- the server owns complete DHO804 deep captures
+- browser transport state is separate from either physical instrument lifecycle
 - the browser owns transient presentation state
-- uPlot receives display-sized waveform data and does not own acquisition state
+- uPlot receives display-sized DHO804 waveform data and does not own acquisition state
 
 Avoid maintaining multiple competing authoritative copies of the same state.
 
 ## Scope of the project
 
-Design for the DHO804 and the current application first.
+Design for the DHO804, DM858E and current application.
 
-Do not generalise a module solely because another Rigol model or another instrument might be supported someday. Extract common abstractions later if real duplication appears.
+Do not generalise a module solely because a third model or arbitrary instrument might be supported someday. Extract common code only when real duplication or a shared requirement exists now.
 
-The goal is a responsive and maintainable tool, not a reusable instrumentation framework.
+The goal is a responsive and maintainable bench tool, not a reusable instrumentation framework.

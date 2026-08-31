@@ -20,7 +20,10 @@ import {
   type TriggerState,
 } from "../../shared/scope-types.js";
 import {
-  ScpiCoalesceKind,
+  ScpiProgramMessageKind,
+  classifyScpiProgramMessage,
+} from "../scpi/scpi-program-message.js";
+import {
   ScpiOperationKind,
   ScpiPriority,
   type ScpiCoalesceKey,
@@ -58,6 +61,15 @@ interface WaveformSetupCache {
   points: number | null;
 }
 
+interface Dho804CoalesceKeys {
+  channelScale: Readonly<Record<Channel, ScpiCoalesceKey>>;
+  channelOffset: Readonly<Record<Channel, ScpiCoalesceKey>>;
+  horizontalScale: ScpiCoalesceKey;
+  horizontalPosition: ScpiCoalesceKey;
+  triggerLevel: ScpiCoalesceKey;
+  liveWaveform: ScpiCoalesceKey;
+}
+
 const channels = [Channel.Ch1, Channel.Ch2, Channel.Ch3, Channel.Ch4] as const;
 const rawChunkSamples = 250_000;
 
@@ -68,6 +80,7 @@ export class Dho804Driver {
     format: null,
     points: null,
   };
+  private readonly coalesceKeys = createDho804CoalesceKeys();
 
   public constructor(private readonly scheduler: ScpiScheduler) {}
 
@@ -215,7 +228,7 @@ export class Dho804Driver {
     await this.command(
       `${channelPrefix(channel)}:SCALe ${value}`,
       priority,
-      { kind: ScpiCoalesceKind.ChannelScale, channel },
+      this.coalesceKeys.channelScale[channel],
     );
   }
 
@@ -231,7 +244,7 @@ export class Dho804Driver {
     await this.command(
       `${channelPrefix(channel)}:OFFSet ${value}`,
       priority,
-      { kind: ScpiCoalesceKind.ChannelOffset, channel },
+      this.coalesceKeys.channelOffset[channel],
     );
   }
 
@@ -247,7 +260,7 @@ export class Dho804Driver {
     await this.command(
       `:TIMebase:MAIN:SCALe ${value}`,
       priority,
-      { kind: ScpiCoalesceKind.HorizontalScale },
+      this.coalesceKeys.horizontalScale,
     );
   }
 
@@ -263,7 +276,7 @@ export class Dho804Driver {
     await this.command(
       `:TIMebase:MAIN:OFFSet ${value}`,
       priority,
-      { kind: ScpiCoalesceKind.HorizontalPosition },
+      this.coalesceKeys.horizontalPosition,
     );
   }
 
@@ -306,20 +319,20 @@ export class Dho804Driver {
     await this.command(
       `:TRIGger:EDGE:LEVel ${value}`,
       priority,
-      { kind: ScpiCoalesceKind.TriggerLevel },
+      this.coalesceKeys.triggerLevel,
     );
   }
 
   public async run(): Promise<void> {
-    await this.command(":RUN", ScpiPriority.Immediate, null, ScpiOperationKind.RunAction);
+    await this.command(":RUN", ScpiPriority.Immediate, null, ScpiOperationKind.Action);
   }
 
   public async stop(): Promise<void> {
-    await this.command(":STOP", ScpiPriority.Immediate, null, ScpiOperationKind.RunAction);
+    await this.command(":STOP", ScpiPriority.Immediate, null, ScpiOperationKind.Action);
   }
 
   public async single(): Promise<void> {
-    await this.command(":SINGle", ScpiPriority.Immediate, null, ScpiOperationKind.RunAction);
+    await this.command(":SINGle", ScpiPriority.Immediate, null, ScpiOperationKind.Action);
   }
 
   public async readMeasurements(
@@ -343,9 +356,9 @@ export class Dho804Driver {
   }
 
   public async executeRawScpi(command: string): Promise<string> {
-    validateRawProgramMessage(command);
+    const messageKind = classifyScpiProgramMessage(command);
     try {
-      if (hasUnquotedQueryMarker(command)) {
+      if (messageKind === ScpiProgramMessageKind.Query) {
         return await this.scheduler.schedule({
           priority: ScpiPriority.Normal,
           kind: ScpiOperationKind.RawScpi,
@@ -378,19 +391,24 @@ export class Dho804Driver {
       throw new Error("Live waveform pointCount must be an integer from 1 to 1000");
     }
 
-    return this.scheduler.scheduleLive(ScpiOperationKind.LiveWaveform, async (transport, recorder) => {
-      await this.ensureWaveformSetup(transport, channel, "NORM", "BYTE", pointCount);
-      const payload = await transport.queryBinary(":WAVeform:DATA?");
-      recorder.addBinaryBytes(payload.byteLength);
-      const preamble = parseWaveformPreamble(await transport.queryText(":WAVeform:PREamble?"));
-      const unit = parseChannelUnit(await transport.queryText(`${channelPrefix(channel)}:UNITs?`));
-      if (payload.byteLength !== pointCount) {
-        throw new Error(
-          `Expected ${pointCount} live waveform samples, received ${payload.byteLength}`,
-        );
-      }
-      return createWaveform(channel, unit, payload, preamble);
-    });
+    return this.scheduler.scheduleLatest(
+      ScpiPriority.Waveform,
+      this.coalesceKeys.liveWaveform,
+      ScpiOperationKind.BinaryTransfer,
+      async (transport, recorder) => {
+        await this.ensureWaveformSetup(transport, channel, "NORM", "BYTE", pointCount);
+        const payload = await transport.queryBinary(":WAVeform:DATA?");
+        recorder.addBinaryBytes(payload.byteLength);
+        const preamble = parseWaveformPreamble(await transport.queryText(":WAVeform:PREamble?"));
+        const unit = parseChannelUnit(await transport.queryText(`${channelPrefix(channel)}:UNITs?`));
+        if (payload.byteLength !== pointCount) {
+          throw new Error(
+            `Expected ${pointCount} live waveform samples, received ${payload.byteLength}`,
+          );
+        }
+        return createWaveform(channel, unit, payload, preamble);
+      },
+    );
   }
 
   public async readRawWaveform(channel: Channel, sampleCount: number): Promise<Dho804Waveform> {
@@ -400,7 +418,7 @@ export class Dho804Driver {
 
     return this.scheduler.schedule({
       priority: ScpiPriority.Normal,
-      kind: ScpiOperationKind.RawWaveform,
+      kind: ScpiOperationKind.BinaryTransfer,
       execute: async (transport, recorder) => {
         await this.ensureWaveformSetup(transport, channel, "RAW", "WORD", sampleCount);
         const native = new Uint16Array(sampleCount);
@@ -498,6 +516,27 @@ export class Dho804Driver {
       this.waveformSetup.points = points;
     }
   }
+}
+
+function createDho804CoalesceKeys(): Dho804CoalesceKeys {
+  return {
+    channelScale: {
+      [Channel.Ch1]: Symbol("DHO804 channel 1 scale"),
+      [Channel.Ch2]: Symbol("DHO804 channel 2 scale"),
+      [Channel.Ch3]: Symbol("DHO804 channel 3 scale"),
+      [Channel.Ch4]: Symbol("DHO804 channel 4 scale"),
+    },
+    channelOffset: {
+      [Channel.Ch1]: Symbol("DHO804 channel 1 offset"),
+      [Channel.Ch2]: Symbol("DHO804 channel 2 offset"),
+      [Channel.Ch3]: Symbol("DHO804 channel 3 offset"),
+      [Channel.Ch4]: Symbol("DHO804 channel 4 offset"),
+    },
+    horizontalScale: Symbol("DHO804 horizontal scale"),
+    horizontalPosition: Symbol("DHO804 horizontal position"),
+    triggerLevel: Symbol("DHO804 trigger level"),
+    liveWaveform: Symbol("DHO804 live waveform"),
+  };
 }
 
 function channelPrefix(channel: Channel): string {
@@ -707,43 +746,6 @@ function requireFinite(value: number, name: string): void {
   if (!Number.isFinite(value)) {
     throw new Error(`${name} must be finite`);
   }
-}
-
-function validateRawProgramMessage(command: string): void {
-  if (command.trim().length === 0) {
-    throw new Error("Raw SCPI command must not be empty");
-  }
-  if (command.includes("\n") || command.includes("\r")) {
-    throw new Error("Raw SCPI execution accepts exactly one program message");
-  }
-}
-
-function hasUnquotedQueryMarker(command: string): boolean {
-  let quote: "\"" | "'" | null = null;
-  for (let index = 0; index < command.length; index += 1) {
-    const character = command[index];
-    if (character === undefined) {
-      continue;
-    }
-    if (quote !== null) {
-      if (character === quote) {
-        if (command[index + 1] === quote) {
-          index += 1;
-        } else {
-          quote = null;
-        }
-      }
-      continue;
-    }
-    if (character === "\"" || character === "'") {
-      quote = character;
-      continue;
-    }
-    if (character === "?") {
-      return true;
-    }
-  }
-  return false;
 }
 
 function failToken(name: string, value: string): never {
