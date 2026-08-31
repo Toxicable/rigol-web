@@ -1,10 +1,8 @@
 import { useEffect } from "react";
 
-import { SupportedInstrument } from "../shared/instrument-types.js";
 import { ChannelControls } from "./components/channel-controls.js";
 import { HorizontalControls } from "./components/horizontal-controls.js";
 import { MeasurementPanel } from "./components/measurement-panel.js";
-import { ScpiConsole } from "./components/scpi-console.js";
 import { ScopeToolbar } from "./components/scope-toolbar.js";
 import { TriggerControls } from "./components/trigger-controls.js";
 import { bindScopeRoute } from "./scope-route-binding.js";
@@ -50,7 +48,6 @@ export function ScopeRoute({ client, controller }: ScopeRouteProps) {
           </div>
           <div className="bottom-grid">
             <MeasurementPanel scope={connection.scope} client={client} />
-            <ScpiConsole client={client} instrument={SupportedInstrument.Dho804} />
           </div>
         </>
       ) : (

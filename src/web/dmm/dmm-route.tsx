@@ -4,13 +4,11 @@ import type {
   DmmControlChange,
   DmmReadingSnapshot,
 } from "../../shared/dmm-types.js";
-import { SupportedInstrument } from "../../shared/instrument-types.js";
 import {
   DmmControls,
   dmmControlMatchesState,
 } from "../components/dmm/dmm-controls.js";
 import { DmmReading } from "../components/dmm/dmm-reading.js";
-import { ScpiConsole } from "../components/scpi-console.js";
 import type { ScopeWebSocketClient } from "../websocket-client.js";
 import "./dmm.css";
 import { bindDmmRoute } from "./dmm-route-binding.js";
@@ -25,7 +23,6 @@ interface DmmRouteProps {
 }
 
 interface DmmRouteViewProps {
-  client: ScopeWebSocketClient;
   connection: DmmBrowserConnection;
   latestReading: DmmReadingSnapshot | null;
   pending: boolean;
@@ -69,7 +66,6 @@ export function DmmRoute({ client }: DmmRouteProps) {
 
   return (
     <DmmRouteView
-      client={client}
       connection={connection}
       latestReading={latestReading}
       pending={pendingControl !== null}
@@ -80,7 +76,6 @@ export function DmmRoute({ client }: DmmRouteProps) {
 }
 
 export function DmmRouteView({
-  client,
   connection,
   latestReading,
   pending,
@@ -116,13 +111,6 @@ export function DmmRouteView({
               Control rejected: {controlError}
             </div>
           ) : null}
-          <div className="dmm-bottom">
-            <ScpiConsole
-              client={client}
-              instrument={SupportedInstrument.Dm858e}
-              placeholder="DATA:LAST?"
-            />
-          </div>
         </>
       ) : (
         <section className="empty-state dmm-route-shell">

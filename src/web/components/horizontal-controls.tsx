@@ -12,6 +12,25 @@ const MODE_LABELS: Record<TimebaseMode, string> = {
   [TimebaseMode.Xy]: "XY",
 };
 
+const TIMEBASE_STEPS = Array.from({ length: 33 }, (_, index) => {
+  const exponent = Math.floor(index / 3) - 9;
+  const multiplier = [1, 2, 5][index % 3] ?? 1;
+  return multiplier * 10 ** exponent;
+});
+
+function nearestTimebaseIndex(value: number): number {
+  let nearest = 0;
+  let distance = Number.POSITIVE_INFINITY;
+  TIMEBASE_STEPS.forEach((step, index) => {
+    const nextDistance = Math.abs(Math.log10(value) - Math.log10(step));
+    if (nextDistance < distance) {
+      nearest = index;
+      distance = nextDistance;
+    }
+  });
+  return nearest;
+}
+
 interface HorizontalControlsProps {
   scope: ScopeState;
   client: ScopeWebSocketClient;
@@ -22,6 +41,7 @@ export function HorizontalControls({ scope, client }: HorizontalControlsProps) {
   const isDeep = deepCapture.kind === DeepCaptureKind.Ready;
   const displayedScale = isDeep ? deepCapture.scale : scope.horizontal.scale;
   const displayedPosition = isDeep ? deepCapture.position : scope.horizontal.position;
+  const timebaseIndex = nearestTimebaseIndex(displayedScale);
   const [editing, setEditing] = useState<"scale" | "position" | null>(null);
   const [scaleDraft, setScaleDraft] = useState(String(displayedScale));
   const [positionDraft, setPositionDraft] = useState(String(displayedPosition));
@@ -79,12 +99,49 @@ export function HorizontalControls({ scope, client }: HorizontalControlsProps) {
     commitDraft(kind, event.currentTarget.value);
   };
 
+  const commitTimebaseStep = (index: number): void => {
+    const clamped = Math.max(0, Math.min(TIMEBASE_STEPS.length - 1, index));
+    const value = TIMEBASE_STEPS[clamped];
+    if (value !== undefined) {
+      setScaleDraft(String(value));
+      setNumber(ControlKind.HorizontalScale, value);
+      setEditing(null);
+    }
+  };
+
+  const stepTimebase = (direction: -1 | 1): void => {
+    commitTimebaseStep(timebaseIndex + direction);
+  };
+
   return (
     <section className="panel">
       <h2>Horizontal</h2>
       <div className="control-row">
         <label>
           Time/div
+          <div className="timebase-control">
+            <button type="button" className="step-button" onClick={() => stepTimebase(-1)} aria-label="Decrease time per division">−</button>
+            <input
+              className="timebase-slider"
+              type="range"
+              min="0"
+              max={TIMEBASE_STEPS.length - 1}
+              step="1"
+              value={timebaseIndex}
+              onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                const value = TIMEBASE_STEPS[Number(event.target.value)];
+                if (value !== undefined) setScaleDraft(String(value));
+              }}
+              onPointerUp={(event) => commitTimebaseStep(Number(event.currentTarget.value))}
+              onKeyUp={(event) => {
+                if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                  commitTimebaseStep(Number(event.currentTarget.value));
+                }
+              }}
+              aria-label="Time per division"
+            />
+            <button type="button" className="step-button" onClick={() => stepTimebase(1)} aria-label="Increase time per division">+</button>
+          </div>
           <input
             type="number"
             min="0"

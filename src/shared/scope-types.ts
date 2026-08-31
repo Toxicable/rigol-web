@@ -161,6 +161,22 @@ export enum MeasurementKind {
   Vrms = 5,
   Frequency = 6,
   Period = 7,
+  Vtop = 8,
+  Vbase = 9,
+  Vamp = 10,
+  Vupper = 11,
+  Vmid = 12,
+  Vlower = 13,
+  Overshoot = 14,
+  Preshoot = 15,
+  RiseTime = 16,
+  FallTime = 17,
+  PositiveWidth = 18,
+  NegativeWidth = 19,
+  PositiveDuty = 20,
+  NegativeDuty = 21,
+  Tvmax = 22,
+  Tvmin = 23,
 }
 
 export interface MeasurementSpec {

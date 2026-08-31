@@ -141,6 +141,9 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
 .compact-details div { display: flex; justify-content: space-between; gap: 0.75rem; }
 .compact-details dt, .compact-details dd { margin: 0; }
 .control-row { display: grid; gap: 0.4rem; }
+.timebase-control { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 0.35rem; }
+.timebase-slider { width: 100%; accent-color: #5eb1ef; }
+.step-button { min-width: 1.7rem; padding: 0.1rem 0.35rem; }
 .horizontal-details { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
 .horizontal-details div { display: block; }
 .horizontal-details dd { margin-top: 0.15rem; color: #e8edf2; }

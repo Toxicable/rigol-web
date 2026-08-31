@@ -17,16 +17,27 @@ const KIND_LABELS: Record<MeasurementKind, string> = {
   [MeasurementKind.Vrms]: "Vrms",
   [MeasurementKind.Frequency]: "Frequency",
   [MeasurementKind.Period]: "Period",
+  [MeasurementKind.Vtop]: "Vtop",
+  [MeasurementKind.Vbase]: "Vbase",
+  [MeasurementKind.Vamp]: "Vamp",
+  [MeasurementKind.Vupper]: "Vupper",
+  [MeasurementKind.Vmid]: "Vmid",
+  [MeasurementKind.Vlower]: "Vlower",
+  [MeasurementKind.Overshoot]: "Overshoot",
+  [MeasurementKind.Preshoot]: "Preshoot",
+  [MeasurementKind.RiseTime]: "Rise time",
+  [MeasurementKind.FallTime]: "Fall time",
+  [MeasurementKind.PositiveWidth]: "+Width",
+  [MeasurementKind.NegativeWidth]: "-Width",
+  [MeasurementKind.PositiveDuty]: "+Duty",
+  [MeasurementKind.NegativeDuty]: "-Duty",
+  [MeasurementKind.Tvmax]: "Tvmax",
+  [MeasurementKind.Tvmin]: "Tvmin",
 };
 
-const KINDS = [
-  MeasurementKind.Vpp,
-  MeasurementKind.Vmax,
-  MeasurementKind.Vmin,
-  MeasurementKind.Vavg,
-  MeasurementKind.Vrms,
-  MeasurementKind.Frequency,
-  MeasurementKind.Period,
+const MEASUREMENT_GROUPS = [
+  { label: "Voltage", kinds: [MeasurementKind.Vpp, MeasurementKind.Vmax, MeasurementKind.Vmin, MeasurementKind.Vtop, MeasurementKind.Vbase, MeasurementKind.Vamp, MeasurementKind.Vavg, MeasurementKind.Vrms, MeasurementKind.Vupper, MeasurementKind.Vmid, MeasurementKind.Vlower, MeasurementKind.Overshoot, MeasurementKind.Preshoot] },
+  { label: "Timing", kinds: [MeasurementKind.Frequency, MeasurementKind.Period, MeasurementKind.RiseTime, MeasurementKind.FallTime, MeasurementKind.PositiveWidth, MeasurementKind.NegativeWidth, MeasurementKind.PositiveDuty, MeasurementKind.NegativeDuty, MeasurementKind.Tvmax, MeasurementKind.Tvmin] },
 ] as const;
 
 interface MeasurementPanelProps {
@@ -80,7 +91,11 @@ export function MeasurementPanel({ scope, client }: MeasurementPanelProps) {
           ))}
         </select>
         <select value={kind} onChange={(event: ChangeEvent<HTMLSelectElement>) => setKind(Number(event.target.value) as MeasurementKind)}>
-          {KINDS.map((item) => <option value={item} key={item}>{KIND_LABELS[item]}</option>)}
+          {MEASUREMENT_GROUPS.map((group) => (
+            <optgroup label={group.label} key={group.label}>
+              {group.kinds.map((item) => <option value={item} key={item}>{KIND_LABELS[item]}</option>)}
+            </optgroup>
+          ))}
         </select>
         <button type="button" onClick={add}>Add</button>
       </div>
