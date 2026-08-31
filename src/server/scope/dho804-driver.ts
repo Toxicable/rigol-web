@@ -355,6 +355,21 @@ export class Dho804Driver {
     return values;
   }
 
+  public async setMeasurements(
+    specs: MeasurementSpec[],
+    priority: ScpiPriority,
+  ): Promise<void> {
+    await this.command(":MEASure:CLEar", priority, null, ScpiOperationKind.Measurement);
+    for (const spec of specs) {
+      await this.command(
+        `:MEASure:ITEM ${measurementItem(spec.kind)},CHANnel${spec.channel}`,
+        priority,
+        null,
+        ScpiOperationKind.Measurement,
+      );
+    }
+  }
+
   public async executeRawScpi(command: string): Promise<string> {
     const messageKind = classifyScpiProgramMessage(command);
     try {

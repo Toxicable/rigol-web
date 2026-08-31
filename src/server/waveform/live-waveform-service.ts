@@ -35,6 +35,7 @@ export class LiveWaveformService {
   private readonly pointCount: number;
   private readonly sequences = new Uint32Array(5);
   private liveWanted = false;
+  private paused = false;
   private freshWanted = false;
   private loopPromise: Promise<void> | null = null;
 
@@ -61,8 +62,18 @@ export class LiveWaveformService {
     this.freshWanted = false;
   }
 
+  public pause(): void {
+    this.paused = true;
+    this.freshWanted = false;
+  }
+
+  public resume(): void {
+    this.paused = false;
+    this.requestFresh();
+  }
+
   public requestFresh(): void {
-    if (!this.liveWanted) {
+    if (!this.liveWanted || this.paused) {
       return;
     }
     this.freshWanted = true;
@@ -101,7 +112,7 @@ export class LiveWaveformService {
       if (!shouldContinue) {
         return;
       }
-      if (this.liveWanted) {
+      if (this.liveWanted && !this.paused) {
         this.freshWanted = true;
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
@@ -122,11 +133,11 @@ export class LiveWaveformService {
     }
 
     for (const channel of enabledChannels) {
-      if (!this.liveWanted) {
+      if (!this.liveWanted || this.paused) {
         return false;
       }
       const waveform = await this.driver.readLiveWaveform(channel, this.pointCount);
-      if (!this.liveWanted) {
+      if (!this.liveWanted || this.paused) {
         return false;
       }
       if (waveform.channel !== channel) {

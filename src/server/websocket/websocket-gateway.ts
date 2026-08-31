@@ -88,6 +88,8 @@ export type ServerDmmConnection =
 export interface WaveformRequestHandlers {
   requestDeepCapture(requestId: number): Promise<DeepCaptureReadyMessage>;
   requestViewport(request: WaveformViewportRequestMessage): Promise<Uint8Array>;
+  pauseLiveWaveform?: () => void;
+  resumeLiveWaveform?: () => void;
 }
 
 export interface DmmRequestHandlers {
@@ -304,6 +306,14 @@ function readMeasurements(value: unknown): NonEmptyArray<MeasurementSpec> {
     throw new Error("measurements must contain at least one item");
   }
 
+  return readMeasurementList(value) as NonEmptyArray<MeasurementSpec>;
+}
+
+function readMeasurementList(value: unknown): MeasurementSpec[] {
+  if (!Array.isArray(value)) {
+    throw new Error("measurements must be an array");
+  }
+
   const measurements = value.map((item): MeasurementSpec => {
     if (!isRecord(item)) {
       throw new Error("measurement must be an object");
@@ -315,7 +325,7 @@ function readMeasurements(value: unknown): NonEmptyArray<MeasurementSpec> {
     };
   });
 
-  return measurements as NonEmptyArray<MeasurementSpec>;
+  return measurements;
 }
 
 function readAcquisitionAction(value: unknown): AcquisitionAction {
@@ -488,6 +498,12 @@ function parseClientMessage(value: unknown): ClientMessage {
         type: MessageType.MeasurementRead,
         requestId: readRequestId(value.requestId),
         measurements: readMeasurements(value.measurements),
+      };
+    case MessageType.MeasurementSet:
+      return {
+        type: MessageType.MeasurementSet,
+        requestId: readRequestId(value.requestId),
+        measurements: readMeasurementList(value.measurements),
       };
     case MessageType.DmmControlSet:
       return {
@@ -796,6 +812,7 @@ export class WebSocketGateway {
         case MessageType.InteractionUpdate: {
           this.requireSubscribed(client, SupportedInstrument.Dho804);
           const { controller } = this.connectedScopeController();
+          this.waveformHandlers.pauseLiveWaveform?.();
           try {
             await controller.updateInteraction(message.control);
           } catch (error) {
@@ -806,9 +823,13 @@ export class WebSocketGateway {
         case MessageType.InteractionCommit: {
           this.requireSubscribed(client, SupportedInstrument.Dho804);
           const { controller, revision } = this.connectedScopeController();
-          await controller.commitInteraction(message.control);
-          this.requireScopeConnectionRevision(revision);
-          this.sendCompleted(client, message.requestId);
+          try {
+            await controller.commitInteraction(message.control);
+            this.requireScopeConnectionRevision(revision);
+            this.sendCompleted(client, message.requestId);
+          } finally {
+            this.waveformHandlers.resumeLiveWaveform?.();
+          }
           return;
         }
         case MessageType.AcquisitionAction: {
@@ -829,6 +850,14 @@ export class WebSocketGateway {
             requestId: message.requestId,
             values,
           });
+          return;
+        }
+        case MessageType.MeasurementSet: {
+          this.requireSubscribed(client, SupportedInstrument.Dho804);
+          const { controller, revision } = this.connectedScopeController();
+          await controller.setMeasurements(message.measurements);
+          this.requireScopeConnectionRevision(revision);
+          this.sendCompleted(client, message.requestId);
           return;
         }
         case MessageType.ScpiExecute: {

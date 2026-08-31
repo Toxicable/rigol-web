@@ -20,6 +20,7 @@ import {
   type InteractiveControl,
   type InteractionUpdateMessage,
   type MeasurementReadMessage,
+  type MeasurementSetMessage,
   type MeasurementResultMessage,
   type NonEmptyArray,
   type ProtocolHelloAckMessage,
@@ -339,6 +340,16 @@ export class ScopeWebSocketClient {
     return response;
   }
 
+  public setMeasurements(measurements: MeasurementSpec[]): Promise<void> {
+    const requestId = this.nextRequestId();
+    const message: MeasurementSetMessage = {
+      type: MessageType.MeasurementSet,
+      requestId,
+      measurements,
+    };
+    return this.sendCommand(message);
+  }
+
   public async pollMeasurementsOnce(measurements: MeasurementSpec[]): Promise<void> {
     if (measurements.length === 0 || this.measurementInFlight) {
       return;
@@ -516,6 +527,7 @@ export class ScopeWebSocketClient {
       | ControlSetMessage
       | InteractionCommitMessage
       | AcquisitionActionMessage
+      | MeasurementSetMessage
       | DmmControlSetMessage,
   ): Promise<void> {
     return this.sendRequest(message).then((response) => {
@@ -533,6 +545,7 @@ export class ScopeWebSocketClient {
       | DeepCaptureRequestMessage
       | ScpiExecuteMessage
       | MeasurementReadMessage
+      | MeasurementSetMessage
       | DmmControlSetMessage,
   ): Promise<ServerJsonMessage> {
     return new Promise((resolve, reject) => {

@@ -160,6 +160,14 @@ export class ScopeRuntime {
     };
   }
 
+  public pauseLiveWaveform(): void {
+    this.session?.live.pause();
+  }
+
+  public resumeLiveWaveform(): void {
+    this.session?.live.resume();
+  }
+
   public async requestViewport(request: WaveformViewportRequestMessage): Promise<Uint8Array> {
     const session = this.requireSession();
     const frame = session.deep.getViewport({

@@ -46,6 +46,12 @@ export function MeasurementPanel({ scope, client }: MeasurementPanelProps) {
     [client],
   );
 
+  useEffect(() => {
+    void client.setMeasurements(specs).catch((error: unknown) => {
+      useScopeStore.getState().setError(error instanceof Error ? error.message : String(error));
+    });
+  }, [client, specs]);
+
   const add = () => {
     if (specs.some((spec) => spec.channel === channel && spec.kind === kind)) {
       return;

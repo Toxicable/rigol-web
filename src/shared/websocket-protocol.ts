@@ -33,6 +33,7 @@ export enum MessageType {
   WaveformViewportRequest = 15,
   ScpiExecute = 16,
   MeasurementRead = 17,
+  MeasurementSet = 18,
 
   CommandCompleted = 20,
   CommandFailed = 21,
@@ -179,6 +180,12 @@ export interface MeasurementResultMessage {
   values: MeasurementValue[];
 }
 
+export interface MeasurementSetMessage {
+  type: MessageType.MeasurementSet;
+  requestId: number;
+  measurements: MeasurementSpec[];
+}
+
 export interface DeepCaptureRequestMessage {
   type: MessageType.DeepCaptureRequest;
   requestId: number;
@@ -304,6 +311,7 @@ export type ClientMessage =
   | WaveformViewportRequestMessage
   | ScpiExecuteMessage
   | MeasurementReadMessage
+  | MeasurementSetMessage
   | DmmControlSetMessage;
 
 export type ServerJsonMessage =
