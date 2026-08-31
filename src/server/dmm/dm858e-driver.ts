@@ -538,7 +538,9 @@ function parseConfiguration(value: string): ParsedConfiguration {
     return { function: measurementFunction };
   }
   if (resolution === undefined) {
-    return { function: measurementFunction, range };
+    return range === undefined
+      ? { function: measurementFunction }
+      : { function: measurementFunction, range };
   }
   if (range === undefined) {
     return { function: measurementFunction, resolution };

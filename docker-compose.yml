@@ -3,8 +3,10 @@ services:
     build: .
     container_name: rigol-web
     environment:
-      RIGOL_HOST: ${RIGOL_HOST:?set RIGOL_HOST in .env}
-      RIGOL_PORT: ${RIGOL_PORT:?set RIGOL_PORT in .env}
+      RIGOL_SCOPE_HOST: ${RIGOL_SCOPE_HOST:?set RIGOL_SCOPE_HOST in .env}
+      RIGOL_SCOPE_PORT: ${RIGOL_SCOPE_PORT:?set RIGOL_SCOPE_PORT in .env}
+      RIGOL_DMM_HOST: ${RIGOL_DMM_HOST:?set RIGOL_DMM_HOST in .env}
+      RIGOL_DMM_PORT: ${RIGOL_DMM_PORT:?set RIGOL_DMM_PORT in .env}
       PORT: "3000"
     ports:
       - "3018:3000"
