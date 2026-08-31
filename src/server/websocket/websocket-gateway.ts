@@ -218,6 +218,22 @@ function readMeasurementKind(value: unknown): MeasurementKind {
     case MeasurementKind.Vrms:
     case MeasurementKind.Frequency:
     case MeasurementKind.Period:
+    case MeasurementKind.Vtop:
+    case MeasurementKind.Vbase:
+    case MeasurementKind.Vamp:
+    case MeasurementKind.Vupper:
+    case MeasurementKind.Vmid:
+    case MeasurementKind.Vlower:
+    case MeasurementKind.Overshoot:
+    case MeasurementKind.Preshoot:
+    case MeasurementKind.RiseTime:
+    case MeasurementKind.FallTime:
+    case MeasurementKind.PositiveWidth:
+    case MeasurementKind.NegativeWidth:
+    case MeasurementKind.PositiveDuty:
+    case MeasurementKind.NegativeDuty:
+    case MeasurementKind.Tvmax:
+    case MeasurementKind.Tvmin:
       return value;
     default:
       throw new Error("Invalid measurement kind");

@@ -121,25 +121,6 @@ export function HorizontalControls({ scope, client }: HorizontalControlsProps) {
           Time/div
           <div className="timebase-control">
             <button type="button" className="step-button" onClick={() => stepTimebase(-1)} aria-label="Decrease time per division">−</button>
-            <input
-              className="timebase-slider"
-              type="range"
-              min="0"
-              max={TIMEBASE_STEPS.length - 1}
-              step="1"
-              value={timebaseIndex}
-              onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                const value = TIMEBASE_STEPS[Number(event.target.value)];
-                if (value !== undefined) setScaleDraft(String(value));
-              }}
-              onPointerUp={(event) => commitTimebaseStep(Number(event.currentTarget.value))}
-              onKeyUp={(event) => {
-                if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-                  commitTimebaseStep(Number(event.currentTarget.value));
-                }
-              }}
-              aria-label="Time per division"
-            />
             <button type="button" className="step-button" onClick={() => stepTimebase(1)} aria-label="Increase time per division">+</button>
           </div>
           <input
