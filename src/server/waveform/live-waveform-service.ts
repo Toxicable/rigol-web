@@ -15,7 +15,9 @@ export interface LiveWaveformServiceOptions {
   pointCount?: number;
 }
 
-const DEFAULT_POINT_COUNT = 1_000;
+// The DHO804 firmware returns 999 samples when NORMAL/BYTE mode is asked for
+// 1000 points, so keep the live request within its effective limit.
+const DEFAULT_POINT_COUNT = 999;
 
 function nextUint32(value: number): number {
   return (value + 1) >>> 0;
