@@ -18,6 +18,7 @@ export interface LiveWaveformServiceOptions {
 // The DHO804 firmware returns 999 samples when NORMAL/BYTE mode is asked for
 // 1000 points, so keep the live request within its effective limit.
 const DEFAULT_POINT_COUNT = 999;
+const RESUME_SETTLE_DELAY_MS = 200;
 
 function nextUint32(value: number): number {
   return (value + 1) >>> 0;
@@ -38,6 +39,7 @@ export class LiveWaveformService {
   private paused = false;
   private freshWanted = false;
   private loopPromise: Promise<void> | null = null;
+  private resumeTimer: ReturnType<typeof setTimeout> | null = null;
 
   public constructor(options: LiveWaveformServiceOptions) {
     if (!Number.isInteger(options.pointCount ?? DEFAULT_POINT_COUNT)
@@ -60,6 +62,10 @@ export class LiveWaveformService {
   public stop(): void {
     this.liveWanted = false;
     this.freshWanted = false;
+    if (this.resumeTimer !== null) {
+      clearTimeout(this.resumeTimer);
+      this.resumeTimer = null;
+    }
   }
 
   public pause(): void {
@@ -69,7 +75,13 @@ export class LiveWaveformService {
 
   public resume(): void {
     this.paused = false;
-    this.requestFresh();
+    if (this.resumeTimer !== null) {
+      clearTimeout(this.resumeTimer);
+    }
+    this.resumeTimer = setTimeout(() => {
+      this.resumeTimer = null;
+      this.requestFresh();
+    }, RESUME_SETTLE_DELAY_MS);
   }
 
   public requestFresh(): void {

@@ -820,9 +820,27 @@ export class WebSocketGateway {
         case MessageType.ControlSet: {
           this.requireSubscribed(client, SupportedInstrument.Dho804);
           const { controller, revision } = this.connectedScopeController();
-          await controller.setControl(message.control);
-          this.requireScopeConnectionRevision(revision);
-          this.sendCompleted(client, message.requestId);
+          const pausesLive =
+            message.control.kind === ControlKind.HorizontalScale ||
+            message.control.kind === ControlKind.HorizontalPosition;
+          if (pausesLive) {
+            this.waveformHandlers.pauseLiveWaveform?.();
+          }
+          console.info("Scope control requested", {
+            kind: message.control.kind,
+            value: message.control.value,
+            channel: "channel" in message.control ? message.control.channel : undefined,
+            pausesLive,
+          });
+          try {
+            await controller.setControl(message.control);
+            this.requireScopeConnectionRevision(revision);
+            this.sendCompleted(client, message.requestId);
+          } finally {
+            if (pausesLive) {
+              this.waveformHandlers.resumeLiveWaveform?.();
+            }
+          }
           return;
         }
         case MessageType.InteractionUpdate: {
