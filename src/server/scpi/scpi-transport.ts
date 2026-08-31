@@ -13,6 +13,7 @@ export class ScpiResponseTypeError extends Error {}
 export class ScpiTransportError extends Error {}
 
 interface PendingResponse {
+  command: string;
   resolve: (response: ScpiResponse) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
@@ -138,9 +139,11 @@ export class ScpiTransport {
 
     const responsePromise = new Promise<ScpiResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.invalidate(new ScpiTransportError(`SCPI query timed out after ${this.responseTimeoutMs} ms`));
+        this.invalidate(new ScpiTransportError(
+          `SCPI query timed out after ${this.responseTimeoutMs} ms while waiting for ${command}`,
+        ));
       }, this.responseTimeoutMs);
-      this.pending = { resolve, reject, timer };
+      this.pending = { command, resolve, reject, timer };
     });
 
     try {
