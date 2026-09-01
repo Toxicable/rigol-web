@@ -43,14 +43,6 @@ class ScriptedTransport {
     if (value === undefined) throw new Error(`No scripted binary response for ${command}`);
     return value;
   };
-  public queryBinaryBlocks = async (command: string, expectedBlocks: number): Promise<Uint8Array[]> => {
-    this.commands.push(command);
-    const values = this.binary.get(command);
-    if (values === undefined || values.length < expectedBlocks) {
-      throw new Error(`No scripted ${expectedBlocks}-block binary response for ${command}`);
-    }
-    return values.splice(0, expectedBlocks);
-  };
   public query = async (command: string) => ({ kind: ScpiResponseKind.Text as const, value: await this.queryText(command) });
   public isUsable = (): boolean => true;
 }
@@ -115,11 +107,8 @@ function respondMeasurementStatistics(
   respond(transport, `:MEASure:STATistic:ITEM? CNT,${item},${source}`, count);
 }
 
-function liveBatchCommand(...requested: Channel[]): string {
-  return requested.flatMap((channel) => [
-    `:WAVeform:SOURce CHANnel${channel}`,
-    ":WAVeform:DATA?",
-  ]).join(";");
+function liveCommand(channel: Channel): string {
+  return `:WAVeform:SOURce CHANnel${channel};:WAVeform:DATA?`;
 }
 
 async function readOneLive(
@@ -127,9 +116,7 @@ async function readOneLive(
   channel: Channel,
   pointCount: number,
 ) {
-  const [waveform] = await driver.readLiveWaveforms([channel], pointCount);
-  if (waveform === undefined) throw new Error("Expected one live waveform");
-  return waveform;
+  return driver.readLiveWaveform(channel, pointCount);
 }
 
 describe("Dho804Driver", () => {
@@ -341,31 +328,21 @@ describe("Dho804Driver", () => {
     ]);
   });
 
-  it("forces all requested live channels into one compound waveform program message", async () => {
+  it("combines live source selection and DATA? in one program message", async () => {
     const transport = new ScriptedTransport();
     respondChannel(transport, Channel.Ch1, "1", "DC", "VOLT");
-    respondChannel(transport, Channel.Ch3, "1", "DC", "VOLT");
     const driver = scriptedDriver(transport);
     await driver.readChannelState(Channel.Ch1, ScpiPriority.Normal);
-    await driver.readChannelState(Channel.Ch3, ScpiPriority.Normal);
-    respond(
-      transport,
-      ":WAVeform:PREamble?",
-      "0,0,2,1,1e-6,0,0,0.5,10,0",
-      "0,0,2,1,1e-6,0,0,1,20,0",
-    );
-    const command = liveBatchCommand(Channel.Ch1, Channel.Ch3);
-    transport.binary.set(command, [
-      Uint8Array.from([10, 12]),
-      Uint8Array.from([20, 22]),
-    ]);
+    respond(transport, ":WAVeform:PREamble?", "0,0,2,1,1e-6,0,0,0.5,10,0");
+    const command = liveCommand(Channel.Ch1);
+    transport.binary.set(command, [Uint8Array.from([10, 12])]);
 
-    const waveforms = await driver.readLiveWaveforms([Channel.Ch1, Channel.Ch3], 2);
+    const waveform = await driver.readLiveWaveform(Channel.Ch1, 2);
 
-    expect(waveforms.map((waveform) => waveform.channel)).toEqual([Channel.Ch1, Channel.Ch3]);
-    expect([...waveforms[0]!.samples]).toEqual([0, 1]);
-    expect([...waveforms[1]!.samples]).toEqual([0, 2]);
+    expect(waveform.channel).toBe(Channel.Ch1);
+    expect([...waveform.samples]).toEqual([0, 1]);
     expect(transport.commands.filter((entry) => entry === command)).toHaveLength(1);
+    expect(transport.commands).not.toContain(":WAVeform:SOURce CHANnel1");
   });
 
   it("reuses cached live unit and preamble metadata", async () => {
@@ -374,7 +351,7 @@ describe("Dho804Driver", () => {
     const driver = scriptedDriver(transport);
     await driver.readChannelState(Channel.Ch1, ScpiPriority.Normal);
 
-    const command = liveBatchCommand(Channel.Ch1);
+    const command = liveCommand(Channel.Ch1);
     transport.binary.set(command, [
       Uint8Array.from([10, 12]),
       Uint8Array.from([10, 14]),
@@ -398,7 +375,7 @@ describe("Dho804Driver", () => {
     const driver = scriptedDriver(transport);
     await driver.readChannelState(Channel.Ch1, ScpiPriority.Normal);
 
-    const command = liveBatchCommand(Channel.Ch1);
+    const command = liveCommand(Channel.Ch1);
     transport.binary.set(command, [
       Uint8Array.from([10, 12]),
       Uint8Array.from([10, 12]),
@@ -421,7 +398,7 @@ describe("Dho804Driver", () => {
     const driver = scriptedDriver(transport);
     await driver.readChannelState(Channel.Ch1, ScpiPriority.Normal);
 
-    const command = liveBatchCommand(Channel.Ch1);
+    const command = liveCommand(Channel.Ch1);
     transport.binary.set(command, [
       Uint8Array.from([12]),
       Uint8Array.from([12]),
@@ -443,7 +420,7 @@ describe("Dho804Driver", () => {
     const driver = scriptedDriver(transport);
     await driver.readHorizontalState(ScpiPriority.Normal);
 
-    const command = liveBatchCommand(Channel.Ch1);
+    const command = liveCommand(Channel.Ch1);
     transport.binary.set(command, [
       Uint8Array.from([10]),
       Uint8Array.from([10]),
@@ -472,7 +449,7 @@ describe("Dho804Driver", () => {
     const driver = scriptedDriver(transport);
     await driver.readHorizontalState(ScpiPriority.Normal);
 
-    const command = liveBatchCommand(Channel.Ch1);
+    const command = liveCommand(Channel.Ch1);
     transport.binary.set(command, [
       Uint8Array.from([10]),
       Uint8Array.from([10]),
@@ -504,7 +481,7 @@ describe("Dho804Driver", () => {
     const driver = scriptedDriver(transport);
     await driver.readHorizontalState(ScpiPriority.Normal);
 
-    const command = liveBatchCommand(Channel.Ch1);
+    const command = liveCommand(Channel.Ch1);
     transport.binary.set(command, [
       Uint8Array.from([10]),
       Uint8Array.from([10]),

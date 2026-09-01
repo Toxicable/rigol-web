@@ -13,29 +13,35 @@ Live acquisition therefore uses a fixed 999-point NORMAL/BYTE path. There is no 
 
 All software changes in this workstream cost $0.
 
-## Compound live waveform transaction
+## Multi-channel compound result
 
-A four-channel capture of the old loop showed strict serial traffic:
+A four-channel capture of the original loop showed strict serial traffic:
 
 `SOURCE CH1 -> DATA? -> SOURCE CH2 -> DATA? -> SOURCE CH3 -> DATA? -> SOURCE CH4 -> DATA?`
 
 Representative groups consumed about 133-139 ms in `DATA?` time alone, giving roughly 7.2-7.5 complete four-channel sweeps per second before other scheduler work.
 
-The production path now hard-cuts to one SCPI program message per live cycle containing every enabled channel in display order:
+A later hard-cut experiment sent every enabled channel in one SCPI program message:
 
-`SOURCE CH1;DATA?;SOURCE CH2;DATA?;...`
+`SOURCE CH1;DATA?;SOURCE CH2;DATA?;SOURCE CH3;DATA?;SOURCE CH4;DATA?`
 
-This is not a feature flag or optional probe. `ScpiTransport` parses the expected number of IEEE488.2 binary blocks from that one transaction. It accepts semicolon-separated, line-separated, or directly adjacent length-delimited blocks and rejects unexpected trailing data. Each returned payload must be exactly 999 bytes and is mapped back to the corresponding requested channel.
+The real DHO804 repeatedly returned four syntactically valid IEEE488.2 blocks but only 999 payload bytes in total. CH1 contained the expected 999-byte waveform and CH2 was a zero-length block; because total payload was still 999 bytes, the remaining blocks were also empty. Representative transaction times were roughly 89-111 ms, with occasional runs above 120 ms. The result was stable across many repetitions.
 
-For one enabled channel the same rule still applies: `SOURCE CHx;DATA?` is sent as one program message.
+This proves that the DHO804 accepts the multi-query syntax but does **not** provide multiple usable waveform payloads from one program message. Do not use multi-channel `DATA?` chaining for live acquisition.
 
-NORMAL/BYTE preambles remain cached per channel. A missing preamble selects that channel and queries `PREamble?` before the live batch; once warm, the steady live cycle is only the compound waveform transaction. Channel units are seeded by the initial scope snapshot and cached.
+The production live path now uses one program message per enabled channel:
+
+`SOURCE CHx;DATA?`
+
+That keeps source selection and waveform query combined while giving the scheduler and live-service pause logic a boundary between channels. It is the only live acquisition path; there is no multi-channel batching option or fallback mode.
+
+NORMAL/BYTE preambles remain cached per channel. Channel units are seeded by the initial scope snapshot and cached.
 
 ## Interaction stability
 
 A real-scope run proved that horizontal writes must not be interleaved with live waveform transfer. During repeated `:TIMebase:MAIN:OFFSet` writes, one `DATA?` returned zero bytes and a later 999-byte block stopped after 985 total bytes, eventually timing out.
 
-Interactive drags therefore pause live waveform acquisition. Commit resumes acquisition after a 200 ms settle delay. Horizontal scale/position writes invalidate cached preambles so the first resumed cycle obtains fresh X metadata; the drag itself does not issue repeated live `DATA?`/`PREamble?` traffic.
+Interactive drags therefore pause live waveform acquisition. Commit resumes acquisition after a 200 ms settle delay. Horizontal scale/position writes invalidate cached preambles so the first resumed read obtains fresh X metadata; the drag itself does not issue repeated live `DATA?`/`PREamble?` traffic.
 
 App-driven vertical scale/offset changes update warm Y metadata locally:
 
@@ -52,7 +58,7 @@ The server reads one complete hardware snapshot when a scope session is establis
 
 Steady-state query policy:
 
-- live waveform: one compound multi-channel waveform transaction per cycle;
+- live waveform: one `SOURCE CHx;DATA?` compound transaction per enabled channel;
 - vertical metadata: `PREamble?` only on a cache miss;
 - horizontal metadata: one fresh `PREamble?` after a committed horizontal interaction;
 - measurements: six native statistic queries per selected measurement;
@@ -62,19 +68,23 @@ Steady-state query policy:
 
 ## Measurement occupancy
 
-With four live channels active, one selected measurement showed individual statistic queries around 23-35 ms while `measurements:complete` spanned roughly 312-375 ms because measurement operations were interleaved with waveform work. Treat the aggregate elapsed time as scheduler latency/occupancy rather than six back-to-back query durations.
+With four live channels active, an earlier serial-live capture showed individual statistic queries around 23-35 ms while `measurements:complete` spanned roughly 312-375 ms because measurement operations were interleaved with waveform work.
+
+The failed four-channel compound experiment produced a much larger example, about 718 ms for one selected measurement, because each statistic query was interleaved with another roughly 90-105 ms invalid compound waveform attempt. Do not use that failed-run aggregate as the steady-state measurement baseline.
 
 ## SCPI timing instrumentation
 
 `ScpiTransport` times a query from immediately before the program-message write until the complete response is parsed.
 
-Single response example:
+Normal live response example:
 
-`[SCPI] query:complete {"command":"...","elapsedMs":...,"responseKind":"binary","responseBytes":999}`
+`[SCPI] query:complete {"command":":WAVeform:SOURce CHANnel1;:WAVeform:DATA?","elapsedMs":...,"responseKind":"binary","responseBytes":999}`
 
-Compound live response example:
+The rejected multi-channel experiment looked like:
 
-`[SCPI] query:complete {"command":"...","elapsedMs":...,"responseKind":"binary-blocks","responseBlocks":4,"responseBytes":3996}`
+`[SCPI] query:complete {"command":"SOURCE CH1;DATA?;SOURCE CH2;DATA?;SOURCE CH3;DATA?;SOURCE CH4;DATA?","elapsedMs":93.402,"responseKind":"binary-blocks","responseBlocks":4,"responseBytes":999}`
+
+The corresponding driver failure was `Expected 999 live waveform samples for CH2, received 0`.
 
 Measurement reads also emit:
 
@@ -87,6 +97,8 @@ The DHO804 accepts compound text queries and returns semicolon-separated results
 A community DHO driver also uses compound text queries:
 
 - https://github.com/eicorg/epicsdev/blob/e9bc3ad122d3e0e0526a9d7e050325d2ed1ce405/oscilloscope/rigol_dho/rigol_dho/__main__.py
+
+Compound text-query support must not be generalized to multiple binary waveform queries; the real DHO804 result above is authoritative for this deployment.
 
 ## Transport
 

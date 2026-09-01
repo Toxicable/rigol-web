@@ -4,10 +4,7 @@ import type { Dho804Waveform } from "../scope/dho804-driver.js";
 import { encodeWaveformFrame } from "./waveform-frame-encoder.js";
 
 export interface LiveWaveformDriver {
-  readLiveWaveforms(
-    channels: readonly Channel[],
-    pointCount: number,
-  ): Promise<Dho804Waveform[]>;
+  readLiveWaveform(channel: Channel, pointCount: number): Promise<Dho804Waveform>;
 }
 
 export interface LiveWaveformServiceOptions {
@@ -139,30 +136,20 @@ export class LiveWaveformService {
     if (enabledChannels.length === 0) {
       return false;
     }
-    if (!this.liveWanted || this.paused) {
-      return false;
-    }
 
-    const waveforms = await this.driver.readLiveWaveforms(enabledChannels, LIVE_POINT_COUNT);
-    if (!this.liveWanted || this.paused) {
-      return false;
-    }
-    if (waveforms.length !== enabledChannels.length) {
-      throw new Error(
-        `Driver returned ${waveforms.length} live waveforms for ${enabledChannels.length} enabled channels`,
-      );
-    }
-
-    for (let index = 0; index < enabledChannels.length; index += 1) {
-      const channel = enabledChannels[index];
-      const waveform = waveforms[index];
-      if (channel === undefined || waveform === undefined) {
-        throw new Error("Missing live waveform batch entry");
+    for (const channel of enabledChannels) {
+      if (!this.liveWanted || this.paused) {
+        return false;
+      }
+      const waveform = await this.driver.readLiveWaveform(channel, LIVE_POINT_COUNT);
+      if (!this.liveWanted || this.paused) {
+        return false;
       }
       if (waveform.channel !== channel) {
         throw new Error(`Driver returned CH${waveform.channel} while reading CH${channel}`);
       }
       this.publishWaveform(waveform);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
     return true;
   }

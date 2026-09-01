@@ -32,12 +32,12 @@ DHO804 NORMAL waveform
         |
         v
 Dho804Driver
-native blocks -> amplitude values
+native block -> amplitude values
         |
         v
 LiveWaveformService
         |
-        | binary WebSocket frames
+        | binary WebSocket frame
         v
 browser waveform layer
         |
@@ -47,34 +47,44 @@ uPlot
 
 Live acquisition is fixed at NORMAL/BYTE/999 points. The DHO804 returns 999 samples when the requested NORMAL point count is 1000, and lower point counts were measured to crop the visible time span instead of decimating the whole screen. There is no runtime live-point-count option.
 
-Live waveform data is disposable. Do not queue a backlog of live acquisitions. The scheduler allows one live waveform batch in progress and one `fresh waveform wanted` indication.
+Live waveform data is disposable. Do not queue a backlog of live acquisitions. The service keeps at most one acquisition loop active plus one `fresh waveform wanted` indication.
 
 ## Multi-channel live acquisition
 
-Every live refresh is one SCPI program message containing all currently enabled channels in display order:
+Enabled channels are read one at a time. Each channel uses one compound SCPI program message:
+
+```text
+:WAVeform:SOURce CHANnel1;:WAVeform:DATA?
+:WAVeform:SOURce CHANnel2;:WAVeform:DATA?
+...
+```
+
+Each line above is a separate SCPI transaction and scheduler operation.
+
+This boundary is based on real DHO804 behavior. A four-channel experiment that sent:
 
 ```text
 :WAVeform:SOURce CHANnel1;:WAVeform:DATA?;
-:WAVeform:SOURce CHANnel2;:WAVeform:DATA?;...
+:WAVeform:SOURce CHANnel2;:WAVeform:DATA?;
+:WAVeform:SOURce CHANnel3;:WAVeform:DATA?;
+:WAVeform:SOURce CHANnel4;:WAVeform:DATA?
 ```
 
-The actual message is one line; it is wrapped above only for readability.
+as one program message repeatedly returned four syntactically valid IEEE488.2 blocks but only one 999-byte payload in total. CH2 was a zero-length block and the remaining blocks were also empty. Multi-channel `DATA?` chaining is therefore not a supported live path for this DHO804.
 
-`ScpiTransport` parses the expected number of IEEE488.2 binary blocks from that transaction. Returned blocks may be semicolon-separated, line-separated, or directly adjacent length-delimited blocks. The parser rejects malformed framing, unexpected trailing bytes, or a response count that cannot complete before timeout.
+Do not open multiple scope sockets for simultaneous channel reads. Do not reintroduce one-program-message multi-channel waveform batching unless new hardware evidence proves the DHO804 firmware behavior has changed.
 
-Each payload must contain exactly 999 bytes and is mapped by position to its requested channel. Each browser channel frame retains an independent sequence number.
+Keeping one scheduler operation per channel is also important for interaction safety: the live service can observe pause/stop state and higher-priority scheduler work can run between channel reads.
 
-This is a deliberate hard cut. Do not open multiple scope sockets for simultaneous channel reads and do not fall back to per-channel transactions when a compound batch fails; a malformed/incomplete compound response invalidates the SCPI connection so the runtime reconnects cleanly.
-
-A live batch is one scheduler operation. Interactive horizontal drags pause live acquisition before issuing scope writes, so the longer multi-channel binary transaction is never intentionally interleaved with timebase mutation.
+Each browser channel frame retains an independent sequence number.
 
 ## Live metadata
 
 Channel units are seeded from the initial scope snapshot and cached. NORMAL preambles are cached per channel.
 
-On a preamble cache miss, the driver selects that channel and queries `:WAVeform:PREamble?` before issuing the live batch. Once the caches are warm, a stable cycle contains only the one compound source/data program message.
+On a preamble cache miss, the driver selects that channel and queries `:WAVeform:PREamble?`. Once the cache is warm, a normal channel read is the single `SOURCE CHx;DATA?` transaction.
 
-App-driven vertical scale/offset writes update cached Y metadata locally. Horizontal scale/position writes invalidate live preambles; acquisition is paused during the gesture, and the first resumed cycle refreshes the required preamble metadata before continuing.
+App-driven vertical scale/offset writes update cached Y metadata locally. Horizontal scale/position writes invalidate live preambles; acquisition is paused during the gesture, and the first resumed read refreshes the required preamble metadata before continuing.
 
 Raw SCPI invalidates waveform setup and metadata caches because arbitrary commands may alter scope state.
 
@@ -209,6 +219,6 @@ The Programming Guide states that WORD uses two bytes per point but does not cle
 
 ## Failure behaviour
 
-Live waveform failure drops the affected batch and reports the failure without creating a stale backlog. A malformed or incomplete native binary response makes the SCPI stream untrustworthy; fail loudly and recreate the scope connection rather than guessing at framing.
+Live waveform failure drops the affected channel frame and reports the failure without creating a stale backlog. A malformed or incomplete native binary response makes the SCPI stream untrustworthy; fail loudly and recreate the scope connection rather than guessing at framing.
 
 A deep capture failure fails the explicit request and preserves the previous completed capture, if any.
