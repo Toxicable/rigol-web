@@ -12,13 +12,28 @@ export type ScpiResponse =
 export class ScpiResponseTypeError extends Error {}
 export class ScpiTransportError extends Error {}
 
-interface PendingResponse {
+interface PendingResponseBase {
   command: string;
-  resolve: (response: ScpiResponse) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
   startedAt: number;
   bytesReadAtStart: number;
+}
+
+type PendingResponse =
+  | (PendingResponseBase & {
+      kind: "single";
+      resolve: (response: ScpiResponse) => void;
+    })
+  | (PendingResponseBase & {
+      kind: "binary-blocks";
+      expectedBlocks: number;
+      resolve: (blocks: Uint8Array[]) => void;
+    });
+
+interface ParsedBinaryBlock {
+  payload: Uint8Array;
+  end: number;
 }
 
 const SUPPRESSED_DEBUG_EVENTS = new Set([
@@ -172,10 +187,7 @@ export class ScpiTransport {
       throw new ScpiTransportError("A SCPI response is already pending");
     }
 
-    const socket = this.socket;
-    if (socket === null) {
-      throw new ScpiTransportError("SCPI transport is not usable");
-    }
+    const socket = this.requireSocket();
     const startedAt = performance.now();
     const bytesReadAtStart = socket.bytesRead;
     scpiDebug("query:start", {
@@ -185,35 +197,19 @@ export class ScpiTransport {
     });
 
     const responsePromise = new Promise<ScpiResponse>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const pending = this.pending;
-        const currentSocket = this.socket;
-        const bytesRead = currentSocket?.bytesRead ?? bytesReadAtStart;
-        const receivedBytes = Math.max(0, bytesRead - bytesReadAtStart);
-        const bufferedBytes = this.receiveBuffer.length;
-        scpiDebug("query:timeout", {
-          command,
-          elapsedMs: performance.now() - startedAt,
-          receivedBytes,
-          bufferedBytes,
-          bufferPrefixHex: this.receiveBuffer.subarray(0, 24).toString("hex"),
-          pendingCommand: pending?.command ?? null,
-        });
-        this.invalidate(new ScpiTransportError(
-          `SCPI query timed out after ${this.responseTimeoutMs} ms while waiting for ${command} ` +
-          `(received ${receivedBytes} bytes, ${bufferedBytes} buffered)`,
-        ));
-      }, this.responseTimeoutMs);
-      this.pending = { command, resolve, reject, timer, startedAt, bytesReadAtStart };
+      const timer = this.createResponseTimer(command, startedAt, bytesReadAtStart);
+      this.pending = {
+        kind: "single",
+        command,
+        resolve,
+        reject,
+        timer,
+        startedAt,
+        bytesReadAtStart,
+      };
     });
 
-    try {
-      await this.writeProgramMessage(command);
-    } catch (error) {
-      this.invalidate(error instanceof Error ? error : new Error(String(error)));
-      throw error;
-    }
-
+    await this.writeQueryProgramMessage(command);
     return responsePromise;
   }
 
@@ -231,6 +227,86 @@ export class ScpiTransport {
       throw new ScpiResponseTypeError(`Expected binary response for ${command}, received text`);
     }
     return response.value;
+  }
+
+  public async queryBinaryBlocks(command: string, expectedBlocks: number): Promise<Uint8Array[]> {
+    this.assertReadyForTransaction();
+    if (!Number.isSafeInteger(expectedBlocks) || expectedBlocks < 1) {
+      throw new Error("expectedBlocks must be a positive safe integer");
+    }
+    if (this.pending !== null) {
+      throw new ScpiTransportError("A SCPI response is already pending");
+    }
+
+    const socket = this.requireSocket();
+    const startedAt = performance.now();
+    const bytesReadAtStart = socket.bytesRead;
+    scpiDebug("query:start", {
+      command,
+      timeoutMs: this.responseTimeoutMs,
+      expectedBlocks,
+      socketBytesRead: bytesReadAtStart,
+    });
+
+    const responsePromise = new Promise<Uint8Array[]>((resolve, reject) => {
+      const timer = this.createResponseTimer(command, startedAt, bytesReadAtStart);
+      this.pending = {
+        kind: "binary-blocks",
+        command,
+        expectedBlocks,
+        resolve,
+        reject,
+        timer,
+        startedAt,
+        bytesReadAtStart,
+      };
+    });
+
+    await this.writeQueryProgramMessage(command);
+    return responsePromise;
+  }
+
+  private requireSocket(): Socket {
+    const socket = this.socket;
+    if (socket === null) {
+      throw new ScpiTransportError("SCPI transport is not usable");
+    }
+    return socket;
+  }
+
+  private createResponseTimer(
+    command: string,
+    startedAt: number,
+    bytesReadAtStart: number,
+  ): NodeJS.Timeout {
+    return setTimeout(() => {
+      const pending = this.pending;
+      const currentSocket = this.socket;
+      const bytesRead = currentSocket?.bytesRead ?? bytesReadAtStart;
+      const receivedBytes = Math.max(0, bytesRead - bytesReadAtStart);
+      const bufferedBytes = this.receiveBuffer.length;
+      scpiDebug("query:timeout", {
+        command,
+        elapsedMs: performance.now() - startedAt,
+        receivedBytes,
+        bufferedBytes,
+        bufferPrefixHex: this.receiveBuffer.subarray(0, 24).toString("hex"),
+        pendingCommand: pending?.command ?? null,
+      });
+      this.invalidate(new ScpiTransportError(
+        `SCPI query timed out after ${this.responseTimeoutMs} ms while waiting for ${command} ` +
+        `(received ${receivedBytes} bytes, ${bufferedBytes} buffered)`,
+      ));
+    }, this.responseTimeoutMs);
+  }
+
+  private async writeQueryProgramMessage(command: string): Promise<void> {
+    try {
+      await this.writeProgramMessage(command);
+    } catch (error) {
+      this.invalidate(error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
   }
 
   private assertReadyForTransaction(): void {
@@ -260,37 +336,56 @@ export class ScpiTransport {
   }
 
   private onData(chunk: Buffer): void {
-    if (this.pending === null) {
+    const pending = this.pending;
+    if (pending === null) {
       this.invalidate(new ScpiTransportError("Received SCPI data without an active query"));
       return;
     }
 
     this.receiveBuffer = Buffer.concat([this.receiveBuffer, chunk]);
     scpiDebug("query:data", {
-      command: this.pending.command,
+      command: pending.command,
       chunkBytes: chunk.length,
       bufferedBytes: this.receiveBuffer.length,
       chunkPrefixHex: chunk.subarray(0, 16).toString("hex"),
     });
 
     try {
-      const response = this.tryParseResponse();
-      if (response === null) {
+      if (pending.kind === "single") {
+        const response = this.tryParseResponse();
+        if (response === null) {
+          return;
+        }
+        this.pending = null;
+        clearTimeout(pending.timer);
+        scpiDebug("query:complete", {
+          command: pending.command,
+          elapsedMs: Number((performance.now() - pending.startedAt).toFixed(3)),
+          responseKind: response.kind === ScpiResponseKind.Binary ? "binary" : "text",
+          responseBytes: response.kind === ScpiResponseKind.Binary
+            ? response.value.byteLength
+            : Buffer.byteLength(response.value),
+          socketBytesRead: this.socket?.bytesRead ?? pending.bytesReadAtStart,
+        });
+        pending.resolve(response);
         return;
       }
-      const pending = this.pending;
+
+      const blocks = this.tryParseBinaryBlocks(pending.expectedBlocks);
+      if (blocks === null) {
+        return;
+      }
       this.pending = null;
       clearTimeout(pending.timer);
       scpiDebug("query:complete", {
         command: pending.command,
         elapsedMs: Number((performance.now() - pending.startedAt).toFixed(3)),
-        responseKind: response.kind === ScpiResponseKind.Binary ? "binary" : "text",
-        responseBytes: response.kind === ScpiResponseKind.Binary
-          ? response.value.byteLength
-          : Buffer.byteLength(response.value),
+        responseKind: "binary-blocks",
+        responseBlocks: blocks.length,
+        responseBytes: blocks.reduce((sum, block) => sum + block.byteLength, 0),
         socketBytesRead: this.socket?.bytesRead ?? pending.bytesReadAtStart,
       });
-      pending.resolve(response);
+      pending.resolve(blocks);
     } catch (error) {
       this.invalidate(error instanceof Error ? error : new Error(String(error)));
     }
@@ -326,21 +421,73 @@ export class ScpiTransport {
   }
 
   private tryParseBinaryResponse(): ScpiResponse | null {
-    if (this.receiveBuffer.length < 2) {
+    const block = this.tryParseBinaryBlockAt(0);
+    if (block === null) {
       return null;
     }
+    const responseEnd = this.tryConsumeLineTerminator(block.end);
+    if (responseEnd === null) {
+      return null;
+    }
+    if (responseEnd !== this.receiveBuffer.length) {
+      throw new ScpiTransportError("Unexpected trailing bytes after IEEE/TMC binary response");
+    }
+    this.receiveBuffer = Buffer.alloc(0);
+    return { kind: ScpiResponseKind.Binary, value: block.payload };
+  }
 
-    const digitByte = this.receiveBuffer[1];
+  private tryParseBinaryBlocks(expectedBlocks: number): Uint8Array[] | null {
+    let position = 0;
+    const blocks: Uint8Array[] = [];
+
+    for (let index = 0; index < expectedBlocks; index += 1) {
+      if (index > 0) {
+        const nextPosition = this.tryConsumeBinaryBlockSeparator(position);
+        if (nextPosition === null) {
+          return null;
+        }
+        position = nextPosition;
+      }
+
+      const block = this.tryParseBinaryBlockAt(position);
+      if (block === null) {
+        return null;
+      }
+      blocks.push(block.payload);
+      position = block.end;
+    }
+
+    const responseEnd = this.tryConsumeLineTerminator(position);
+    if (responseEnd === null) {
+      return null;
+    }
+    if (responseEnd !== this.receiveBuffer.length) {
+      throw new ScpiTransportError("Unexpected trailing bytes after compound IEEE/TMC binary response");
+    }
+    this.receiveBuffer = Buffer.alloc(0);
+    return blocks;
+  }
+
+  private tryParseBinaryBlockAt(start: number): ParsedBinaryBlock | null {
+    if (this.receiveBuffer.length <= start + 1) {
+      return null;
+    }
+    if (this.receiveBuffer[start] !== 0x23) {
+      throw new ScpiTransportError(`Expected IEEE/TMC binary block at byte ${start}`);
+    }
+
+    const digitByte = this.receiveBuffer[start + 1];
     if (digitByte === undefined || digitByte < 0x31 || digitByte > 0x39) {
       throw new ScpiTransportError("Malformed IEEE/TMC binary block digit count");
     }
     const digitCount = digitByte - 0x30;
-    const headerLength = 2 + digitCount;
-    if (this.receiveBuffer.length < headerLength) {
+    const lengthStart = start + 2;
+    const payloadStart = lengthStart + digitCount;
+    if (this.receiveBuffer.length < payloadStart) {
       return null;
     }
 
-    const lengthText = this.receiveBuffer.subarray(2, headerLength).toString("ascii");
+    const lengthText = this.receiveBuffer.subarray(lengthStart, payloadStart).toString("ascii");
     if (!/^\d+$/.test(lengthText)) {
       throw new ScpiTransportError("Malformed IEEE/TMC binary block payload length");
     }
@@ -349,38 +496,64 @@ export class ScpiTransport {
       throw new ScpiTransportError("Invalid IEEE/TMC binary block payload length");
     }
 
-    const payloadEnd = headerLength + payloadLength;
-    if (this.receiveBuffer.length <= payloadEnd) {
+    const payloadEnd = payloadStart + payloadLength;
+    if (this.receiveBuffer.length < payloadEnd) {
       scpiDebug("query:binary-progress", {
         command: this.pending?.command ?? null,
         payloadBytesExpected: payloadLength,
-        payloadBytesBuffered: Math.max(0, this.receiveBuffer.length - headerLength),
+        payloadBytesBuffered: Math.max(0, this.receiveBuffer.length - payloadStart),
         totalBytesBuffered: this.receiveBuffer.length,
       });
       return null;
     }
 
-    let terminatorLength: number;
-    if (this.receiveBuffer[payloadEnd] === 0x0a) {
-      terminatorLength = 1;
-    } else if (
-      this.receiveBuffer[payloadEnd] === 0x0d &&
-      this.receiveBuffer.length > payloadEnd + 1 &&
-      this.receiveBuffer[payloadEnd + 1] === 0x0a
-    ) {
-      terminatorLength = 2;
-    } else if (this.receiveBuffer[payloadEnd] === 0x0d && this.receiveBuffer.length === payloadEnd + 1) {
-      return null;
-    } else {
-      throw new ScpiTransportError("Missing terminator after IEEE/TMC binary block");
-    }
+    return {
+      payload: Uint8Array.from(this.receiveBuffer.subarray(payloadStart, payloadEnd)),
+      end: payloadEnd,
+    };
+  }
 
-    const value = Uint8Array.from(this.receiveBuffer.subarray(headerLength, payloadEnd));
-    this.receiveBuffer = this.receiveBuffer.subarray(payloadEnd + terminatorLength);
-    if (this.receiveBuffer.length !== 0) {
-      throw new ScpiTransportError("Unexpected trailing bytes after IEEE/TMC binary response");
+  private tryConsumeBinaryBlockSeparator(position: number): number | null {
+    if (this.receiveBuffer.length <= position) {
+      return null;
     }
-    return { kind: ScpiResponseKind.Binary, value };
+    const byte = this.receiveBuffer[position];
+    if (byte === 0x23) {
+      return position;
+    }
+    if (byte === 0x3b || byte === 0x0a) {
+      return position + 1;
+    }
+    if (byte === 0x0d) {
+      if (this.receiveBuffer.length <= position + 1) {
+        return null;
+      }
+      if (this.receiveBuffer[position + 1] !== 0x0a) {
+        throw new ScpiTransportError(`Expected LF after CR at byte ${position}`);
+      }
+      return position + 2;
+    }
+    throw new ScpiTransportError(
+      `Expected separator before compound IEEE/TMC binary block at byte ${position}`,
+    );
+  }
+
+  private tryConsumeLineTerminator(position: number): number | null {
+    if (this.receiveBuffer.length <= position) {
+      return null;
+    }
+    if (this.receiveBuffer[position] === 0x0a) {
+      return position + 1;
+    }
+    if (this.receiveBuffer[position] === 0x0d) {
+      if (this.receiveBuffer.length <= position + 1) {
+        return null;
+      }
+      if (this.receiveBuffer[position + 1] === 0x0a) {
+        return position + 2;
+      }
+    }
+    throw new ScpiTransportError("Missing terminator after IEEE/TMC binary block response");
   }
 
   private invalidate(error: Error): void {

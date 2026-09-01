@@ -457,27 +457,66 @@ export class Dho804Driver {
     }
   }
 
-  public async readLiveWaveform(channel: Channel, pointCount: number): Promise<Dho804Waveform> {
+  public async readLiveWaveforms(
+    requestedChannels: readonly Channel[],
+    pointCount: number,
+  ): Promise<Dho804Waveform[]> {
     if (!Number.isInteger(pointCount) || pointCount < 1 || pointCount > 1_000) {
       throw new Error("Live waveform pointCount must be an integer from 1 to 1000");
     }
+    if (requestedChannels.length < 1 || requestedChannels.length > channels.length) {
+      throw new Error("Live waveform read requires one to four channels");
+    }
+    const uniqueChannels = new Set<Channel>();
+    for (const channel of requestedChannels) {
+      channelPrefix(channel);
+      if (uniqueChannels.has(channel)) {
+        throw new Error(`Duplicate live waveform channel: CH${channel}`);
+      }
+      uniqueChannels.add(channel);
+    }
+    const requested = [...requestedChannels];
 
     return this.scheduler.scheduleLatest(
       ScpiPriority.Waveform,
       this.coalesceKeys.liveWaveform,
       ScpiOperationKind.BinaryTransfer,
       async (transport, recorder) => {
-        await this.ensureWaveformSetup(transport, channel, "NORM", "BYTE", pointCount);
-        const payload = await transport.queryBinary(":WAVeform:DATA?");
-        recorder.addBinaryBytes(payload.byteLength);
-        if (payload.byteLength !== pointCount) {
-          throw new Error(
-            `Expected ${pointCount} live waveform samples, received ${payload.byteLength}`,
-          );
+        await this.ensureWaveformModeFormatPoints(transport, "NORM", "BYTE", pointCount);
+
+        const preambles = new Map<Channel, WaveformPreamble>();
+        const units = new Map<Channel, ChannelUnit>();
+        for (const channel of requested) {
+          preambles.set(channel, await this.liveWaveformPreamble(transport, channel, pointCount));
+          units.set(channel, await this.channelUnit(transport, channel));
         }
-        const preamble = await this.liveWaveformPreamble(transport, channel, pointCount);
-        const unit = await this.channelUnit(transport, channel);
-        return createWaveform(channel, unit, payload, preamble);
+
+        const command = requested.flatMap((channel) => [
+          `:WAVeform:SOURce CHANnel${channel}`,
+          ":WAVeform:DATA?",
+        ]).join(";");
+        const payloads = await transport.queryBinaryBlocks(command, requested.length);
+        const lastChannel = requested[requested.length - 1];
+        if (lastChannel === undefined) {
+          throw new Error("Live waveform batch unexpectedly had no final channel");
+        }
+        this.waveformSetup.source = lastChannel;
+        recorder.addBinaryBytes(payloads.reduce((sum, payload) => sum + payload.byteLength, 0));
+
+        return requested.map((channel, index) => {
+          const payload = payloads[index];
+          const preamble = preambles.get(channel);
+          const unit = units.get(channel);
+          if (payload === undefined || preamble === undefined || unit === undefined) {
+            throw new Error(`Missing live waveform batch data for CH${channel}`);
+          }
+          if (payload.byteLength !== pointCount) {
+            throw new Error(
+              `Expected ${pointCount} live waveform samples for CH${channel}, received ${payload.byteLength}`,
+            );
+          }
+          return createWaveform(channel, unit, payload, preamble);
+        });
       },
     );
   }
@@ -576,10 +615,26 @@ export class Dho804Driver {
     format: "BYTE" | "WORD",
     points: number,
   ): Promise<void> {
+    await this.ensureWaveformSource(transport, channel);
+    await this.ensureWaveformModeFormatPoints(transport, mode, format, points);
+  }
+
+  private async ensureWaveformSource(
+    transport: ScpiTransport,
+    channel: Channel,
+  ): Promise<void> {
     if (this.waveformSetup.source !== channel) {
       await transport.command(`:WAVeform:SOURce CHANnel${channel}`);
       this.waveformSetup.source = channel;
     }
+  }
+
+  private async ensureWaveformModeFormatPoints(
+    transport: ScpiTransport,
+    mode: "NORM" | "RAW",
+    format: "BYTE" | "WORD",
+    points: number,
+  ): Promise<void> {
     if (this.waveformSetup.mode !== mode) {
       await transport.command(`:WAVeform:MODE ${mode}`);
       this.waveformSetup.mode = mode;
@@ -603,6 +658,7 @@ export class Dho804Driver {
     if (cached !== undefined && cached.pointCount === pointCount) {
       return cached.preamble;
     }
+    await this.ensureWaveformSource(transport, channel);
     const preamble = parseWaveformPreamble(await transport.queryText(":WAVeform:PREamble?"));
     this.liveWaveformPreambles.set(channel, { pointCount, preamble });
     return preamble;

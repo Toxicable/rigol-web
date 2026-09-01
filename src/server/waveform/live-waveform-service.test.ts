@@ -58,10 +58,16 @@ function waveform(channel: Channel): Dho804Waveform {
 }
 
 class FakeDriver implements LiveWaveformDriver {
-  public readonly calls: Channel[] = [];
-  public async readLiveWaveform(channel: Channel): Promise<Dho804Waveform> {
-    this.calls.push(channel);
-    return waveform(channel);
+  public readonly calls: Channel[][] = [];
+  public readonly pointCounts: number[] = [];
+
+  public async readLiveWaveforms(
+    channels: readonly Channel[],
+    pointCount: number,
+  ): Promise<Dho804Waveform[]> {
+    this.calls.push([...channels]);
+    this.pointCounts.push(pointCount);
+    return channels.map(waveform);
   }
 }
 
@@ -70,7 +76,7 @@ function frameSequence(frame: Uint8Array): number {
 }
 
 describe("LiveWaveformService", () => {
-  it("reads only enabled channels as separate driver calls and publishes frames", async () => {
+  it("reads all enabled channels in one fixed 999-point driver call", async () => {
     const driver = new FakeDriver();
     const frames: Uint8Array[] = [];
     const service = new LiveWaveformService({
@@ -85,7 +91,8 @@ describe("LiveWaveformService", () => {
     });
     service.start();
     await service.waitForIdle();
-    expect(driver.calls).toEqual([Channel.Ch1, Channel.Ch3]);
+    expect(driver.calls).toEqual([[Channel.Ch1, Channel.Ch3]]);
+    expect(driver.pointCounts).toEqual([999]);
     expect(frames).toHaveLength(2);
   });
 
@@ -136,18 +143,22 @@ describe("LiveWaveformService", () => {
     await service.waitForIdle();
     expect(sequences.get(Channel.Ch1)).toEqual([1, 2]);
     expect(sequences.get(Channel.Ch3)).toEqual([1, 2]);
+    expect(driver.calls).toEqual([
+      [Channel.Ch1, Channel.Ch3],
+      [Channel.Ch1, Channel.Ch3],
+    ]);
   });
 
-  it("reports a failed live read and continues without rejecting the loop", async () => {
+  it("reports a failed live batch and retries the complete cycle", async () => {
     const failure = new Error("live read failed");
     let attempts = 0;
     const driver: LiveWaveformDriver = {
-      readLiveWaveform: async (channel) => {
+      readLiveWaveforms: async (channels) => {
         attempts += 1;
         if (attempts === 1) {
           throw failure;
         }
-        return waveform(channel);
+        return channels.map(waveform);
       },
     };
     const errors: unknown[] = [];
@@ -177,10 +188,10 @@ describe("LiveWaveformService", () => {
     expect(frames).toHaveLength(1);
   });
 
-  it("does not publish a read that completes after the service is stopped", async () => {
-    let resolveRead: ((value: Dho804Waveform) => void) | null = null;
+  it("does not publish a batch that completes after the service is stopped", async () => {
+    let resolveRead: ((value: Dho804Waveform[]) => void) | null = null;
     const driver: LiveWaveformDriver = {
-      readLiveWaveform: async () => new Promise<Dho804Waveform>((resolve) => {
+      readLiveWaveforms: async () => new Promise<Dho804Waveform[]>((resolve) => {
         resolveRead = resolve;
       }),
     };
@@ -202,31 +213,31 @@ describe("LiveWaveformService", () => {
     await Promise.resolve();
     expect(resolveRead).not.toBeNull();
     service.stop();
-    resolveRead!(waveform(Channel.Ch1));
+    resolveRead!([waveform(Channel.Ch1)]);
     await service.waitForIdle();
 
     expect(frames).toEqual([]);
   });
 
-  it("collapses repeated freshness requests while one read is in flight", async () => {
-    let resolveFirst: ((value: Dho804Waveform) => void) | null = null;
+  it("collapses repeated freshness requests while one batch is in flight", async () => {
+    let resolveFirst: ((value: Dho804Waveform[]) => void) | null = null;
     let activeReads = 0;
     let maxActiveReads = 0;
-    const calls: Channel[] = [];
+    const calls: Channel[][] = [];
     const driver: LiveWaveformDriver = {
-      readLiveWaveform: async (channel) => {
-        calls.push(channel);
+      readLiveWaveforms: async (channels) => {
+        calls.push([...channels]);
         activeReads += 1;
         maxActiveReads = Math.max(maxActiveReads, activeReads);
         if (calls.length === 1) {
-          const result = await new Promise<Dho804Waveform>((resolve) => {
+          const result = await new Promise<Dho804Waveform[]>((resolve) => {
             resolveFirst = resolve;
           });
           activeReads -= 1;
           return result;
         }
         activeReads -= 1;
-        return waveform(channel);
+        return channels.map(waveform);
       },
     };
     const service = new LiveWaveformService({
@@ -243,9 +254,9 @@ describe("LiveWaveformService", () => {
     service.requestFresh();
     service.requestFresh();
     service.requestFresh();
-    expect(calls).toEqual([Channel.Ch1]);
+    expect(calls).toEqual([[Channel.Ch1, Channel.Ch3]]);
     expect(resolveFirst).not.toBeNull();
-    resolveFirst!(waveform(Channel.Ch1));
+    resolveFirst!([waveform(Channel.Ch1), waveform(Channel.Ch3)]);
     await service.waitForIdle();
     expect(maxActiveReads).toBe(1);
     expect(calls.length).toBeLessThanOrEqual(2);
