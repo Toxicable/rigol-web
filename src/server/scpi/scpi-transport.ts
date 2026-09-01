@@ -21,14 +21,8 @@ interface PendingResponse {
   bytesReadAtStart: number;
 }
 
-function scpiDebugEnabled(): boolean {
-  return process.env.RIGOL_SCPI_DEBUG === "1";
-}
-
 function scpiDebug(event: string, detail: Record<string, unknown>): void {
-  if (scpiDebugEnabled()) {
-    console.debug(`[SCPI] ${event}`, detail);
-  }
+  console.debug(`[SCPI] ${event}`, detail);
 }
 
 export class ScpiTransport {
