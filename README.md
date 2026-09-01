@@ -26,8 +26,20 @@ unchanged.
 
 ## Container deployment
 
-Copy `.env.example` to `.env`, then set `RIGOL_HOST` and `RIGOL_PORT` to the
-DHO804's verified raw SCPI/TCP endpoint. Do not guess the port.
+Copy `.env.example` to `.env`, then set `RIGOL_SCOPE_HOST` and
+`RIGOL_SCOPE_PORT` to the DHO804's verified raw SCPI/TCP endpoint. Configure
+`RIGOL_DMM_HOST` and `RIGOL_DMM_PORT` for the DM858E endpoint.
+
+The DHO804 **Sleep** button is deliberately separate from SCPI. The runtime
+container includes the Debian `adb` client and sends Android `KEYCODE_SLEEP`
+(`223`) to the scope over ADB. `RIGOL_SCOPE_ADB_PORT` defaults to `55555` and
+can be changed if the scope exposes ADB elsewhere. If ADB is disabled or not
+reachable, the UI reports the failed sleep request rather than pretending the
+scope slept. This adds no paid software or hardware dependency; it only adds
+the open-source ADB client to the container image.
+
+Android documents key code 223 as `KEYCODE_SLEEP`:
+https://developer.android.com/reference/android/view/KeyEvent#KEYCODE_SLEEP
 
 ```bash
 docker compose up --build --detach
