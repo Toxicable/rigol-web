@@ -141,6 +141,15 @@ function responseFor(command: string, connectionIndex: number): string | undefin
   }
 }
 
+function waveformResponse(): Buffer {
+  const payload = Buffer.alloc(999, 128);
+  return Buffer.concat([
+    Buffer.from("#3999", "ascii"),
+    payload,
+    Buffer.from("\n", "ascii"),
+  ]);
+}
+
 class FakeDho804Server {
   public readonly server = createNetServer((socket) => this.accept(socket));
   public readonly connections: FakeConnection[] = [];
@@ -179,6 +188,14 @@ class FakeDho804Server {
         const command = connection.buffer.slice(0, newline).replace(/\r$/, "");
         connection.buffer = connection.buffer.slice(newline + 1);
         connection.commands.push(command);
+
+        if (
+          command === ":WAVeform:DATA?" ||
+          command === ":WAVeform:SOURce CHANnel1;:WAVeform:DATA?"
+        ) {
+          socket.write(waveformResponse());
+          continue;
+        }
 
         const response = responseFor(command, connection.index);
         if (response !== undefined) {
