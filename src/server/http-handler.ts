@@ -5,6 +5,10 @@ import { extname, resolve, sep } from "node:path";
 const DEFAULT_WEB_ROOT = resolve(process.cwd(), "dist/web");
 const SPA_ROUTES = new Set(["/", "/dm858e", "/dm858e/"]);
 
+export interface HttpControlActions {
+  sleepScope(): Promise<void>;
+}
+
 function contentType(path: string): string {
   switch (extname(path).toLowerCase()) {
     case ".html": return "text/html; charset=utf-8";
@@ -81,8 +85,29 @@ async function serveBuiltWeb(
   }
 }
 
+async function sleepScope(
+  response: ServerResponse,
+  controlActions: HttpControlActions | null,
+): Promise<void> {
+  if (controlActions === null) {
+    sendText(response, 503, "scope power control unavailable\n");
+    return;
+  }
+
+  try {
+    await controlActions.sleepScope();
+    response.writeHead(204);
+    response.end();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error("Failed to put DHO804 to sleep", error);
+    sendText(response, 502, `${detail}\n`);
+  }
+}
+
 export function createHttpRequestHandler(
   webRoot = DEFAULT_WEB_ROOT,
+  controlActions: HttpControlActions | null = null,
 ): (request: IncomingMessage, response: ServerResponse) => void {
   const absoluteWebRoot = resolve(webRoot);
 
@@ -90,6 +115,19 @@ export function createHttpRequestHandler(
     if (request.method === "GET" && request.url === "/health") {
       response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
       response.end("ok\n");
+      return;
+    }
+
+    if (request.url === "/api/scope/sleep") {
+      if (request.method !== "POST") {
+        response.writeHead(405, {
+          "allow": "POST",
+          "content-type": "text/plain; charset=utf-8",
+        });
+        response.end("method not allowed\n");
+        return;
+      }
+      void sleepScope(response, controlActions);
       return;
     }
 
