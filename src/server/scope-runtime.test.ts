@@ -121,6 +121,7 @@ function responseFor(command: string, connectionIndex: number): string | undefin
   if (/^:CHANnel[1-4]:OFFSet\?$/.test(command)) return "0";
   if (/^:CHANnel[1-4]:PROBe\?$/.test(command)) return "1";
   switch (command) {
+    case ":TIMebase:MAIN:SCALe?;:TIMebase:MAIN:OFFSet?": return "0.001;0";
     case ":TIMebase:XY:ENABle?": return "0";
     case ":TIMebase:MODE?": return "MAIN";
     case ":TIMebase:MAIN:SCALe?": return "0.001";
