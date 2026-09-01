@@ -77,6 +77,7 @@ interface Dho804CoalesceKeys {
 
 const channels = [Channel.Ch1, Channel.Ch2, Channel.Ch3, Channel.Ch4] as const;
 const rawChunkSamples = 250_000;
+const horizontalHalfDivisions = 5;
 
 export class Dho804Driver {
   private waveformSetup: WaveformSetupCache = {
@@ -86,7 +87,11 @@ export class Dho804Driver {
     points: null,
   };
   private readonly channelUnits = new Map<Channel, ChannelUnit>();
+  private readonly channelScales = new Map<Channel, number>();
   private readonly liveWaveformPreambles = new Map<Channel, LiveWaveformPreambleCache>();
+  private horizontalMode: TimebaseMode | null = null;
+  private horizontalScale: number | null = null;
+  private horizontalPosition: number | null = null;
   private readonly coalesceKeys = createDho804CoalesceKeys();
 
   public constructor(private readonly scheduler: ScpiScheduler) {}
@@ -138,6 +143,7 @@ export class Dho804Driver {
     const unit = parseChannelUnit(await this.queryText(`${prefix}:UNITs?`, priority));
     this.channelUnits.set(channel, unit);
     const scale = parseFiniteNumber(await this.queryText(`${prefix}:SCALe?`, priority), "channel scale");
+    this.channelScales.set(channel, scale);
     const offset = parseFiniteNumber(await this.queryText(`${prefix}:OFFSet?`, priority), "channel offset");
     const probeRatio = parsePositiveNumber(
       await this.queryText(`${prefix}:PROBe?`, priority),
@@ -164,6 +170,9 @@ export class Dho804Driver {
       await this.queryText(":TIMebase:MAIN:OFFSet?", priority),
       "horizontal position",
     );
+    this.horizontalMode = mode;
+    this.horizontalScale = scale;
+    this.horizontalPosition = position;
     return { mode, scale, position };
   }
 
@@ -233,12 +242,14 @@ export class Dho804Driver {
 
   public async setChannelScale(channel: Channel, value: number, priority: ScpiPriority): Promise<void> {
     requireFinite(value, "channel scale");
+    const previousScale = this.channelScales.get(channel);
     await this.command(
       `${channelPrefix(channel)}:SCALe ${value}`,
       priority,
       this.coalesceKeys.channelScale[channel],
     );
-    this.liveWaveformPreambles.delete(channel);
+    this.channelScales.set(channel, value);
+    this.updateCachedChannelScale(channel, previousScale, value);
   }
 
   public async readChannelOffset(channel: Channel, priority: ScpiPriority): Promise<number> {
@@ -255,7 +266,7 @@ export class Dho804Driver {
       priority,
       this.coalesceKeys.channelOffset[channel],
     );
-    this.liveWaveformPreambles.delete(channel);
+    this.updateCachedChannelOffset(channel, value);
   }
 
   public async readHorizontalScale(priority: ScpiPriority): Promise<number> {
@@ -267,12 +278,14 @@ export class Dho804Driver {
 
   public async setHorizontalScale(value: number, priority: ScpiPriority): Promise<void> {
     requireFinite(value, "horizontal scale");
+    const previousScale = this.horizontalScale;
     await this.command(
       `:TIMebase:MAIN:SCALe ${value}`,
       priority,
       this.coalesceKeys.horizontalScale,
     );
-    this.liveWaveformPreambles.clear();
+    this.horizontalScale = value;
+    this.updateCachedHorizontalScale(previousScale, value);
   }
 
   public async readHorizontalPosition(priority: ScpiPriority): Promise<number> {
@@ -284,12 +297,14 @@ export class Dho804Driver {
 
   public async setHorizontalPosition(value: number, priority: ScpiPriority): Promise<void> {
     requireFinite(value, "horizontal position");
+    const previousPosition = this.horizontalPosition;
     await this.command(
       `:TIMebase:MAIN:OFFSet ${value}`,
       priority,
       this.coalesceKeys.horizontalPosition,
     );
-    this.liveWaveformPreambles.clear();
+    this.horizontalPosition = value;
+    this.updateCachedHorizontalPosition(previousPosition, value);
   }
 
   public async readTriggerType(priority: ScpiPriority): Promise<TriggerType> {
@@ -351,6 +366,7 @@ export class Dho804Driver {
     specs: MeasurementSpec[],
     priority: ScpiPriority,
   ): Promise<MeasurementValue[]> {
+    const startedAt = performance.now();
     const values: MeasurementValue[] = [];
     for (const spec of specs) {
       const item = measurementItem(spec.kind);
@@ -383,6 +399,11 @@ export class Dho804Driver {
         statistics: { current, minimum, maximum, average, deviation, count },
       });
     }
+    console.info(`[SCPI] measurements:complete ${JSON.stringify({
+      measurements: specs.length,
+      queries: specs.length * 6,
+      elapsedMs: performance.now() - startedAt,
+    })}`);
     return values;
   }
 
@@ -512,6 +533,10 @@ export class Dho804Driver {
     this.waveformSetup = { source: null, mode: null, format: null, points: null };
     this.liveWaveformPreambles.clear();
     this.channelUnits.clear();
+    this.channelScales.clear();
+    this.horizontalMode = null;
+    this.horizontalScale = null;
+    this.horizontalPosition = null;
   }
 
   private async queryText(
@@ -597,6 +622,68 @@ export class Dho804Driver {
     const unit = parseChannelUnit(await transport.queryText(`${channelPrefix(channel)}:UNITs?`));
     this.channelUnits.set(channel, unit);
     return unit;
+  }
+
+  private updateCachedChannelScale(
+    channel: Channel,
+    previousScale: number | undefined,
+    nextScale: number,
+  ): void {
+    const cached = this.liveWaveformPreambles.get(channel);
+    if (
+      cached === undefined ||
+      previousScale === undefined ||
+      previousScale <= 0 ||
+      nextScale <= 0
+    ) {
+      this.liveWaveformPreambles.delete(channel);
+      return;
+    }
+    const ratio = nextScale / previousScale;
+    cached.preamble.yIncrement *= ratio;
+    cached.preamble.yOrigin /= ratio;
+  }
+
+  private updateCachedChannelOffset(channel: Channel, nextOffset: number): void {
+    const cached = this.liveWaveformPreambles.get(channel);
+    if (cached === undefined || cached.preamble.yIncrement === 0) {
+      this.liveWaveformPreambles.delete(channel);
+      return;
+    }
+    cached.preamble.yOrigin = nextOffset / cached.preamble.yIncrement;
+  }
+
+  private canUpdateCachedHorizontalMetadata(): boolean {
+    return this.horizontalMode === TimebaseMode.Main || this.horizontalMode === TimebaseMode.Roll;
+  }
+
+  private updateCachedHorizontalScale(previousScale: number | null, nextScale: number): void {
+    if (
+      !this.canUpdateCachedHorizontalMetadata() ||
+      previousScale === null ||
+      previousScale <= 0 ||
+      nextScale <= 0
+    ) {
+      this.liveWaveformPreambles.clear();
+      return;
+    }
+    const ratio = nextScale / previousScale;
+    const originDelta = -horizontalHalfDivisions * (nextScale - previousScale);
+    for (const cached of this.liveWaveformPreambles.values()) {
+      cached.preamble.xIncrement *= ratio;
+      cached.preamble.xOrigin += originDelta;
+    }
+  }
+
+  private updateCachedHorizontalPosition(previousPosition: number | null, nextPosition: number): void {
+    if (!this.canUpdateCachedHorizontalMetadata() || previousPosition === null) {
+      this.liveWaveformPreambles.clear();
+      return;
+    }
+    const originDelta = nextPosition - previousPosition;
+    for (const cached of this.liveWaveformPreambles.values()) {
+      cached.preamble.xOrigin += originDelta;
+    }
   }
 }
 
