@@ -79,6 +79,18 @@ function respondChannel(
   respond(transport, `${prefix}:PROBe?`, "10");
 }
 
+function respondHorizontal(
+  transport: ScriptedTransport,
+  scale: string,
+  position: string,
+  mode = "MAIN",
+): void {
+  respond(transport, ":TIMebase:XY:ENABle?", "0");
+  respond(transport, ":TIMebase:MODE?", mode);
+  respond(transport, ":TIMebase:MAIN:SCALe?", scale);
+  respond(transport, ":TIMebase:MAIN:OFFSet?", position);
+}
+
 function respondMeasurementStatistics(
   transport: ScriptedTransport,
   item: string,
@@ -326,29 +338,133 @@ describe("Dho804Driver", () => {
     expect(transport.commands.filter((command) => command === ":CHANnel1:UNITs?")).toHaveLength(1);
   });
 
-  it("refreshes cached live preamble after a vertical scale write", async () => {
+  it("updates cached vertical scale metadata without another preamble query", async () => {
     const transport = new ScriptedTransport();
+    respondChannel(transport, Channel.Ch1, "1", "DC", "VOLT");
+    respond(transport, ":CHANnel1:OFFSet?", "0");
+    const driver = scriptedDriver(transport);
+    await driver.readChannelState(Channel.Ch1, ScpiPriority.Normal);
+
     transport.binary.set(":WAVeform:DATA?", [
       Uint8Array.from([10, 12]),
       Uint8Array.from([10, 12]),
     ]);
-    respond(
-      transport,
-      ":WAVeform:PREamble?",
-      "0,0,2,1,1e-6,0,0,0.5,10,0",
-      "0,0,2,1,1e-6,0,0,1,10,0",
-    );
-    respond(transport, ":CHANnel1:UNITs?", "VOLT");
-    const driver = scriptedDriver(transport);
+    respond(transport, ":WAVeform:PREamble?", "0,0,2,1,1e-6,0,0,0.5,0,10");
 
     const first = await driver.readLiveWaveform(Channel.Ch1, 2);
-    await driver.setChannelScale(Channel.Ch1, 2, ScpiPriority.Normal);
+    await driver.setChannelScale(Channel.Ch1, 0.2, ScpiPriority.Normal);
     const second = await driver.readLiveWaveform(Channel.Ch1, 2);
 
     expect([...first.samples]).toEqual([0, 1]);
     expect([...second.samples]).toEqual([0, 2]);
+    expect(transport.commands.filter((command) => command === ":WAVeform:PREamble?")).toHaveLength(1);
+  });
+
+  it("updates cached vertical offset metadata without another preamble query", async () => {
+    const transport = new ScriptedTransport();
+    respondChannel(transport, Channel.Ch1, "1", "DC", "VOLT");
+    respond(transport, ":CHANnel1:OFFSet?", "0");
+    const driver = scriptedDriver(transport);
+    await driver.readChannelState(Channel.Ch1, ScpiPriority.Normal);
+
+    transport.binary.set(":WAVeform:DATA?", [
+      Uint8Array.from([12]),
+      Uint8Array.from([12]),
+    ]);
+    respond(transport, ":WAVeform:PREamble?", "0,0,1,1,1e-6,0,0,0.5,0,10");
+
+    const first = await driver.readLiveWaveform(Channel.Ch1, 1);
+    await driver.setChannelOffset(Channel.Ch1, 0.5, ScpiPriority.Normal);
+    const second = await driver.readLiveWaveform(Channel.Ch1, 1);
+
+    expect(first.samples[0]).toBe(1);
+    expect(second.samples[0]).toBe(0.5);
+    expect(transport.commands.filter((command) => command === ":WAVeform:PREamble?")).toHaveLength(1);
+  });
+
+  it("refreshes horizontal position metadata after a write", async () => {
+    const transport = new ScriptedTransport();
+    respondHorizontal(transport, "1E-3", "2E-4");
+    const driver = scriptedDriver(transport);
+    await driver.readHorizontalState(ScpiPriority.Normal);
+
+    transport.binary.set(":WAVeform:DATA?", [
+      Uint8Array.from([10]),
+      Uint8Array.from([10]),
+    ]);
+    respond(
+      transport,
+      ":WAVeform:PREamble?",
+      "0,0,1,1,1e-5,-4.8e-3,0,0.5,0,10",
+      "0,0,1,1,1e-5,-4.6e-3,0,0.5,0,10",
+    );
+    respond(transport, ":CHANnel1:UNITs?", "VOLT");
+
+    const first = await driver.readLiveWaveform(Channel.Ch1, 1);
+    await driver.setHorizontalPosition(4e-4, ScpiPriority.Interactive);
+    const second = await driver.readLiveWaveform(Channel.Ch1, 1);
+
+    expect(first.xOrigin).toBeCloseTo(-4.8e-3);
+    expect(second.xOrigin).toBeCloseTo(-4.6e-3);
+    expect(second.xIncrement).toBeCloseTo(1e-5);
     expect(transport.commands.filter((command) => command === ":WAVeform:PREamble?")).toHaveLength(2);
-    expect(transport.commands.filter((command) => command === ":CHANnel1:UNITs?")).toHaveLength(1);
+  });
+
+  it("refreshes horizontal scale metadata after a write", async () => {
+    const transport = new ScriptedTransport();
+    respondHorizontal(transport, "1E-3", "2E-4");
+    const driver = scriptedDriver(transport);
+    await driver.readHorizontalState(ScpiPriority.Normal);
+
+    transport.binary.set(":WAVeform:DATA?", [
+      Uint8Array.from([10]),
+      Uint8Array.from([10]),
+    ]);
+    respond(
+      transport,
+      ":WAVeform:PREamble?",
+      "0,0,1,1,1e-5,-4.8e-3,0,0.5,0,10",
+      "0,0,1,1,2e-5,-9.8e-3,0,0.5,0,10",
+    );
+    respond(transport, ":CHANnel1:UNITs?", "VOLT");
+
+    const first = await driver.readLiveWaveform(Channel.Ch1, 1);
+    await driver.setHorizontalScale(2e-3, ScpiPriority.Interactive);
+    const second = await driver.readLiveWaveform(Channel.Ch1, 1);
+
+    expect(first.xOrigin).toBeCloseTo(-4.8e-3);
+    expect(second.xOrigin).toBeCloseTo(-9.8e-3);
+    expect(second.xIncrement).toBeCloseTo(2e-5);
+    expect(transport.commands.filter((command) => command === ":WAVeform:PREamble?")).toHaveLength(2);
+  });
+
+  it("refreshes horizontal metadata after XY writes", async () => {
+    const transport = new ScriptedTransport();
+    respond(transport, ":TIMebase:XY:ENABle?", "1");
+    respond(transport, ":TIMebase:MODE?", "MAIN");
+    respond(transport, ":TIMebase:MAIN:SCALe?", "1E-3");
+    respond(transport, ":TIMebase:MAIN:OFFSet?", "0");
+    const driver = scriptedDriver(transport);
+    await driver.readHorizontalState(ScpiPriority.Normal);
+
+    transport.binary.set(":WAVeform:DATA?", [
+      Uint8Array.from([10]),
+      Uint8Array.from([10]),
+    ]);
+    respond(
+      transport,
+      ":WAVeform:PREamble?",
+      "0,0,1,1,1e-5,-5e-3,0,0.5,0,10",
+      "0,0,1,1,2e-5,-1e-2,0,0.5,0,10",
+    );
+    respond(transport, ":CHANnel1:UNITs?", "VOLT");
+
+    await driver.readLiveWaveform(Channel.Ch1, 1);
+    await driver.setHorizontalScale(2e-3, ScpiPriority.Normal);
+    const second = await driver.readLiveWaveform(Channel.Ch1, 1);
+
+    expect(second.xIncrement).toBeCloseTo(2e-5);
+    expect(transport.commands.filter((command) => command === ":WAVeform:PREamble?")).toHaveLength(2);
   });
 
   it("assembles RAW WORD chunks without exposing native codes", async () => {

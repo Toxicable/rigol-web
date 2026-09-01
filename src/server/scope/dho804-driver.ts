@@ -86,6 +86,7 @@ export class Dho804Driver {
     points: null,
   };
   private readonly channelUnits = new Map<Channel, ChannelUnit>();
+  private readonly channelScales = new Map<Channel, number>();
   private readonly liveWaveformPreambles = new Map<Channel, LiveWaveformPreambleCache>();
   private readonly coalesceKeys = createDho804CoalesceKeys();
 
@@ -138,6 +139,7 @@ export class Dho804Driver {
     const unit = parseChannelUnit(await this.queryText(`${prefix}:UNITs?`, priority));
     this.channelUnits.set(channel, unit);
     const scale = parseFiniteNumber(await this.queryText(`${prefix}:SCALe?`, priority), "channel scale");
+    this.channelScales.set(channel, scale);
     const offset = parseFiniteNumber(await this.queryText(`${prefix}:OFFSet?`, priority), "channel offset");
     const probeRatio = parsePositiveNumber(
       await this.queryText(`${prefix}:PROBe?`, priority),
@@ -237,8 +239,13 @@ export class Dho804Driver {
       `${channelPrefix(channel)}:SCALe ${value}`,
       priority,
       this.coalesceKeys.channelScale[channel],
+      ScpiOperationKind.Write,
+      () => {
+        const previousScale = this.channelScales.get(channel);
+        this.channelScales.set(channel, value);
+        this.updateCachedChannelScale(channel, previousScale, value);
+      },
     );
-    this.liveWaveformPreambles.delete(channel);
   }
 
   public async readChannelOffset(channel: Channel, priority: ScpiPriority): Promise<number> {
@@ -254,8 +261,9 @@ export class Dho804Driver {
       `${channelPrefix(channel)}:OFFSet ${value}`,
       priority,
       this.coalesceKeys.channelOffset[channel],
+      ScpiOperationKind.Write,
+      () => this.updateCachedChannelOffset(channel, value),
     );
-    this.liveWaveformPreambles.delete(channel);
   }
 
   public async readHorizontalScale(priority: ScpiPriority): Promise<number> {
@@ -271,8 +279,9 @@ export class Dho804Driver {
       `:TIMebase:MAIN:SCALe ${value}`,
       priority,
       this.coalesceKeys.horizontalScale,
+      ScpiOperationKind.Write,
+      () => this.liveWaveformPreambles.clear(),
     );
-    this.liveWaveformPreambles.clear();
   }
 
   public async readHorizontalPosition(priority: ScpiPriority): Promise<number> {
@@ -288,8 +297,9 @@ export class Dho804Driver {
       `:TIMebase:MAIN:OFFSet ${value}`,
       priority,
       this.coalesceKeys.horizontalPosition,
+      ScpiOperationKind.Write,
+      () => this.liveWaveformPreambles.clear(),
     );
-    this.liveWaveformPreambles.clear();
   }
 
   public async readTriggerType(priority: ScpiPriority): Promise<TriggerType> {
@@ -351,6 +361,7 @@ export class Dho804Driver {
     specs: MeasurementSpec[],
     priority: ScpiPriority,
   ): Promise<MeasurementValue[]> {
+    const startedAt = performance.now();
     const values: MeasurementValue[] = [];
     for (const spec of specs) {
       const item = measurementItem(spec.kind);
@@ -383,6 +394,11 @@ export class Dho804Driver {
         statistics: { current, minimum, maximum, average, deviation, count },
       });
     }
+    console.info(`[SCPI] measurements:complete ${JSON.stringify({
+      measurements: specs.length,
+      queries: specs.length * 6,
+      elapsedMs: performance.now() - startedAt,
+    })}`);
     return values;
   }
 
@@ -512,6 +528,7 @@ export class Dho804Driver {
     this.waveformSetup = { source: null, mode: null, format: null, points: null };
     this.liveWaveformPreambles.clear();
     this.channelUnits.clear();
+    this.channelScales.clear();
   }
 
   private async queryText(
@@ -531,9 +548,11 @@ export class Dho804Driver {
     priority: ScpiPriority,
     coalesceKey: ScpiCoalesceKey | null,
     kind = ScpiOperationKind.Write,
+    onExecuted?: () => void,
   ): Promise<void> {
     const execute = async (transport: ScpiTransport): Promise<void> => {
       await transport.command(command);
+      onExecuted?.();
     };
 
     if (priority === ScpiPriority.Interactive) {
@@ -597,6 +616,35 @@ export class Dho804Driver {
     const unit = parseChannelUnit(await transport.queryText(`${channelPrefix(channel)}:UNITs?`));
     this.channelUnits.set(channel, unit);
     return unit;
+  }
+
+  private updateCachedChannelScale(
+    channel: Channel,
+    previousScale: number | undefined,
+    nextScale: number,
+  ): void {
+    const cached = this.liveWaveformPreambles.get(channel);
+    if (
+      cached === undefined ||
+      previousScale === undefined ||
+      previousScale <= 0 ||
+      nextScale <= 0
+    ) {
+      this.liveWaveformPreambles.delete(channel);
+      return;
+    }
+    const ratio = nextScale / previousScale;
+    cached.preamble.yIncrement *= ratio;
+    cached.preamble.yOrigin /= ratio;
+  }
+
+  private updateCachedChannelOffset(channel: Channel, nextOffset: number): void {
+    const cached = this.liveWaveformPreambles.get(channel);
+    if (cached === undefined || cached.preamble.yIncrement === 0) {
+      this.liveWaveformPreambles.delete(channel);
+      return;
+    }
+    cached.preamble.yOrigin = nextOffset / cached.preamble.yIncrement;
   }
 }
 

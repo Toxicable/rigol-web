@@ -1,103 +1,135 @@
 # Live waveform performance
 
-## 2026-09-01 browser trace
+## Current conclusion
 
-A Chrome Performance capture of the deployed Rigol Web UI over 6.31 s showed approximately 22 ms scripting, 3 ms painting, and 2 ms rendering on the browser main thread. The UI was visually choppy despite the browser spending almost all of the interval idle.
+A Chrome Performance capture showed the browser main thread almost entirely idle while the live trace was visibly choppy. The limiting path is scope acquisition/SCPI cadence rather than React/uPlot rendering.
 
-Current conclusion: the observed choppiness is primarily an acquisition/publication cadence issue rather than a browser rendering bottleneck.
+Real DHO804 captures show a substantial fixed-looking SCPI cost:
 
-The design owner also observed that the live display subjectively becomes slower as more channels are enabled. This matches the serialized per-channel acquisition path: each extra enabled channel adds another scope transaction before a given channel is refreshed again.
+- ordinary text queries commonly take about 22-30 ms;
+- warm 999-byte `:WAVeform:DATA?` calls commonly take about 29-41 ms;
+- `:WAVeform:PREamble?` has been observed around 23-27 ms;
+- reducing NORMAL/BYTE waveform data from 999 to 500 bytes did not materially reduce `DATA?` latency and returned only the first part of the displayed waveform, so live reads remain at 999 points.
 
-## Implemented hot-path changes
+The practical optimization rule is therefore to eliminate avoidable queries first, then benchmark batching changes rather than assuming their value.
 
-The live waveform path now treats the server's connected-session state as authoritative rather than continuously re-reading scope configuration.
+All software changes in this workstream cost $0.
 
-- `ScopeRuntime` reads one complete scope snapshot while establishing a session and does not start the former 1 Hz `ScopePoller`. Front-panel/external-change reconciliation is intentionally deferred.
-- `Dho804Driver.readChannelState()` seeds a per-channel unit cache during the initial snapshot, so steady-state live waveform reads do not issue `:CHANnel<n>:UNITs?`.
-- NORMAL/BYTE waveform preambles are cached per channel and live point count. After the first frame for a channel, unchanged settings do not issue `:WAVeform:PREamble?` again.
-- Channel scale/offset writes invalidate that channel's live preamble. Horizontal scale/position writes invalidate all live preambles.
-- Raw SCPI invalidates waveform setup, live preamble, and unit caches because arbitrary commands may have changed the scope configuration.
+## Connected-session behavior
 
-The expected warm per-channel live path is therefore:
+The server reads one complete hardware snapshot when a scope session is established. It does not run the former 1 Hz full-state poller. The connected-session state is authoritative for app-driven controls; front-panel/external-change reconciliation is intentionally deferred.
 
-1. `:WAVeform:SOURce CHANnel<n>` when switching from another enabled channel;
-2. `:WAVeform:DATA?`.
+Routine control writes and interactive commits are optimistic and do not perform post-write state readback bursts. Run, Stop, and Single now also update local run state directly instead of issuing a post-action `:TRIGger:STATus?` query. A trigger-type transition still reads the complete resulting trigger state because the Edge-only source/slope/level fields are not necessarily known from the prior state.
 
-For one enabled channel after setup is warm, the expected path is just `:WAVeform:DATA?` per frame.
+Deep capture remains an exception: it currently requests a full scope snapshot before RAW capture because it needs authoritative stopped/enabled-channel/memory-depth information. This is not steady-state live traffic, but it is a later query-reduction target; a narrower hardware-truth read would be preferable to the full snapshot.
+
+## Interaction stability
+
+A real-scope run with live acquisition interleaved with horizontal panning showed the exact failure mechanism. The command stream repeatedly alternated `:TIMebase:MAIN:OFFSet ...`, `:WAVeform:DATA?`, and `:WAVeform:PREamble?`. One `DATA?` returned a zero-length binary payload; later a `DATA?` announced a 999-byte IEEE488.2 binary block (`#9000000999`) but only 985 total bytes reached the transport before the scope stopped sending and the 5 s query timeout expired. The transport correctly invalidated the connection because a partial binary block cannot be safely resynchronized.
+
+This is stronger evidence than the earlier subjective report: mutating the horizontal timebase while a NORMAL waveform transfer is active can cause the DHO804 to return an empty or truncated waveform response. Do not intentionally interleave horizontal drag writes with live `DATA?` traffic.
+
+The server therefore wires the gateway interaction pause/resume hooks again. Interactive drag updates pause live waveform acquisition; the interaction commit resumes it after the existing 200 ms settle delay. This restores a transaction boundary instead of asking the DHO804 to process live waveform reads while interactive writes are still arriving.
+
+The experimental synthesized horizontal preamble update was also removed. Horizontal scale/position writes now invalidate cached live preambles. Because acquisition is paused for the gesture, those invalidations do not create one `PREamble?` query per drag update: the first live frame after commit performs one fresh hardware `PREamble?`, then the cache is warm again.
+
+The failing capture above contains repeated waveform transfers during the drag, so it represents the unsafe interleaved behavior rather than the expected paused-drag behavior of this branch. A validation run of this branch should show no repeated `DATA?`/`PREamble?` sequence between the first interaction pause and the final commit/resume.
+
+## Live waveform hot path
+
+Units are seeded from the initial channel snapshot and cached. NORMAL/BYTE preambles are cached per channel and live point count. After the first frame, a stable single-channel live path is therefore only:
+
+1. `:WAVeform:DATA?`
+
+With multiple enabled channels, source selection is also required when the active source changes.
+
+App-driven vertical scale/offset writes update cached Y metadata locally:
+
+- Vertical scale: `YINCrement` is scaled by `newScale / oldScale`; `YORigin` is inversely scaled so the existing vertical offset is preserved.
+- Vertical offset: `YORigin = VerticalOffset / YINCrement`.
+
+Horizontal scale/position writes deliberately invalidate the live preamble and take one fresh preamble after the interaction commits. Raw SCPI invalidates waveform setup, unit/scale metadata, and cached preambles because arbitrary commands may have changed the scope.
+
+RIGOL's DHO800/DHO900 Programming Guide explicitly defines NORMAL-mode `YINCrement = VerticalScale/7500` and `YORigin = VerticalOffset/YINCrement`, and defines the preamble fields as `<xincrement>,<xorigin>,<xreference>,<yincrement>,<yorigin>,<yreference>`. Source:
+
+- https://download.rigol.com/en/Manual/Digital%20Oscilloscope/DHO800/DHO800900_ProgrammingGuide_EN.pdf
+
+The vertical relative-update implementation deliberately does not hard-code the documented divisor; it transforms the preamble already returned by the actual DHO804 firmware.
 
 ## SCPI timing instrumentation
 
-`ScpiTransport` measures every query from immediately before the program-message write until a complete SCPI response has been parsed. Routine performance logging is intentionally compact: `query:start`, per-chunk `query:data`, and binary-progress records are suppressed, while each completed query emits one single-line `[SCPI] query:complete` JSON record containing the command, `elapsedMs`, response kind, and response byte count. Timeout/error/connect records remain available.
+`ScpiTransport` times every query from immediately before writing the program message until a complete text or binary response has been parsed. Normal performance tracking uses one compact line per completed query:
 
-This is the measurement to use when deciding whether query count is actually a throughput problem; query count alone is not sufficient.
+`[SCPI] query:complete {"command":"...","elapsedMs":...,"responseKind":"...","responseBytes":...}`
 
-For measurement statistics, one selected measurement currently performs six serialized statistic queries once per second. The relevant cost is the sum of the six observed `elapsedMs` values, not simply the fact that there are six queries. Because SCPI is serialized, time spent waiting for measurement responses is time during which a waveform query cannot be in flight.
+Measurement reads also emit one aggregate line after the complete poll:
 
-## 2026-09-01 real-scope timing capture
+`[SCPI] measurements:complete {"measurements":N,"queries":6*N,"elapsedMs":...}`
 
-A DHO804 log capture after the first hot-path changes showed 999-byte `:WAVeform:DATA?` queries commonly taking roughly 28-40 ms, with occasional values just above 40 ms. This makes the waveform query itself a material throughput limit: one channel is bounded to roughly the high-20s frames/s before event-loop and source-switch overhead, while four enabled channels necessarily reduce each channel to roughly single-digit Hz because four serialized `DATA?` responses are required per cycle.
+One selected measurement currently performs six native statistic queries: current, minimum, maximum, average, deviation, and count. The aggregate log lets the real DHO804 decide whether that is acceptable rather than inferring cost from query count alone.
 
-Text queries were also expensive. Typical timebase readbacks were about 22-25 ms each. A horizontal-position interaction commit issued four reconciliation queries (`XY:ENABle?`, `MODE?`, `MAIN:SCALe?`, `MAIN:OFFSet?`) totalling about 93 ms in one capture and about 113 ms in another. Because the horizontal write invalidates the live preamble, the first following frame then paid another roughly 23-25 ms `:WAVeform:PREamble?` query in addition to a roughly 37-41 ms `DATA?` query. The observed post-interaction query work before/around the first fresh waveform was therefore roughly 156-175 ms, excluding the preceding write commands themselves.
+## Compound-query batching: first observation and repeated probe
 
-The same capture showed long runs of `:TIMebase:MAIN:OFFSet <value>` interaction writes with no waveform query interleaved in the displayed interval. The gateway was explicitly pausing live waveform service during interactions, and Interactive scheduler priority also outranked Waveform priority.
+The first DHO804 test proved that compound text queries are supported:
 
-## Throughput pass 2
+- compound `:TIMebase:MAIN:SCALe?;:TIMebase:MAIN:OFFSet?`: 45.739 ms;
+- later individual `SCALe?`: 24.008 ms;
+- later individual `OFFSet?`: 24.731 ms.
 
-The following changes were implemented for the second real-scope benchmark:
+That single comparison is **not** sufficient to claim a 3 ms / 6% batching gain; the observed difference is easily within the normal latency variation in the same log. Treat it only as proof that the DHO804 returns both text values in a semicolon-separated response.
 
-- routine controls and interactive commits use optimistic/local state and no longer perform post-write readback bursts; trigger-type transitions retain their readback because a complete Edge trigger state is not otherwise known;
-- the server no longer wires the gateway's optional live-waveform pause/resume callbacks, so control interactions do not explicitly suspend live acquisition;
-- if both another Interactive write and a Waveform operation are pending after an Interactive operation, the scheduler services the Waveform before allowing another Interactive write; Immediate work still always wins;
-- SCPI timing logs are reduced to compact one-line completion records for normal query performance tracking.
+The temporary startup diagnostic now performs 10 paired rounds and alternates ordering each round to reduce warm-up/drift bias. It records count, median, mean, minimum, and maximum for:
 
-A 500-point NORMAL/BYTE experiment was also tried and rejected. The DHO804 returned 500 bytes, but the browser displayed only approximately the first half of the waveform rather than a decimated representation of the full visible span. The captured 500-byte `:WAVeform:DATA?` timings were still mostly in the high-20s to high-30s milliseconds, with frequent 40+ ms values and occasional values around 50 ms, so halving the payload did not provide a material latency reduction either.
+- two separate timebase queries versus the same two query units in one compound program message;
+- separate `:WAVeform:SOURce CHANnel1` + `:WAVeform:DATA?` versus `:WAVeform:SOURce CHANnel1;:WAVeform:DATA?`, with the source deliberately changed to CH2 before each sample so both paths actually perform a source switch.
 
-Live NORMAL/BYTE reads are therefore restored to 999 points, the DHO804's observed effective full-span result when requesting 1000 points. Do not reduce NORMAL point count as a frame-rate optimisation unless the acquisition path also provides a verified full-span decimation/windowing strategy.
+The second probe uses NORMAL/BYTE/999 and validates a 999-byte binary response. If either diagnostic produces an invalid response, the runtime discards that connection and reconnects without retrying the probe, avoiding a potentially misaligned SCPI stream.
 
-The same interaction capture also confirms that keeping waveform service active during horizontal drags exposes a different cost: each horizontal offset write invalidates the cached waveform preamble, and the following live frame pays another roughly 22-24 ms `:WAVeform:PREamble?` query. Narrowing or updating preamble metadata during interaction is therefore now a higher-value optimisation than reducing live point count.
+Do not make a batching-performance conclusion until the repeated summaries are captured. RIGOL documents SCPI sequential commands as executing in sequence, so it is plausible that multiple query units still incur most of their individual instrument-processing cost even inside one program message, but that should be measured on this scope.
 
-## Compound-query probe
+A community DHO driver also demonstrates compound text-query use and semicolon-separated response parsing:
 
-A real DHO804 startup benchmark tested `:TIMebase:MAIN:SCALe?;:TIMebase:MAIN:OFFSet?` as one compound text query. The compound transaction completed in 45.739 ms and returned both values correctly as `5.000000E-4;2.511289E-4`. The same startup then measured the individual queries at 24.008 ms and 24.731 ms, or 48.739 ms combined.
+- https://github.com/eicorg/epicsdev/blob/e9bc3ad122d3e0e0526a9d7e050325d2ed1ce405/oscilloscope/rigol_dho/rigol_dho/__main__.py
 
-Result: text-query batching is supported by this DHO804, but it does not collapse two roughly 24 ms query operations into one roughly 24 ms transaction. The observed saving was about 3.0 ms, roughly 6%, so the dominant delay is per query unit processed inside the instrument rather than host/network round-trip overhead per program message.
+Do not assume multiple binary waveform queries can be chained across channels. A separate Rigol DS1104Z project reports that a source/data/source/data compound message returned only the first waveform on that model. This is not evidence about the DHO804, but it is enough not to design around multi-binary responses without a dedicated DHO804 test:
 
-This changes the optimisation priority. Compound text queries remain a small efficiency win for grouped reads, but they are not a substitute for eliminating queries. For hot paths, prefer cached/derived state and write-only updates where correctness allows. Measurement statistics are still potentially expensive because six statistic queries are likely to consume close to six instrument query-processing slots even when encoded in one compound message.
+- https://github.com/LikeDotAudio/OPEN-AIR/blob/c7b5022a4e8ef143f60699c5ae6bbdd50d4ad878/BackEnd/openair-yak/src/verbs/nab.rs
 
-The temporary startup probe should be removed after this benchmark is no longer needed; retaining it would add about 46 ms to every first connection for no runtime benefit.
+## Query audit
 
-## DHO800 command knobs and prior art
+Steady-state live traffic after this pass is intentionally narrow:
 
-RIGOL's DHO800/DHO900 Programming Guide documents `:WAVeform:POINts` as 1-1000 points in NORMAL mode. `:WAVeform:DATA?` itself has no arguments; source, reading mode, format, and point count are configured separately with `:WAVeform:SOURce`, `:WAVeform:MODE`, `:WAVeform:FORMat`, and `:WAVeform:POINts`. Rigol Web already uses the lowest-payload documented live combination: NORMAL mode plus BYTE format. Source: https://download.rigol.com/en/Manual/Digital%20Oscilloscope/DHO900/DHO800900_ProgrammingGuide_EN.pdf
+- initial connection: one full scope snapshot;
+- live waveform: `DATA?` per frame, plus a write-only source select when switching channels;
+- vertical live metadata: one preamble on cache miss; app-driven vertical scale/offset changes update a warm cache locally;
+- horizontal live metadata: horizontal scale/position invalidates preamble; one fresh `PREamble?` is taken after the interaction resumes;
+- interactive drags: live acquisition is paused until commit to keep the DHO804 transaction stream stable;
+- measurements: six statistic queries per selected measurement at the existing measurement cadence, now measured as a complete poll;
+- trigger type change: one complete trigger-state readback after selecting Edge;
+- Run/Stop/Single: no status query readback;
+- deep capture: full state read plus RAW waveform operations; candidate for a narrower pre-capture read;
+- raw SCPI: arbitrary and therefore invalidates local waveform metadata assumptions.
 
-There is no documented per-`DATA?` option such as a chunk-size, compression, or fast-response flag. TCP `NODELAY` is already enabled in `ScpiTransport`, so Nagle buffering is not a likely source of the observed 20-40 ms response times. At 500-1000 bytes, raw LAN transfer time itself is negligible compared with the measured scope response latency.
+## Transport and prior art
 
-SCPI program messages can contain semicolon-separated command/query units. A community DHO driver in `eicorg/epicsdev` batches multiple DHO queries into one program message, for example `:WAV:XORigin?;:XINC?;POINts?;:CHAN1:DISP?;...`, and splits the returned text response on semicolons. Its generic query helper similarly constructs multiple `?;:` query units and parses one semicolon-separated response. Source: https://github.com/eicorg/epicsdev/blob/e9bc3ad122d3e0e0526a9d7e050325d2ed1ce405/oscilloscope/rigol_dho/rigol_dho/__main__.py
+Rigol Web is LAN-only for the scope. USB is not available in this deployment and is not a candidate transport for this workstream.
 
-The project DHO804 benchmark confirms this compound text response behaviour works, but also shows that the instrument still spends nearly the sum of the individual query times processing the two query units. Use batching as a small overhead reduction, not as the primary latency strategy.
+`ScpiTransport` uses raw TCP with `NODELAY`; transferring 500-1000 waveform bytes over LAN is negligible compared with the observed tens of milliseconds of scope response latency.
 
-Write-plus-query chaining is lower risk because it produces only one response. In particular, `:WAVeform:SOURce CHANnel1;:WAVeform:DATA?` is worth bench-verifying and would fold source selection into the same program message as the binary query. Its expected gain is smaller because source selection is already response-less.
+Existing DHO800 community code uses the same basic source/mode/format/data sequence rather than exposing a known faster waveform command. `MasterJubei/pydho800` uses TCP port 5555 and an ASCII waveform path, so Rigol Web's BYTE + cached-metadata path is already leaner for live display:
 
-Do not assume that multiple waveform queries can be chained across channels. A separate Rigol DS1104Z project reports that `:WAV:SOUR CHAN1;:WAV:DATA?;:WAV:SOUR CHAN2;:WAV:DATA?` returned only the first channel on that model. This is not evidence about DHO804 behaviour, but it is enough to require a real DHO804 test before designing a multi-binary-response transport around it. Source: https://github.com/LikeDotAudio/OPEN-AIR/blob/c7b5022a4e8ef143f60699c5ae6bbdd50d4ad878/BackEnd/openair-yak/src/verbs/nab.rs
+- https://github.com/MasterJubei/pydho800
 
-Existing DHO800 community code follows the same basic SCPI waveform path rather than exposing a known faster waveform command. `MasterJubei/pydho800` connects directly to TCP port 5555, configures NORMAL mode, point count and source, then requests preamble and waveform data serially. Its current implementation uses ASCII waveform format for this path, so Rigol Web's cached metadata plus BYTE data path is already materially leaner. Source: https://github.com/MasterJubei/pydho800
+Norbert Kiszka's DHO800/900 firmware-mod changelog explicitly claims optimization of many SCPI commands. It does not publish enough detail to quantify `DATA?` improvement, but it is additional evidence that scope-side SCPI processing overhead is a plausible limit:
 
-`scopebench-mcp` independently reports verified DHO804D access over both USB/VISA and raw LAN SCPI port 5555. This makes a USB-vs-LAN timing comparison a reasonable later experiment if full-span `DATA?` remains around 30 ms, but there is not yet evidence that changing transport will beat the instrument's own command-processing latency. Source: https://pypi.org/project/scopebench-mcp/
+- https://www.patreon.com/NorbertKiszka/posts/dho800-900-mod-131407128
 
-A DHO waveform gist from `steveway` also uses the documented source/mode/format/data sequence and queries scaling metadata separately; it does not show a hidden lower-latency `DATA?` variant. Source: https://gist.github.com/steveway/fbdd6be4c572919d45460cf3114abdf7
+## Next hardware run
 
-Norbert Kiszka's DHO800/900 firmware mod changelog is notable because it explicitly claims optimisations to many SCPI commands, tested with a modified DSRemote client, alongside broader oscilloscope-app performance work. It does not publish a replacement waveform SCPI command or enough detail to attribute a specific `DATA?` latency improvement, but it is evidence that at least one community effort found scope-side SCPI software overhead worth optimising. Source: https://www.patreon.com/NorbertKiszka/posts/dho800-900-mod-131407128
+1. Capture the two startup `*:summary` probe lines and use their median/spread, not the original single comparison, to decide whether batching/source+query chaining is useful.
+2. Pan horizontal position and scale and verify there are no repeated live `DATA?`/`PREamble?` queries during the drag; live acquisition should resume only after commit plus the 200 ms settle delay.
+3. Confirm the first resumed frame performs one fresh `PREamble?` and the waveform X alignment is correct.
+4. Enable one measurement, then several, and capture `measurements:complete` plus the individual statistic timings to quantify actual link occupancy.
+5. After hardware-truth requirements are clarified, reduce deep-capture preflight from a full scope snapshot to only the fields it genuinely needs.
 
-## Remaining opportunities
-
-1. Remove the temporary startup compound-query probe now that the real DHO804 result is known.
-2. Narrow preamble invalidation. Horizontal and vertical interactive writes currently invalidate cached scaling metadata; the latest capture shows each horizontal drag update can add another roughly 22-24 ms `PREamble?` query. A safe cache-update strategy needs to preserve correct X/Y conversion rather than merely hiding the query.
-3. Audit every remaining routine SCPI query and eliminate or derive it where correctness allows. Since compound text batching only saved about 6% for two queries, reducing query count is substantially more valuable than batching alone.
-4. Bench `:WAVeform:SOURce CHANnel<n>;:WAVeform:DATA?` as a one-response compound message. Treat multi-channel/multi-binary query batching as unsupported until verified specifically on DHO804.
-5. Measure measurement-statistic query RTTs and consider reducing the number of statistics/read cadence. Compound batching may save a few milliseconds of host/message overhead but is unlikely to remove the instrument processing cost of six statistic queries.
-6. If full-span `DATA?` remains mostly fixed-latency, compare raw TCP 5555 against USBTMC/VISA on the same scope. Raw TCP is already a low-overhead transport, so this should be measurement-led rather than assumed.
-7. Remove the duplicate zero-delay event-loop yields only after real SCPI timing confirms they are material relative to the 20-40 ms device latency.
-
-Avoid multiple simultaneous scope sockets as a first-line optimisation. It is not documented as a way to parallelise per-channel waveform reads and would complicate command ordering/state ownership.
-
-Do not optimise uPlot rendering unless a later trace shows browser main-thread or paint/composite pressure after acquisition cadence is increased.
+Do not optimize uPlot rendering unless a later browser trace shows main-thread/paint pressure after acquisition cadence improves.
