@@ -7,6 +7,7 @@ const SPA_ROUTES = new Set(["/", "/dm858e", "/dm858e/"]);
 
 export interface HttpControlActions {
   sleepScope(): Promise<void>;
+  wakeScope(): Promise<void>;
 }
 
 function contentType(path: string): string {
@@ -85,24 +86,44 @@ async function serveBuiltWeb(
   }
 }
 
-async function sleepScope(
+async function runScopePowerAction(
   response: ServerResponse,
-  controlActions: HttpControlActions | null,
+  action: (() => Promise<void>) | undefined,
+  failureMessage: string,
 ): Promise<void> {
-  if (controlActions === null) {
+  if (action === undefined) {
     sendText(response, 503, "scope power control unavailable\n");
     return;
   }
 
   try {
-    await controlActions.sleepScope();
+    await action();
     response.writeHead(204);
     response.end();
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    console.error("Failed to put DHO804 to sleep", error);
+    console.error(failureMessage, error);
     sendText(response, 502, `${detail}\n`);
   }
+}
+
+function handleScopePowerRoute(
+  request: IncomingMessage,
+  response: ServerResponse,
+  action: (() => Promise<void>) | undefined,
+  failureMessage: string,
+): boolean {
+  if (request.method !== "POST") {
+    response.writeHead(405, {
+      "allow": "POST",
+      "content-type": "text/plain; charset=utf-8",
+    });
+    response.end("method not allowed\n");
+    return true;
+  }
+
+  void runScopePowerAction(response, action, failureMessage);
+  return true;
 }
 
 export function createHttpRequestHandler(
@@ -119,15 +140,22 @@ export function createHttpRequestHandler(
     }
 
     if (request.url === "/api/scope/sleep") {
-      if (request.method !== "POST") {
-        response.writeHead(405, {
-          "allow": "POST",
-          "content-type": "text/plain; charset=utf-8",
-        });
-        response.end("method not allowed\n");
-        return;
-      }
-      void sleepScope(response, controlActions);
+      handleScopePowerRoute(
+        request,
+        response,
+        controlActions?.sleepScope,
+        "Failed to put DHO804 to sleep",
+      );
+      return;
+    }
+
+    if (request.url === "/api/scope/wake") {
+      handleScopePowerRoute(
+        request,
+        response,
+        controlActions?.wakeScope,
+        "Failed to wake DHO804",
+      );
       return;
     }
 
