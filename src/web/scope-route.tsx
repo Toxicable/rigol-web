@@ -49,7 +49,7 @@ export function ScopeRoute({ client, controller }: ScopeRouteProps) {
             </aside>
           </div>
           <div className="bottom-grid">
-            <MeasurementPanel scope={connection.scope} client={client} />
+            <MeasurementPanel client={client} />
           </div>
         </>
       ) : (
