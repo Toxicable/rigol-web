@@ -39,18 +39,18 @@ function adbTarget(host: string, port: number): string {
   return `${normalizedHost}:${port}`;
 }
 
-export class Dho804PowerControl {
+export class Dho804DisplayControl {
   public constructor(
     private readonly host: string,
     private readonly port: number,
     private readonly adb: AdbRunner = runAdb,
   ) {}
 
-  public sleep(): Promise<void> {
+  public screenOff(): Promise<void> {
     return this.sendKeyEvent(ANDROID_KEYCODE_SLEEP);
   }
 
-  public wake(): Promise<void> {
+  public screenOn(): Promise<void> {
     return this.sendKeyEvent(ANDROID_KEYCODE_WAKEUP);
   }
 

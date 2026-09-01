@@ -49,16 +49,24 @@ Copy `.env.example` to `.env`, then set `RIGOL_SCOPE_HOST` and
 `RIGOL_SCOPE_PORT` to the DHO804's verified raw SCPI/TCP endpoint. Configure
 `RIGOL_DMM_HOST` and `RIGOL_DMM_PORT` for the DM858E endpoint.
 
-The DHO804 **Sleep** and **Wake** buttons are deliberately separate from SCPI.
-The runtime container includes the Debian `adb` client and sends Android
-`KEYCODE_SLEEP` (`223`) or `KEYCODE_WAKEUP` (`224`) to the scope over ADB.
+The DHO804 **Screen Off** and **Screen On** controls are deliberately separate
+from SCPI. The runtime container includes the Debian `adb` client and sends
+Android `KEYCODE_SLEEP` (`223`) or `KEYCODE_WAKEUP` (`224`) to the scope over
+ADB. On the DHO804 these commands have been bench-verified to blank and restore
+the display while the oscilloscope continues operating and Rigol Web continues
+receiving telemetry. They are therefore display controls only and must not be
+presented as instrument sleep or standby controls.
+
+RIGOL documents a separate instrument **Sleep** operation under the scope's own
+Power menu. That operation is not currently implemented remotely by Rigol Web.
+The DHO800 user guide states that instrument Sleep keeps some processes alive,
+uses more power than Shutdown, and resumes more quickly than a full startup:
+https://www.rigol.com/dam/global/downloads/brochures/en/user-manual/oscillosopes/DHO800_UserGuide_EN.pdf
+
 `RIGOL_SCOPE_ADB_PORT` defaults to `55555` and can be changed if the scope
-exposes ADB elsewhere. The dedicated wake key is used instead of the Android
-power-toggle key so requesting Wake has no effect when the scope is already
-awake. If ADB is disabled or not reachable, the UI reports the failed power
-request rather than pretending the scope changed state. This adds no paid
-software or hardware dependency; it only uses the open-source ADB client
-already present in the runtime image.
+exposes ADB elsewhere. If ADB is disabled or not reachable, the UI reports the
+failed screen-control request. This adds no paid software or hardware dependency;
+it only uses the open-source ADB client already present in the runtime image.
 
 Android documents the key codes here:
 https://developer.android.com/reference/android/view/KeyEvent#KEYCODE_SLEEP
@@ -81,5 +89,5 @@ The HTTP and WebSocket service listens on port `3000` in the container. Its
 `/health` endpoint verifies only that the Node process is running; it remains
 healthy while the scope is disconnected.
 
-The scope UI, power controls, statistics and diagnostics changes add no
+The scope UI, display controls, statistics and diagnostics changes add no
 hardware, paid service, or runtime dependency. Cost impact: **$0**.

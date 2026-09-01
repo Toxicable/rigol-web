@@ -6,8 +6,8 @@ const DEFAULT_WEB_ROOT = resolve(process.cwd(), "dist/web");
 const SPA_ROUTES = new Set(["/", "/dm858e", "/dm858e/"]);
 
 export interface HttpControlActions {
-  sleepScope(): Promise<void>;
-  wakeScope(): Promise<void>;
+  screenOffScope(): Promise<void>;
+  screenOnScope(): Promise<void>;
 }
 
 function contentType(path: string): string {
@@ -86,13 +86,13 @@ async function serveBuiltWeb(
   }
 }
 
-async function runScopePowerAction(
+async function runScopeDisplayAction(
   response: ServerResponse,
   action: (() => Promise<void>) | undefined,
   failureMessage: string,
 ): Promise<void> {
   if (action === undefined) {
-    sendText(response, 503, "scope power control unavailable\n");
+    sendText(response, 503, "scope display control unavailable\n");
     return;
   }
 
@@ -107,23 +107,22 @@ async function runScopePowerAction(
   }
 }
 
-function handleScopePowerRoute(
+function handleScopeDisplayRoute(
   request: IncomingMessage,
   response: ServerResponse,
   action: (() => Promise<void>) | undefined,
   failureMessage: string,
-): boolean {
+): void {
   if (request.method !== "POST") {
     response.writeHead(405, {
       "allow": "POST",
       "content-type": "text/plain; charset=utf-8",
     });
     response.end("method not allowed\n");
-    return true;
+    return;
   }
 
-  void runScopePowerAction(response, action, failureMessage);
-  return true;
+  void runScopeDisplayAction(response, action, failureMessage);
 }
 
 export function createHttpRequestHandler(
@@ -139,22 +138,22 @@ export function createHttpRequestHandler(
       return;
     }
 
-    if (request.url === "/api/scope/sleep") {
-      handleScopePowerRoute(
+    if (request.url === "/api/scope/screen-off") {
+      handleScopeDisplayRoute(
         request,
         response,
-        controlActions?.sleepScope,
-        "Failed to put DHO804 to sleep",
+        controlActions?.screenOffScope,
+        "Failed to turn DHO804 screen off",
       );
       return;
     }
 
-    if (request.url === "/api/scope/wake") {
-      handleScopePowerRoute(
+    if (request.url === "/api/scope/screen-on") {
+      handleScopeDisplayRoute(
         request,
         response,
-        controlActions?.wakeScope,
-        "Failed to wake DHO804",
+        controlActions?.screenOnScope,
+        "Failed to turn DHO804 screen on",
       );
       return;
     }
