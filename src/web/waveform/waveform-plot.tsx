@@ -48,6 +48,7 @@ type DragState =
       pointerId: number;
       channel: Channel;
       startY: number;
+      startOffset: number;
       startMarkerY: number;
       scale: number;
       height: number;
@@ -56,6 +57,7 @@ type DragState =
       kind: "trigger";
       pointerId: number;
       startY: number;
+      startLevel: number;
       startMarkerY: number;
       sourceOffset: number;
       scale: number;
@@ -287,6 +289,7 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
       pointerId: event.pointerId,
       channel,
       startY: event.clientY,
+      startOffset: channelState.offset,
       startMarkerY: channelMarkerY(scope, channel, size.height),
       scale: channelState.scale,
       height: size.height,
@@ -308,6 +311,7 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
       kind: "trigger",
       pointerId: event.pointerId,
       startY: event.clientY,
+      startLevel: scope.trigger.level,
       startMarkerY: markerY,
       sourceOffset: source.offset,
       scale: source.scale,
@@ -341,6 +345,7 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
           kind: ControlKind.ChannelOffset,
           channel: drag.channel,
           value: channelOffsetFromMarkerDrag(
+            drag.startOffset,
             drag.startMarkerY,
             event.clientY - drag.startY,
             drag.height,
@@ -351,6 +356,7 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
         return {
           kind: ControlKind.TriggerLevel,
           value: triggerLevelFromMarkerDrag(
+            drag.startLevel,
             drag.startMarkerY,
             event.clientY - drag.startY,
             drag.height,
