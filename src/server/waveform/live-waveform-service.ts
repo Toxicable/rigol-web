@@ -4,7 +4,10 @@ import type { Dho804Waveform } from "../scope/dho804-driver.js";
 import { encodeWaveformFrame } from "./waveform-frame-encoder.js";
 
 export interface LiveWaveformDriver {
-  readLiveWaveform(channel: Channel, pointCount: number): Promise<Dho804Waveform>;
+  readLiveWaveforms(
+    channels: readonly Channel[],
+    pointCount: number,
+  ): Promise<Dho804Waveform[]>;
 }
 
 export interface LiveWaveformServiceOptions {
@@ -12,13 +15,12 @@ export interface LiveWaveformServiceOptions {
   getScopeState: () => ScopeState;
   publishFrame: (frame: Uint8Array) => void;
   reportError?: (error: unknown) => void;
-  pointCount?: number;
 }
 
 // The DHO804 firmware returns 999 samples when NORMAL/BYTE mode is asked for
 // 1000 points. Lower NORMAL point counts crop the visible waveform span rather
-// than decimating the whole screen, so keep live reads at the effective full span.
-const DEFAULT_POINT_COUNT = 999;
+// than decimating the whole screen, so live acquisition always uses 999 points.
+const LIVE_POINT_COUNT = 999;
 const RESUME_SETTLE_DELAY_MS = 200;
 
 function nextUint32(value: number): number {
@@ -34,7 +36,6 @@ export class LiveWaveformService {
   private readonly getScopeState: () => ScopeState;
   private readonly publishFrame: (frame: Uint8Array) => void;
   private readonly reportError: (error: unknown) => void;
-  private readonly pointCount: number;
   private readonly sequences = new Uint32Array(5);
   private liveWanted = false;
   private paused = false;
@@ -43,16 +44,10 @@ export class LiveWaveformService {
   private resumeTimer: ReturnType<typeof setTimeout> | null = null;
 
   public constructor(options: LiveWaveformServiceOptions) {
-    if (!Number.isInteger(options.pointCount ?? DEFAULT_POINT_COUNT)
-      || (options.pointCount ?? DEFAULT_POINT_COUNT) < 1
-      || (options.pointCount ?? DEFAULT_POINT_COUNT) > 1_000) {
-      throw new Error("Live waveform pointCount must be an integer from 1 to 1000");
-    }
     this.driver = options.driver;
     this.getScopeState = options.getScopeState;
     this.publishFrame = options.publishFrame;
     this.reportError = options.reportError ?? defaultReportError;
-    this.pointCount = options.pointCount ?? DEFAULT_POINT_COUNT;
   }
 
   public start(): void {
@@ -144,20 +139,30 @@ export class LiveWaveformService {
     if (enabledChannels.length === 0) {
       return false;
     }
+    if (!this.liveWanted || this.paused) {
+      return false;
+    }
 
-    for (const channel of enabledChannels) {
-      if (!this.liveWanted || this.paused) {
-        return false;
-      }
-      const waveform = await this.driver.readLiveWaveform(channel, this.pointCount);
-      if (!this.liveWanted || this.paused) {
-        return false;
+    const waveforms = await this.driver.readLiveWaveforms(enabledChannels, LIVE_POINT_COUNT);
+    if (!this.liveWanted || this.paused) {
+      return false;
+    }
+    if (waveforms.length !== enabledChannels.length) {
+      throw new Error(
+        `Driver returned ${waveforms.length} live waveforms for ${enabledChannels.length} enabled channels`,
+      );
+    }
+
+    for (let index = 0; index < enabledChannels.length; index += 1) {
+      const channel = enabledChannels[index];
+      const waveform = waveforms[index];
+      if (channel === undefined || waveform === undefined) {
+        throw new Error("Missing live waveform batch entry");
       }
       if (waveform.channel !== channel) {
         throw new Error(`Driver returned CH${waveform.channel} while reading CH${channel}`);
       }
       this.publishWaveform(waveform);
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
     return true;
   }
