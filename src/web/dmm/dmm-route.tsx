@@ -83,7 +83,7 @@ export function DmmRouteView({
   onControl,
 }: DmmRouteViewProps) {
   return (
-    <>
+    <section className="dmm-route">
       <header className="dmm-toolbar">
         <div>
           <strong>DM858E</strong>
@@ -120,7 +120,7 @@ export function DmmRouteView({
           </div>
         </section>
       )}
-    </>
+    </section>
   );
 }
 

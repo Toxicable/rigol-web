@@ -7,6 +7,8 @@
     "node": "^20.19.0 || >=22.12.0"
   },
   "scripts": {
+    "dev": "bash -c 'set -a; source .env; set +a; npm run dev:server & server_pid=$!; trap \"kill ${server_pid} 2>/dev/null || true\" EXIT INT TERM; npm run dev:web -- --host 0.0.0.0'",
+    "dev:external": "bash -c 'set -euo pipefail; compose=(docker --context docker-host compose -f \"$PWD/docker-compose.yml\"); \"${compose[@]}\" stop rigol-web; cleanup() { kill \"${dev_pid:-}\" 2>/dev/null || true; \"${compose[@]}\" up --detach --no-build; }; trap cleanup EXIT; npm run dev & dev_pid=$!; ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -R 0.0.0.0:3018:127.0.0.1:5173 fabian@192.168.1.12'",
     "dev:web": "vite",
     "dev:server": "tsx watch src/server/server.ts",
     "start": "node dist/server/server/server.js",

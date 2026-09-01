@@ -28,7 +28,7 @@ export function ScopeRoute({ client, controller }: ScopeRouteProps) {
   }, [connection, controller]);
 
   return (
-    <>
+    <section className="scope-route">
       <ScopeToolbar client={client} />
       {connection.kind === BrowserConnectionKind.ScopeConnected ? (
         <>
@@ -56,6 +56,6 @@ export function ScopeRoute({ client, controller }: ScopeRouteProps) {
           <p>Waiting for the scope connection.</p>
         </section>
       )}
-    </>
+    </section>
   );
 }

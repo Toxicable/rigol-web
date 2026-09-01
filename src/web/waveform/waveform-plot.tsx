@@ -128,7 +128,15 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
         ch3: { auto: false },
         ch4: { auto: false },
       },
-      axes: [],
+      axes: [
+        {
+          stroke: "#d5e0ea",
+          font: "12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+          grid: { show: false },
+          ticks: { show: false },
+          size: 28,
+        },
+      ],
       series: [
         {},
         {
