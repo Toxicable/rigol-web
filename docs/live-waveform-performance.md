@@ -11,7 +11,7 @@ Real DHO804 captures show a substantial fixed-looking SCPI cost:
 - `:WAVeform:PREamble?` has been observed around 23-27 ms;
 - reducing NORMAL/BYTE waveform data from 999 to 500 bytes did not materially reduce `DATA?` latency and returned only the first part of the displayed waveform, so live reads remain at 999 points.
 
-The practical optimization rule is therefore to eliminate avoidable queries first, then benchmark any batching/transport changes rather than assuming their value.
+The practical optimization rule is therefore to eliminate avoidable queries first, then benchmark batching changes rather than assuming their value.
 
 All software changes in this workstream cost $0.
 
@@ -22,6 +22,14 @@ The server reads one complete hardware snapshot when a scope session is establis
 Routine control writes and interactive commits are optimistic and do not perform post-write state readback bursts. Run, Stop, and Single now also update local run state directly instead of issuing a post-action `:TRIGger:STATus?` query. A trigger-type transition still reads the complete resulting trigger state because the Edge-only source/slope/level fields are not necessarily known from the prior state.
 
 Deep capture remains an exception: it currently requests a full scope snapshot before RAW capture because it needs authoritative stopped/enabled-channel/memory-depth information. This is not steady-state live traffic, but it is a later query-reduction target; a narrower hardware-truth read would be preferable to the full snapshot.
+
+## Interaction stability
+
+A real-scope run after keeping live acquisition active during panning showed the scope/live path appearing to die while horizontal position was being dragged. Treat interleaving horizontal timebase mutation with repeated live `DATA?` acquisition as unsafe until proven otherwise.
+
+The server therefore wires the gateway interaction pause/resume hooks again. Interactive drag updates pause live waveform acquisition; the interaction commit resumes it after the existing 200 ms settle delay. This restores the previously stable transaction boundary instead of asking the DHO804 to process live waveform reads while its interactive settings are still changing.
+
+This is a stability rule, not evidence that the DHO804 fundamentally cannot interleave those operations. Revisit only with a controlled real-scope test.
 
 ## Live waveform hot path
 
@@ -45,7 +53,7 @@ RIGOL's DHO800/DHO900 Programming Guide explicitly defines NORMAL-mode `YINCreme
 - https://download.rigol.com/en/Manual/Digital%20Oscilloscope/DHO800/DHO800900_ProgrammingGuide_EN.pdf
 - https://static.eleshop.nl/mage/media/downloads/DHO800-Series_userguide_EN.pdf
 
-The relative-update implementation deliberately does not hard-code the documented vertical divisor; it transforms the preamble already returned by the actual DHO804 firmware. Horizontal transforms should still be checked on the real DHO804 during the next interaction run, especially the sign of `XORigin` movement.
+The relative-update implementation deliberately does not hard-code the documented vertical divisor; it transforms the preamble already returned by the actual DHO804 firmware. Horizontal transforms still need real-scope validation, especially the sign and exact behavior of `XORigin` movement.
 
 ## SCPI timing instrumentation
 
@@ -93,6 +101,7 @@ Steady-state live traffic after this pass is intentionally narrow:
 - initial connection: one full scope snapshot;
 - live waveform: `DATA?` per frame, plus a write-only source select when switching channels;
 - live metadata: one preamble on cache miss; app-driven Main/Roll horizontal and vertical scale/offset changes update a warm cache locally;
+- interactive drags: live acquisition is paused until commit to keep the DHO804 transaction stream stable;
 - measurements: six statistic queries per selected measurement at the existing measurement cadence, now measured as a complete poll;
 - trigger type change: one complete trigger-state readback after selecting Edge;
 - Run/Stop/Single: no status query readback;
@@ -101,15 +110,13 @@ Steady-state live traffic after this pass is intentionally narrow:
 
 ## Transport and prior art
 
-`ScpiTransport` already uses TCP `NODELAY`; transferring 500-1000 waveform bytes over LAN is negligible compared with the observed tens of milliseconds of response latency.
+Rigol Web is LAN-only for the scope. USB is not available in this deployment and is not a candidate transport for this workstream.
+
+`ScpiTransport` uses raw TCP with `NODELAY`; transferring 500-1000 waveform bytes over LAN is negligible compared with the observed tens of milliseconds of scope response latency.
 
 Existing DHO800 community code uses the same basic source/mode/format/data sequence rather than exposing a known faster waveform command. `MasterJubei/pydho800` uses TCP port 5555 and an ASCII waveform path, so Rigol Web's BYTE + cached-metadata path is already leaner for live display:
 
 - https://github.com/MasterJubei/pydho800
-
-`scopebench-mcp` reports DHO804D access over both USB/VISA and raw LAN SCPI port 5555. A same-scope USBTMC/VISA-vs-LAN timing A/B remains useful, but Rigol Web currently has only the LAN transport and there is no evidence yet that USB removes instrument-side command processing time:
-
-- https://pypi.org/project/scopebench-mcp/
 
 Norbert Kiszka's DHO800/900 firmware-mod changelog explicitly claims optimization of many SCPI commands. It does not publish enough detail to quantify `DATA?` improvement, but it is additional evidence that scope-side SCPI processing overhead is a plausible limit:
 
@@ -118,9 +125,9 @@ Norbert Kiszka's DHO800/900 firmware-mod changelog explicitly claims optimizatio
 ## Next hardware run
 
 1. Capture the two startup `*:summary` probe lines and use their median/spread, not the original single comparison, to decide whether batching/source+query chaining is useful.
-2. Exercise horizontal position and scale while live and confirm `PREamble?` does not recur in Main/Roll mode and that waveform X alignment remains correct.
-3. Enable one measurement, then several, and capture `measurements:complete` plus the individual statistic timings to quantify actual link occupancy.
-4. If `DATA?` remains the dominant floor after the above, compare USBTMC/VISA against TCP 5555 on the same DHO804 before investing in a second transport implementation.
+2. Pan horizontal position and scale and verify the scope/live path remains stable with acquisition paused during the drag and resumed after commit.
+3. Confirm horizontal waveform X alignment after resume; the local `XORigin`/`XINCrement` transform remains experimental until this passes on the real DHO804.
+4. Enable one measurement, then several, and capture `measurements:complete` plus the individual statistic timings to quantify actual link occupancy.
 5. After hardware-truth requirements are clarified, reduce deep-capture preflight from a full scope snapshot to only the fields it genuinely needs.
 
 Do not optimize uPlot rendering unless a later browser trace shows main-thread/paint pressure after acquisition cadence improves.
