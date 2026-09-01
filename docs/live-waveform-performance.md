@@ -43,6 +43,10 @@ Units are seeded from the initial channel snapshot and cached. NORMAL/BYTE pream
 
 With multiple enabled channels, source selection is also required when the active source changes.
 
+A real four-channel capture confirms the current live loop is strictly serial: `SOURCE CH1 -> DATA? -> SOURCE CH2 -> DATA? -> SOURCE CH3 -> DATA? -> SOURCE CH4 -> DATA?`, then repeat. Representative four-query groups in that capture total about 133-139 ms of `DATA?` time alone, corresponding to roughly 7.2-7.5 complete four-channel sweeps per second before source-write overhead, event-loop yields, or background measurements. In other words, all four channels receive roughly that same per-channel update cadence rather than each running at the single-channel ~30 Hz query ceiling.
+
+The same capture shows one selected measurement's six statistic queries interleaved with the four-channel waveform loop. Individual statistic queries remain roughly 23-35 ms, while `measurements:complete` spans about 312-375 ms because the background-priority measurement work is deliberately interleaved with waveform transfers. Treat that aggregate elapsed time as scheduler occupancy/latency, not six back-to-back SCPI query times.
+
 App-driven vertical scale/offset writes update cached Y metadata locally:
 
 - Vertical scale: `YINCrement` is scaled by `newScale / oldScale`; `YORigin` is inversely scaled so the existing vertical offset is preserved.
