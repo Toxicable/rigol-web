@@ -52,12 +52,12 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
     }
   };
 
-  const sleep = async () => {
+  const powerAction = async (action: "sleep" | "wake") => {
     try {
-      const response = await fetch("/api/scope/sleep", { method: "POST" });
+      const response = await fetch(`/api/scope/${action}`, { method: "POST" });
       if (!response.ok) {
         const detail = (await response.text()).trim();
-        throw new Error(detail || `Sleep request failed with HTTP ${response.status}`);
+        throw new Error(detail || `${action} request failed with HTTP ${response.status}`);
       }
     } catch (error) {
       surfaceError(error);
@@ -71,19 +71,10 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
         <div className="toolbar-actions">
           <button
             type="button"
-            className={stopped ? "acquisition-state-button" : "acquisition-state-button is-running"}
-            aria-pressed={!stopped}
-            onClick={() => command(AcquisitionAction.Run)}
+            className={stopped ? "acquisition-state-button is-running" : "acquisition-state-button is-stopped"}
+            onClick={() => command(stopped ? AcquisitionAction.Run : AcquisitionAction.Stop)}
           >
-            Run
-          </button>
-          <button
-            type="button"
-            className={stopped ? "acquisition-state-button is-stopped" : "acquisition-state-button"}
-            aria-pressed={stopped}
-            onClick={() => command(AcquisitionAction.Stop)}
-          >
-            Stop
+            {stopped ? "Run" : "Stop"}
           </button>
           <button type="button" onClick={() => command(AcquisitionAction.Single)}>Single</button>
           <button
@@ -93,7 +84,8 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
           >
             Deep Capture
           </button>
-          <button type="button" onClick={() => void sleep()}>Sleep</button>
+          <button type="button" onClick={() => void powerAction("sleep")}>Sleep</button>
+          <button type="button" onClick={() => void powerAction("wake")}>Wake</button>
         </div>
         {lastError !== null ? <span className="error-text">{lastError}</span> : null}
       </div>
