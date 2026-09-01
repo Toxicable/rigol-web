@@ -43,15 +43,18 @@ The same capture showed long runs of `:TIMebase:MAIN:OFFSet <value>` interaction
 
 ## Throughput pass 2
 
-The following changes are now implemented for the next real-scope benchmark:
+The following changes were implemented for the second real-scope benchmark:
 
-- live NORMAL/BYTE reads are hard-set to 500 points;
 - routine controls and interactive commits use optimistic/local state and no longer perform post-write readback bursts; trigger-type transitions retain their readback because a complete Edge trigger state is not otherwise known;
 - the server no longer wires the gateway's optional live-waveform pause/resume callbacks, so control interactions do not explicitly suspend live acquisition;
 - if both another Interactive write and a Waveform operation are pending after an Interactive operation, the scheduler services the Waveform before allowing another Interactive write; Immediate work still always wins;
 - SCPI timing logs are reduced to compact one-line completion records for normal query performance tracking.
 
-The next capture should compare 500-point `:WAVeform:DATA?` timing directly with the prior 999-point roughly 28-40 ms result. If the query remains around 30 ms, the dominant cost is likely fixed instrument/SCPI processing rather than transferring approximately 1 kB of payload. If it falls substantially, live point count is a useful direct frame-rate control.
+A 500-point NORMAL/BYTE experiment was also tried and rejected. The DHO804 returned 500 bytes, but the browser displayed only approximately the first half of the waveform rather than a decimated representation of the full visible span. The captured 500-byte `:WAVeform:DATA?` timings were still mostly in the high-20s to high-30s milliseconds, with frequent 40+ ms values and occasional values around 50 ms, so halving the payload did not provide a material latency reduction either.
+
+Live NORMAL/BYTE reads are therefore restored to 999 points, the DHO804's observed effective full-span result when requesting 1000 points. Do not reduce NORMAL point count as a frame-rate optimisation unless the acquisition path also provides a verified full-span decimation/windowing strategy.
+
+The same interaction capture also confirms that keeping waveform service active during horizontal drags exposes a different cost: each horizontal offset write invalidates the cached waveform preamble, and the following live frame pays another roughly 22-24 ms `:WAVeform:PREamble?` query. Narrowing or updating preamble metadata during interaction is therefore now a higher-value optimisation than reducing live point count.
 
 ## DHO800 command knobs and prior art
 
@@ -61,7 +64,7 @@ There is no documented per-`DATA?` option such as a chunk-size, compression, or 
 
 Existing DHO800 community code follows the same basic SCPI path rather than exposing a known faster waveform command. `MasterJubei/pydho800` connects directly to TCP port 5555, configures NORMAL mode, point count and source, then requests preamble and waveform data serially. Its current implementation uses ASCII waveform format for this path, so Rigol Web's cached metadata plus BYTE data path is already materially leaner. Source: https://github.com/MasterJubei/pydho800
 
-`scopebench-mcp` independently reports verified DHO804D access over both USB/VISA and raw LAN SCPI port 5555. This makes a USB-vs-LAN timing comparison a reasonable later experiment if 500-point `DATA?` remains around 30 ms, but there is not yet evidence that changing transport will beat the instrument's own command-processing latency. Source: https://pypi.org/project/scopebench-mcp/
+`scopebench-mcp` independently reports verified DHO804D access over both USB/VISA and raw LAN SCPI port 5555. This makes a USB-vs-LAN timing comparison a reasonable later experiment if full-span `DATA?` remains around 30 ms, but there is not yet evidence that changing transport will beat the instrument's own command-processing latency. Source: https://pypi.org/project/scopebench-mcp/
 
 A DHO waveform gist from `steveway` also uses the documented source/mode/format/data sequence and queries scaling metadata separately; it does not show a hidden lower-latency `DATA?` variant. Source: https://gist.github.com/steveway/fbdd6be4c572919d45460cf3114abdf7
 
@@ -69,12 +72,11 @@ Norbert Kiszka's DHO800/900 firmware mod changelog is notable because it explici
 
 ## Remaining opportunities
 
-1. Benchmark 500-point `DATA?` and compare it against the 999-point baseline before reducing resolution further.
+1. Narrow preamble invalidation. Horizontal and vertical interactive writes currently invalidate cached scaling metadata; the latest capture shows each horizontal drag update can add another roughly 22-24 ms `PREamble?` query. A safe cache-update strategy needs to preserve correct X/Y conversion rather than merely hiding the query.
 2. Measure measurement-statistic query RTTs before changing their 1 Hz cadence.
-3. If `DATA?` remains mostly fixed-latency, compare raw TCP 5555 against USBTMC/VISA on the same scope. Raw TCP is already a low-overhead transport, so this should be measurement-led rather than assumed.
-4. Narrow preamble invalidation. Horizontal and vertical interactive writes can currently invalidate cached scaling metadata; keeping live acquisition running may therefore expose repeated `PREamble?` costs during a drag. A safe cache-update strategy needs to preserve correct X/Y conversion rather than merely hiding the query.
-5. Remove the duplicate zero-delay event-loop yields only after real SCPI timing confirms they are material relative to the 20-40 ms device latency.
-6. A compound source-select plus `DATA?` SCPI program message may save a host write but cannot remove the `DATA?` response latency; treat it as a minor experiment.
+3. If full-span `DATA?` remains mostly fixed-latency, compare raw TCP 5555 against USBTMC/VISA on the same scope. Raw TCP is already a low-overhead transport, so this should be measurement-led rather than assumed.
+4. Remove the duplicate zero-delay event-loop yields only after real SCPI timing confirms they are material relative to the 20-40 ms device latency.
+5. A compound source-select plus `DATA?` SCPI program message may save a host write but cannot remove the `DATA?` response latency; treat it as a minor experiment.
 
 Avoid multiple simultaneous scope sockets as a first-line optimisation. It is not documented as a way to parallelise per-channel waveform reads and would complicate command ordering/state ownership.
 
