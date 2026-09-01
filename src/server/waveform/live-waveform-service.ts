@@ -139,30 +139,29 @@ export class LiveWaveformService {
     if (enabledChannels.length === 0) {
       return false;
     }
-    if (!this.liveWanted || this.paused) {
-      return false;
-    }
 
-    const waveforms = await this.driver.readLiveWaveforms(enabledChannels, LIVE_POINT_COUNT);
-    if (!this.liveWanted || this.paused) {
-      return false;
-    }
-    if (waveforms.length !== enabledChannels.length) {
-      throw new Error(
-        `Driver returned ${waveforms.length} live waveforms for ${enabledChannels.length} enabled channels`,
-      );
-    }
+    for (const channel of enabledChannels) {
+      if (!this.liveWanted || this.paused) {
+        return false;
+      }
 
-    for (let index = 0; index < enabledChannels.length; index += 1) {
-      const channel = enabledChannels[index];
-      const waveform = waveforms[index];
-      if (channel === undefined || waveform === undefined) {
-        throw new Error("Missing live waveform batch entry");
+      // The DHO804 returns only the first waveform payload when multiple DATA?
+      // units share one SCPI program message. A singleton request still forces
+      // SOURCE;DATA? into one program message while preserving a scheduler
+      // boundary between channels.
+      const waveforms = await this.driver.readLiveWaveforms([channel], LIVE_POINT_COUNT);
+      if (!this.liveWanted || this.paused) {
+        return false;
+      }
+      const waveform = waveforms[0];
+      if (waveforms.length !== 1 || waveform === undefined) {
+        throw new Error(`Driver returned ${waveforms.length} live waveforms while reading CH${channel}`);
       }
       if (waveform.channel !== channel) {
         throw new Error(`Driver returned CH${waveform.channel} while reading CH${channel}`);
       }
       this.publishWaveform(waveform);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
     return true;
   }
