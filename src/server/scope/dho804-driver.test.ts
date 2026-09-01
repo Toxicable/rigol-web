@@ -43,6 +43,14 @@ class ScriptedTransport {
     if (value === undefined) throw new Error(`No scripted binary response for ${command}`);
     return value;
   };
+  public queryBinaryBlocks = async (command: string, expectedBlocks: number): Promise<Uint8Array[]> => {
+    this.commands.push(command);
+    const values = this.binary.get(command);
+    if (values === undefined || values.length < expectedBlocks) {
+      throw new Error(`No scripted ${expectedBlocks}-block binary response for ${command}`);
+    }
+    return values.splice(0, expectedBlocks);
+  };
   public query = async (command: string) => ({ kind: ScpiResponseKind.Text as const, value: await this.queryText(command) });
   public isUsable = (): boolean => true;
 }
@@ -105,6 +113,23 @@ function respondMeasurementStatistics(
   respond(transport, `:MEASure:STATistic:ITEM? AVERages,${item},${source}`, average);
   respond(transport, `:MEASure:STATistic:ITEM? DEViation,${item},${source}`, deviation);
   respond(transport, `:MEASure:STATistic:ITEM? CNT,${item},${source}`, count);
+}
+
+function liveBatchCommand(...requested: Channel[]): string {
+  return requested.flatMap((channel) => [
+    `:WAVeform:SOURce CHANnel${channel}`,
+    ":WAVeform:DATA?",
+  ]).join(";");
+}
+
+async function readOneLive(
+  driver: Dho804Driver,
+  channel: Channel,
+  pointCount: number,
+) {
+  const [waveform] = await driver.readLiveWaveforms([channel], pointCount);
+  if (waveform === undefined) throw new Error("Expected one live waveform");
+  return waveform;
 }
 
 describe("Dho804Driver", () => {
@@ -316,26 +341,54 @@ describe("Dho804Driver", () => {
     ]);
   });
 
+  it("forces all requested live channels into one compound waveform program message", async () => {
+    const transport = new ScriptedTransport();
+    respondChannel(transport, Channel.Ch1, "1", "DC", "VOLT");
+    respondChannel(transport, Channel.Ch3, "1", "DC", "VOLT");
+    const driver = scriptedDriver(transport);
+    await driver.readChannelState(Channel.Ch1, ScpiPriority.Normal);
+    await driver.readChannelState(Channel.Ch3, ScpiPriority.Normal);
+    respond(
+      transport,
+      ":WAVeform:PREamble?",
+      "0,0,2,1,1e-6,0,0,0.5,10,0",
+      "0,0,2,1,1e-6,0,0,1,20,0",
+    );
+    const command = liveBatchCommand(Channel.Ch1, Channel.Ch3);
+    transport.binary.set(command, [
+      Uint8Array.from([10, 12]),
+      Uint8Array.from([20, 22]),
+    ]);
+
+    const waveforms = await driver.readLiveWaveforms([Channel.Ch1, Channel.Ch3], 2);
+
+    expect(waveforms.map((waveform) => waveform.channel)).toEqual([Channel.Ch1, Channel.Ch3]);
+    expect([...waveforms[0]!.samples]).toEqual([0, 1]);
+    expect([...waveforms[1]!.samples]).toEqual([0, 2]);
+    expect(transport.commands.filter((entry) => entry === command)).toHaveLength(1);
+  });
+
   it("reuses cached live unit and preamble metadata", async () => {
     const transport = new ScriptedTransport();
     respondChannel(transport, Channel.Ch1, "1", "DC", "VOLT");
     const driver = scriptedDriver(transport);
     await driver.readChannelState(Channel.Ch1, ScpiPriority.Normal);
 
-    transport.binary.set(":WAVeform:DATA?", [
+    const command = liveBatchCommand(Channel.Ch1);
+    transport.binary.set(command, [
       Uint8Array.from([10, 12]),
       Uint8Array.from([10, 14]),
     ]);
     respond(transport, ":WAVeform:PREamble?", "0,0,2,1,1e-6,0,0,0.5,10,0");
 
-    const first = await driver.readLiveWaveform(Channel.Ch1, 2);
-    const second = await driver.readLiveWaveform(Channel.Ch1, 2);
+    const first = await readOneLive(driver, Channel.Ch1, 2);
+    const second = await readOneLive(driver, Channel.Ch1, 2);
 
     expect(first.unit).toBe(ChannelUnit.Volts);
     expect([...first.samples]).toEqual([0, 1]);
     expect([...second.samples]).toEqual([0, 2]);
-    expect(transport.commands.filter((command) => command === ":WAVeform:PREamble?")).toHaveLength(1);
-    expect(transport.commands.filter((command) => command === ":CHANnel1:UNITs?")).toHaveLength(1);
+    expect(transport.commands.filter((entry) => entry === ":WAVeform:PREamble?")).toHaveLength(1);
+    expect(transport.commands.filter((entry) => entry === ":CHANnel1:UNITs?")).toHaveLength(1);
   });
 
   it("updates cached vertical scale metadata without another preamble query", async () => {
@@ -345,19 +398,20 @@ describe("Dho804Driver", () => {
     const driver = scriptedDriver(transport);
     await driver.readChannelState(Channel.Ch1, ScpiPriority.Normal);
 
-    transport.binary.set(":WAVeform:DATA?", [
+    const command = liveBatchCommand(Channel.Ch1);
+    transport.binary.set(command, [
       Uint8Array.from([10, 12]),
       Uint8Array.from([10, 12]),
     ]);
     respond(transport, ":WAVeform:PREamble?", "0,0,2,1,1e-6,0,0,0.5,0,10");
 
-    const first = await driver.readLiveWaveform(Channel.Ch1, 2);
+    const first = await readOneLive(driver, Channel.Ch1, 2);
     await driver.setChannelScale(Channel.Ch1, 0.2, ScpiPriority.Normal);
-    const second = await driver.readLiveWaveform(Channel.Ch1, 2);
+    const second = await readOneLive(driver, Channel.Ch1, 2);
 
     expect([...first.samples]).toEqual([0, 1]);
     expect([...second.samples]).toEqual([0, 2]);
-    expect(transport.commands.filter((command) => command === ":WAVeform:PREamble?")).toHaveLength(1);
+    expect(transport.commands.filter((entry) => entry === ":WAVeform:PREamble?")).toHaveLength(1);
   });
 
   it("updates cached vertical offset metadata without another preamble query", async () => {
@@ -367,19 +421,20 @@ describe("Dho804Driver", () => {
     const driver = scriptedDriver(transport);
     await driver.readChannelState(Channel.Ch1, ScpiPriority.Normal);
 
-    transport.binary.set(":WAVeform:DATA?", [
+    const command = liveBatchCommand(Channel.Ch1);
+    transport.binary.set(command, [
       Uint8Array.from([12]),
       Uint8Array.from([12]),
     ]);
     respond(transport, ":WAVeform:PREamble?", "0,0,1,1,1e-6,0,0,0.5,0,10");
 
-    const first = await driver.readLiveWaveform(Channel.Ch1, 1);
+    const first = await readOneLive(driver, Channel.Ch1, 1);
     await driver.setChannelOffset(Channel.Ch1, 0.5, ScpiPriority.Normal);
-    const second = await driver.readLiveWaveform(Channel.Ch1, 1);
+    const second = await readOneLive(driver, Channel.Ch1, 1);
 
     expect(first.samples[0]).toBe(1);
     expect(second.samples[0]).toBe(0.5);
-    expect(transport.commands.filter((command) => command === ":WAVeform:PREamble?")).toHaveLength(1);
+    expect(transport.commands.filter((entry) => entry === ":WAVeform:PREamble?")).toHaveLength(1);
   });
 
   it("refreshes horizontal position metadata after a write", async () => {
@@ -388,7 +443,8 @@ describe("Dho804Driver", () => {
     const driver = scriptedDriver(transport);
     await driver.readHorizontalState(ScpiPriority.Normal);
 
-    transport.binary.set(":WAVeform:DATA?", [
+    const command = liveBatchCommand(Channel.Ch1);
+    transport.binary.set(command, [
       Uint8Array.from([10]),
       Uint8Array.from([10]),
     ]);
@@ -400,14 +456,14 @@ describe("Dho804Driver", () => {
     );
     respond(transport, ":CHANnel1:UNITs?", "VOLT");
 
-    const first = await driver.readLiveWaveform(Channel.Ch1, 1);
+    const first = await readOneLive(driver, Channel.Ch1, 1);
     await driver.setHorizontalPosition(4e-4, ScpiPriority.Interactive);
-    const second = await driver.readLiveWaveform(Channel.Ch1, 1);
+    const second = await readOneLive(driver, Channel.Ch1, 1);
 
     expect(first.xOrigin).toBeCloseTo(-4.8e-3);
     expect(second.xOrigin).toBeCloseTo(-4.6e-3);
     expect(second.xIncrement).toBeCloseTo(1e-5);
-    expect(transport.commands.filter((command) => command === ":WAVeform:PREamble?")).toHaveLength(2);
+    expect(transport.commands.filter((entry) => entry === ":WAVeform:PREamble?")).toHaveLength(2);
   });
 
   it("refreshes horizontal scale metadata after a write", async () => {
@@ -416,7 +472,8 @@ describe("Dho804Driver", () => {
     const driver = scriptedDriver(transport);
     await driver.readHorizontalState(ScpiPriority.Normal);
 
-    transport.binary.set(":WAVeform:DATA?", [
+    const command = liveBatchCommand(Channel.Ch1);
+    transport.binary.set(command, [
       Uint8Array.from([10]),
       Uint8Array.from([10]),
     ]);
@@ -428,14 +485,14 @@ describe("Dho804Driver", () => {
     );
     respond(transport, ":CHANnel1:UNITs?", "VOLT");
 
-    const first = await driver.readLiveWaveform(Channel.Ch1, 1);
+    const first = await readOneLive(driver, Channel.Ch1, 1);
     await driver.setHorizontalScale(2e-3, ScpiPriority.Interactive);
-    const second = await driver.readLiveWaveform(Channel.Ch1, 1);
+    const second = await readOneLive(driver, Channel.Ch1, 1);
 
     expect(first.xOrigin).toBeCloseTo(-4.8e-3);
     expect(second.xOrigin).toBeCloseTo(-9.8e-3);
     expect(second.xIncrement).toBeCloseTo(2e-5);
-    expect(transport.commands.filter((command) => command === ":WAVeform:PREamble?")).toHaveLength(2);
+    expect(transport.commands.filter((entry) => entry === ":WAVeform:PREamble?")).toHaveLength(2);
   });
 
   it("refreshes horizontal metadata after XY writes", async () => {
@@ -447,7 +504,8 @@ describe("Dho804Driver", () => {
     const driver = scriptedDriver(transport);
     await driver.readHorizontalState(ScpiPriority.Normal);
 
-    transport.binary.set(":WAVeform:DATA?", [
+    const command = liveBatchCommand(Channel.Ch1);
+    transport.binary.set(command, [
       Uint8Array.from([10]),
       Uint8Array.from([10]),
     ]);
@@ -459,12 +517,12 @@ describe("Dho804Driver", () => {
     );
     respond(transport, ":CHANnel1:UNITs?", "VOLT");
 
-    await driver.readLiveWaveform(Channel.Ch1, 1);
+    await readOneLive(driver, Channel.Ch1, 1);
     await driver.setHorizontalScale(2e-3, ScpiPriority.Normal);
-    const second = await driver.readLiveWaveform(Channel.Ch1, 1);
+    const second = await readOneLive(driver, Channel.Ch1, 1);
 
     expect(second.xIncrement).toBeCloseTo(2e-5);
-    expect(transport.commands.filter((command) => command === ":WAVeform:PREamble?")).toHaveLength(2);
+    expect(transport.commands.filter((entry) => entry === ":WAVeform:PREamble?")).toHaveLength(2);
   });
 
   it("assembles RAW WORD chunks without exposing native codes", async () => {
