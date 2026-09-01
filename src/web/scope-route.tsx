@@ -32,8 +32,8 @@ export function ScopeRoute({ client, controller }: ScopeRouteProps) {
     <section className="scope-route">
       <ScopeToolbar client={client} />
       {connection.kind === BrowserConnectionKind.ScopeConnected ? (
-        <>
-          <div className="scope-layout">
+        <div className="scope-layout">
+          <div className="waveform-column">
             <section className="waveform-panel">
               <WaveformPlot
                 scope={connection.scope}
@@ -42,16 +42,14 @@ export function ScopeRoute({ client, controller }: ScopeRouteProps) {
               />
               <MeasurementOverlay scope={connection.scope} />
             </section>
-            <aside className="control-stack">
-              <ChannelControls channels={connection.scope.channels} client={client} />
-              <HorizontalControls scope={connection.scope} client={client} />
-              <TriggerControls scope={connection.scope} client={client} />
-            </aside>
-          </div>
-          <div className="bottom-grid">
             <MeasurementPanel client={client} />
           </div>
-        </>
+          <aside className="control-stack">
+            <ChannelControls channels={connection.scope.channels} client={client} />
+            <HorizontalControls scope={connection.scope} client={client} />
+            <TriggerControls scope={connection.scope} client={client} />
+          </aside>
+        </div>
       ) : (
         <section className="empty-state">
           <h1>DHO804</h1>
