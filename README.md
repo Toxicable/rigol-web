@@ -24,6 +24,11 @@ This stops the production container and reverse-tunnels Vite to the same
 the development server and restores the production container. Caddy remains
 unchanged.
 
+Selected DHO804 measurements are also rendered as a compact overlay on the
+waveform panel. Each overlay item reuses the exact CH1-CH4 accent variable used
+by the corresponding trace and channel marker, so the measurement-to-trace
+association stays visually consistent.
+
 ## Container deployment
 
 Copy `.env.example` to `.env`, then set `RIGOL_SCOPE_HOST` and
