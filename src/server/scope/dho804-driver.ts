@@ -342,15 +342,34 @@ export class Dho804Driver {
     const values: MeasurementValue[] = [];
     for (const spec of specs) {
       const item = measurementItem(spec.kind);
-      const value = parseFiniteNumber(
+      const source = `CHANnel${spec.channel}`;
+      const queryStatistic = async (statistic: string, name: string): Promise<number> =>
+        parseFiniteNumber(
+          await this.queryText(
+            `:MEASure:STATistic:ITEM? ${statistic},${item},${source}`,
+            priority,
+            ScpiOperationKind.Measurement,
+          ),
+          name,
+        );
+
+      const current = await queryStatistic("CURRent", "measurement current");
+      const minimum = await queryStatistic("MINimum", "measurement minimum");
+      const maximum = await queryStatistic("MAXimum", "measurement maximum");
+      const average = await queryStatistic("AVERages", "measurement average");
+      const deviation = await queryStatistic("DEViation", "measurement deviation");
+      const count = parseNonNegativeInteger(
         await this.queryText(
-          `:MEASure:ITEM? ${item},CHANnel${spec.channel}`,
+          `:MEASure:STATistic:ITEM? CNT,${item},${source}`,
           priority,
           ScpiOperationKind.Measurement,
         ),
-        "measurement",
+        "measurement count",
       );
-      values.push({ ...spec, value });
+      values.push({
+        ...spec,
+        statistics: { current, minimum, maximum, average, deviation, count },
+      });
     }
     return values;
   }
@@ -360,9 +379,18 @@ export class Dho804Driver {
     priority: ScpiPriority,
   ): Promise<void> {
     await this.command(":MEASure:CLEar", priority, null, ScpiOperationKind.Measurement);
+    await this.command(":MEASure:STATistic:RESet", priority, null, ScpiOperationKind.Measurement);
     for (const spec of specs) {
+      const item = measurementItem(spec.kind);
+      const source = `CHANnel${spec.channel}`;
       await this.command(
-        `:MEASure:ITEM ${measurementItem(spec.kind)},CHANnel${spec.channel}`,
+        `:MEASure:ITEM ${item},${source}`,
+        priority,
+        null,
+        ScpiOperationKind.Measurement,
+      );
+      await this.command(
+        `:MEASure:STATistic:ITEM ${item},${source}`,
         priority,
         null,
         ScpiOperationKind.Measurement,
@@ -760,6 +788,14 @@ function parsePositiveNumber(value: string, name: string): number {
 function parsePositiveInteger(value: string, name: string): number {
   const parsed = Number(value.trim());
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${name}: ${value}`);
+  }
+  return parsed;
+}
+
+function parseNonNegativeInteger(value: string, name: string): number {
+  const parsed = Number(value.trim());
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
     throw new Error(`Invalid ${name}: ${value}`);
   }
   return parsed;

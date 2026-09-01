@@ -66,6 +66,20 @@ function createState(triggerType: TriggerType = TriggerType.Edge): ScopeState {
   };
 }
 
+function measurementValue(spec: MeasurementSpec, current: number): MeasurementValue {
+  return {
+    ...spec,
+    statistics: {
+      current,
+      minimum: current - 0.1,
+      maximum: current + 0.1,
+      average: current,
+      deviation: 0.01,
+      count: 10,
+    },
+  };
+}
+
 class FakeDriver implements ScopeControllerDriver {
   public state = createState();
   public readonly calls: string[] = [];
@@ -192,7 +206,11 @@ class FakeDriver implements ScopeControllerDriver {
 
   public async readMeasurements(specs: MeasurementSpec[], priority: ScopeDriverPriority): Promise<MeasurementValue[]> {
     this.calls.push(`readMeasurements:${priority}`);
-    return specs.map((spec, index) => ({ ...spec, value: index + 1 }));
+    return specs.map((spec, index) => measurementValue(spec, index + 1));
+  }
+
+  public async setMeasurements(specs: MeasurementSpec[], priority: ScopeDriverPriority): Promise<void> {
+    this.calls.push(`setMeasurements:${specs.length}:${priority}`);
   }
 
   public async executeRawScpi(command: string): Promise<string> {
@@ -351,14 +369,14 @@ describe("ScopeController", () => {
     ];
 
     await expect(controller.readMeasurements(specs)).resolves.toEqual([
-      { ...specs[0], value: 1 },
-      { ...specs[1], value: 2 },
+      measurementValue(specs[0], 1),
+      measurementValue(specs[1], 2),
     ]);
     expect(driver.calls).toContain("readMeasurements:4");
 
     vi.spyOn(driver, "readMeasurements").mockResolvedValueOnce([
-      { kind: MeasurementKind.Frequency, channel: Channel.Ch1, value: 1 },
-      { kind: MeasurementKind.Vpp, channel: Channel.Ch2, value: 2 },
+      measurementValue({ kind: MeasurementKind.Frequency, channel: Channel.Ch1 }, 1),
+      measurementValue({ kind: MeasurementKind.Vpp, channel: Channel.Ch2 }, 2),
     ]);
     await expect(controller.readMeasurements(specs)).rejects.toThrow("out of requested order");
   });

@@ -170,10 +170,21 @@ describe("WebSocket client", () => {
     socket.receive({
       type: MessageType.MeasurementResult,
       requestId: 0,
-      values: [{ channel: Channel.Ch1, kind: MeasurementKind.Vpp, value: 2.5 }],
+      values: [{
+        channel: Channel.Ch1,
+        kind: MeasurementKind.Vpp,
+        statistics: {
+          current: 2.5,
+          minimum: 2.4,
+          maximum: 2.6,
+          average: 2.51,
+          deviation: 0.02,
+          count: 12,
+        },
+      }],
     });
     await Promise.all([first, second]);
-    expect(useScopeStore.getState().measurementValues[0]?.value).toBe(2.5);
+    expect(useScopeStore.getState().measurementValues[0]?.statistics.current).toBe(2.5);
   });
 
   it("retires deep mode immediately when Single starts a new acquisition", async () => {

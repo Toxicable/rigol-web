@@ -19,6 +19,7 @@ import {
   TriggerSweep,
   TriggerType,
   type MeasurementSpec,
+  type MeasurementValue,
   type ScopeInfo,
   type ScopeState,
 } from "../../shared/scope-types.js";
@@ -88,6 +89,20 @@ function createState(): ScopeState {
   };
 }
 
+function measurementValue(spec: MeasurementSpec, current: number): MeasurementValue {
+  return {
+    ...spec,
+    statistics: {
+      current,
+      minimum: current - 0.1,
+      maximum: current + 0.1,
+      average: current,
+      deviation: 0.01,
+      count: 10,
+    },
+  };
+}
+
 function createDriver(initial: ScopeState): ScopeControllerDriver {
   let state = initial;
   const unused = async (): Promise<never> => {
@@ -117,12 +132,12 @@ function createDriver(initial: ScopeState): ScopeControllerDriver {
     run: unused,
     stop: unused,
     single: unused,
-    readMeasurements: async (specs: MeasurementSpec[]) => specs.map((spec, index) => ({
-      ...spec,
-      value: index + 0.5,
-    })),
+    readMeasurements: async (specs: MeasurementSpec[]) => specs.map(
+      (spec, index) => measurementValue(spec, index + 0.5),
+    ),
+    setMeasurements: async () => undefined,
     executeRawScpi: async (command) => `response:${command}`,
-  } as ScopeControllerDriver;
+  };
 }
 
 function createWaveformFrame(
@@ -427,8 +442,8 @@ describe("WebSocketGateway", () => {
       type: MessageType.MeasurementResult,
       requestId: 20,
       values: [
-        { kind: MeasurementKind.Vpp, channel: Channel.Ch2, value: 0.5 },
-        { kind: MeasurementKind.Frequency, channel: Channel.Ch1, value: 1.5 },
+        measurementValue({ kind: MeasurementKind.Vpp, channel: Channel.Ch2 }, 0.5),
+        measurementValue({ kind: MeasurementKind.Frequency, channel: Channel.Ch1 }, 1.5),
       ],
     });
 

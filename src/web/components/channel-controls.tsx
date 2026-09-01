@@ -66,8 +66,7 @@ export function ChannelControls({ channels, client }: ChannelControlsProps) {
                       value,
                     });
                   }
-                }
-                }
+                }}
               />
               <span>{channelUnitSymbol(channel.unit)}/div</span>
             </label>
@@ -86,15 +85,14 @@ export function ChannelControls({ channels, client }: ChannelControlsProps) {
                       value,
                     });
                   }
-                }
-                }
+                }}
               />
               <span>{channelUnitSymbol(channel.unit)}</span>
             </label>
             <dl className="compact-details">
               <div><dt>Coupling</dt><dd>{COUPLING_LABELS[channel.coupling]}</dd></div>
               <div><dt>Probe</dt><dd>{channel.probeRatio}×</dd></div>
-              <div><dt>Span</dt><dd>{formatAmplitude(channel.scale * 8, channel.unit)}</dd></div>
+              <div><dt>Range</dt><dd>{formatAmplitude(channel.scale * 8, channel.unit)}</dd></div>
             </dl>
           </div>
         ))}

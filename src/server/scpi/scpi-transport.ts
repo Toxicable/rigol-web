@@ -17,6 +17,18 @@ interface PendingResponse {
   resolve: (response: ScpiResponse) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  startedAt: number;
+  bytesReadAtStart: number;
+}
+
+function scpiDebugEnabled(): boolean {
+  return process.env.RIGOL_SCPI_DEBUG === "1";
+}
+
+function scpiDebug(event: string, detail: Record<string, unknown>): void {
+  if (scpiDebugEnabled()) {
+    console.debug(`[SCPI] ${event}`, detail);
+  }
 }
 
 export class ScpiTransport {
@@ -57,6 +69,7 @@ export class ScpiTransport {
     });
 
     this.socket = socket;
+    scpiDebug("connect:start", { host, port });
 
     try {
       await new Promise<void>((resolve, reject) => {
@@ -98,36 +111,55 @@ export class ScpiTransport {
         socket.connect(port, host);
       });
       this.usable = true;
+      scpiDebug("connect:ready", {
+        host,
+        port,
+        localAddress: socket.localAddress,
+        localPort: socket.localPort,
+      });
     } catch (error) {
       this.cancelPendingConnect = null;
       if (this.socket === socket) {
         this.socket = null;
       }
       socket.destroy();
+      scpiDebug("connect:failed", {
+        host,
+        port,
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     }
   }
 
-  public disconnect(): void {
+  public disconnect(reason: Error = new ScpiTransportError("SCPI transport disconnected")): void {
     const cancelPendingConnect = this.cancelPendingConnect;
     this.cancelPendingConnect = null;
-    cancelPendingConnect?.(new ScpiTransportError("SCPI transport disconnected"));
+    cancelPendingConnect?.(reason);
 
     const socket = this.socket;
+    const pending = this.pending;
+    scpiDebug("disconnect", {
+      reason: reason.message,
+      pendingCommand: pending?.command ?? null,
+      bufferedBytes: this.receiveBuffer.length,
+      socketBytesRead: socket?.bytesRead ?? 0,
+      socketBytesWritten: socket?.bytesWritten ?? 0,
+    });
     this.socket = null;
     this.usable = false;
     this.receiveBuffer = Buffer.alloc(0);
-    if (this.pending !== null) {
-      const pending = this.pending;
+    if (pending !== null) {
       this.pending = null;
       clearTimeout(pending.timer);
-      pending.reject(new ScpiTransportError("SCPI transport disconnected"));
+      pending.reject(reason);
     }
     socket?.destroy();
   }
 
   public async command(command: string): Promise<void> {
     this.assertReadyForTransaction();
+    scpiDebug("command", { command });
     await this.writeProgramMessage(command);
   }
 
@@ -137,13 +169,39 @@ export class ScpiTransport {
       throw new ScpiTransportError("A SCPI response is already pending");
     }
 
+    const socket = this.socket;
+    if (socket === null) {
+      throw new ScpiTransportError("SCPI transport is not usable");
+    }
+    const startedAt = performance.now();
+    const bytesReadAtStart = socket.bytesRead;
+    scpiDebug("query:start", {
+      command,
+      timeoutMs: this.responseTimeoutMs,
+      socketBytesRead: bytesReadAtStart,
+    });
+
     const responsePromise = new Promise<ScpiResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
+        const pending = this.pending;
+        const currentSocket = this.socket;
+        const bytesRead = currentSocket?.bytesRead ?? bytesReadAtStart;
+        const receivedBytes = Math.max(0, bytesRead - bytesReadAtStart);
+        const bufferedBytes = this.receiveBuffer.length;
+        scpiDebug("query:timeout", {
+          command,
+          elapsedMs: performance.now() - startedAt,
+          receivedBytes,
+          bufferedBytes,
+          bufferPrefixHex: this.receiveBuffer.subarray(0, 24).toString("hex"),
+          pendingCommand: pending?.command ?? null,
+        });
         this.invalidate(new ScpiTransportError(
-          `SCPI query timed out after ${this.responseTimeoutMs} ms while waiting for ${command}`,
+          `SCPI query timed out after ${this.responseTimeoutMs} ms while waiting for ${command} ` +
+          `(received ${receivedBytes} bytes, ${bufferedBytes} buffered)`,
         ));
       }, this.responseTimeoutMs);
-      this.pending = { command, resolve, reject, timer };
+      this.pending = { command, resolve, reject, timer, startedAt, bytesReadAtStart };
     });
 
     try {
@@ -205,6 +263,12 @@ export class ScpiTransport {
     }
 
     this.receiveBuffer = Buffer.concat([this.receiveBuffer, chunk]);
+    scpiDebug("query:data", {
+      command: this.pending.command,
+      chunkBytes: chunk.length,
+      bufferedBytes: this.receiveBuffer.length,
+      chunkPrefixHex: chunk.subarray(0, 16).toString("hex"),
+    });
 
     try {
       const response = this.tryParseResponse();
@@ -214,6 +278,15 @@ export class ScpiTransport {
       const pending = this.pending;
       this.pending = null;
       clearTimeout(pending.timer);
+      scpiDebug("query:complete", {
+        command: pending.command,
+        elapsedMs: performance.now() - pending.startedAt,
+        responseKind: response.kind === ScpiResponseKind.Binary ? "binary" : "text",
+        responseBytes: response.kind === ScpiResponseKind.Binary
+          ? response.value.byteLength
+          : Buffer.byteLength(response.value),
+        socketBytesRead: this.socket?.bytesRead ?? pending.bytesReadAtStart,
+      });
       pending.resolve(response);
     } catch (error) {
       this.invalidate(error instanceof Error ? error : new Error(String(error)));
@@ -275,6 +348,12 @@ export class ScpiTransport {
 
     const payloadEnd = headerLength + payloadLength;
     if (this.receiveBuffer.length <= payloadEnd) {
+      scpiDebug("query:binary-progress", {
+        command: this.pending?.command ?? null,
+        payloadBytesExpected: payloadLength,
+        payloadBytesBuffered: Math.max(0, this.receiveBuffer.length - headerLength),
+        totalBytesBuffered: this.receiveBuffer.length,
+      });
       return null;
     }
 
@@ -303,12 +382,20 @@ export class ScpiTransport {
 
   private invalidate(error: Error): void {
     const socket = this.socket;
+    const pending = this.pending;
+    scpiDebug("invalidate", {
+      error: error.message,
+      pendingCommand: pending?.command ?? null,
+      bufferedBytes: this.receiveBuffer.length,
+      bufferPrefixHex: this.receiveBuffer.subarray(0, 24).toString("hex"),
+      socketBytesRead: socket?.bytesRead ?? 0,
+      socketBytesWritten: socket?.bytesWritten ?? 0,
+    });
     this.socket = null;
     this.usable = false;
     this.receiveBuffer = Buffer.alloc(0);
 
-    if (this.pending !== null) {
-      const pending = this.pending;
+    if (pending !== null) {
       this.pending = null;
       clearTimeout(pending.timer);
       pending.reject(error);

@@ -467,12 +467,12 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
         {scope.trigger.type === TriggerType.Edge && triggerY !== null ? (
           <button
             type="button"
-            className="waveform-marker trigger-marker"
+            className={`waveform-marker trigger-marker ch${scope.trigger.source}`}
             style={{ top: triggerY }}
             onPointerDown={beginTriggerDrag}
-            title="Drag trigger level"
+            title={`Drag CH${scope.trigger.source} trigger level`}
           >
-            T
+            TCH{scope.trigger.source}
           </button>
         ) : null}
       </div>

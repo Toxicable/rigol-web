@@ -118,4 +118,16 @@ describe("ScpiTransport", () => {
     await expect(transport.queryBinary("BIN?")).rejects.toBeInstanceOf(ScpiTransportError);
     expect(transport.isUsable()).toBe(false);
   });
+
+  it("includes received and buffered byte counts in timeout errors", async () => {
+    const port = await peer((_command, write) => {
+      write(Uint8Array.from([0x23, 0x31, 0x34, 1, 2]));
+    });
+    const transport = new ScpiTransport(25);
+    await transport.connect("127.0.0.1", port);
+    await expect(transport.queryBinary("BIN?")).rejects.toThrow(
+      /received 5 bytes, 5 buffered/,
+    );
+    expect(transport.isUsable()).toBe(false);
+  });
 });

@@ -39,6 +39,28 @@ function validateEndpoint(name: string, endpoint: InstrumentEndpoint): void {
   }
 }
 
+function scpiDebugEnabled(): boolean {
+  return process.env.RIGOL_SCPI_DEBUG === "1";
+}
+
+function debugLifecycle(
+  event: string,
+  instrument: SupportedInstrument,
+  entry: InstrumentEntry,
+): void {
+  if (!scpiDebugEnabled()) {
+    return;
+  }
+  console.debug(`[SCPI] instrument ${event}`, {
+    instrument,
+    subscribers: entry.subscribers.size,
+    running: entry.running,
+    revision: entry.revision,
+    host: entry.endpoint.host,
+    port: entry.endpoint.port,
+  });
+}
+
 export class InstrumentRegistry {
   private readonly entries: Map<SupportedInstrument, InstrumentEntry>;
 
@@ -69,16 +91,18 @@ export class InstrumentRegistry {
 
     entry.subscribers.add(session);
     entry.revision += 1;
+    debugLifecycle("subscribe", instrument, entry);
 
     try {
-      await this.queueReconcile(entry);
+      await this.queueReconcile(instrument, entry);
       if (entry.subscribers.has(session)) {
         await entry.runtime.subscriberAdded?.();
       }
     } catch (error) {
       if (entry.subscribers.delete(session)) {
         entry.revision += 1;
-        await this.queueReconcile(entry).catch(() => undefined);
+        debugLifecycle("subscribe-rollback", instrument, entry);
+        await this.queueReconcile(instrument, entry).catch(() => undefined);
       }
       throw error;
     }
@@ -91,27 +115,30 @@ export class InstrumentRegistry {
     }
 
     entry.revision += 1;
-    return this.queueReconcile(entry);
+    debugLifecycle("unsubscribe", instrument, entry);
+    return this.queueReconcile(instrument, entry);
   }
 
   public async releaseSession(session: object): Promise<void> {
     const transitions: Promise<void>[] = [];
-    for (const entry of this.entries.values()) {
+    for (const [instrument, entry] of this.entries) {
       if (!entry.subscribers.delete(session)) {
         continue;
       }
       entry.revision += 1;
-      transitions.push(this.queueReconcile(entry));
+      debugLifecycle("release-session", instrument, entry);
+      transitions.push(this.queueReconcile(instrument, entry));
     }
     await Promise.all(transitions);
   }
 
   public async stopAll(): Promise<void> {
     const transitions: Promise<void>[] = [];
-    for (const entry of this.entries.values()) {
+    for (const [instrument, entry] of this.entries) {
       entry.subscribers.clear();
       entry.revision += 1;
-      transitions.push(this.queueReconcile(entry));
+      debugLifecycle("stop-all", instrument, entry);
+      transitions.push(this.queueReconcile(instrument, entry));
     }
     await Promise.all(transitions);
   }
@@ -135,26 +162,36 @@ export class InstrumentRegistry {
     return entry;
   }
 
-  private queueReconcile(entry: InstrumentEntry): Promise<void> {
+  private queueReconcile(
+    instrument: SupportedInstrument,
+    entry: InstrumentEntry,
+  ): Promise<void> {
     const transition = entry.transition.then(
-      () => this.reconcile(entry),
-      () => this.reconcile(entry),
+      () => this.reconcile(instrument, entry),
+      () => this.reconcile(instrument, entry),
     );
     entry.transition = transition.catch(() => undefined);
     return transition;
   }
 
-  private async reconcile(entry: InstrumentEntry): Promise<void> {
+  private async reconcile(
+    instrument: SupportedInstrument,
+    entry: InstrumentEntry,
+  ): Promise<void> {
     while (true) {
       const revision = entry.revision;
       const shouldRun = entry.subscribers.size > 0;
 
       if (shouldRun && !entry.running) {
+        debugLifecycle("runtime-start", instrument, entry);
         await entry.runtime.start();
         entry.running = true;
+        debugLifecycle("runtime-started", instrument, entry);
       } else if (!shouldRun && entry.running) {
         entry.running = false;
+        debugLifecycle("runtime-stop", instrument, entry);
         await entry.runtime.stop();
+        debugLifecycle("runtime-stopped", instrument, entry);
       }
 
       if (revision === entry.revision) {

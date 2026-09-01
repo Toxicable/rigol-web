@@ -24,10 +24,17 @@ This stops the production container and reverse-tunnels Vite to the same
 the development server and restores the production container. Caddy remains
 unchanged.
 
-Selected DHO804 measurements are also rendered as a compact overlay on the
-waveform panel. Each overlay item reuses the exact CH1-CH4 accent variable used
-by the corresponding trace and channel marker, so the measurement-to-trace
-association stays visually consistent.
+Selected DHO804 measurements are rendered as compact overlays on the waveform
+panel. Each overlay item reuses the exact CH1-CH4 accent variable used by the
+corresponding trace and channel marker. The overlay displays the scope's native
+current, minimum, average, maximum, standard-deviation and count statistics;
+these are read with the DHO800/DHO900 `:MEASure:STATistic:ITEM?` commands rather
+than calculated from the reduced live plot data. The measurement selector is
+stacked below the waveform column and does not extend beneath the right-side
+scope controls.
+
+RIGOL documents the statistic query in the DHO800/DHO900 Programming Guide:
+https://download.rigol.com/en/Manual/Digital%20Oscilloscope/DHO800/DHO800900_ProgrammingGuide_EN.pdf
 
 ## Container deployment
 
@@ -46,6 +53,16 @@ the open-source ADB client to the container image.
 Android documents key code 223 as `KEYCODE_SLEEP`:
 https://developer.android.com/reference/android/view/KeyEvent#KEYCODE_SLEEP
 
+For SCPI/TCP troubleshooting, temporarily set `RIGOL_SCPI_DEBUG=1`. Debug mode
+logs instrument subscribe/unsubscribe transitions, runtime start/stop causes,
+query timing, TCP chunk sizes, binary-block receive progress, and buffered-byte
+counts at a timeout. Leave it at the default `0` for normal use. Deliberate
+runtime shutdown now treats an in-flight SCPI cancellation as cancellation
+rather than printing it as an operation failure; genuine transport failures
+and query timeouts remain errors. A waveform timeout also reports how many TCP
+bytes arrived and how many remained buffered, which helps distinguish a scope
+that sent nothing from a partial/malformed binary response.
+
 ```bash
 docker compose up --build --detach
 ```
@@ -53,3 +70,6 @@ docker compose up --build --detach
 The HTTP and WebSocket service listens on port `3000` in the container. Its
 `/health` endpoint verifies only that the Node process is running; it remains
 healthy while the scope is disconnected.
+
+The scope statistics and diagnostics changes add no hardware, paid service, or
+runtime dependency. Cost impact: **$0**.

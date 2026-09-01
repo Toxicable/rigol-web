@@ -5,11 +5,11 @@ import type { ScopeWebSocketClient } from "../websocket-client.js";
 import { InstrumentHeader } from "./instrument-header.js";
 
 const RUN_STATE_LABELS: Record<ScopeRunState, string> = {
-  [ScopeRunState.Triggered]: "T'D",
-  [ScopeRunState.Waiting]: "WAIT",
-  [ScopeRunState.Running]: "RUN",
-  [ScopeRunState.Auto]: "AUTO",
-  [ScopeRunState.Stopped]: "STOP",
+  [ScopeRunState.Triggered]: "Triggered",
+  [ScopeRunState.Waiting]: "Waiting",
+  [ScopeRunState.Running]: "Running",
+  [ScopeRunState.Auto]: "Auto",
+  [ScopeRunState.Stopped]: "Stopped",
 };
 
 interface ScopeToolbarProps {
@@ -67,9 +67,6 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
   return (
     <InstrumentHeader>
       <div className="scope-toolbar-content">
-        <span className="scope-identity">
-          {connection.info.model} · {connection.info.serialNumber}
-        </span>
         <span className="status-pill">{RUN_STATE_LABELS[scope.runState]}</span>
         <div className="toolbar-actions">
           <button
