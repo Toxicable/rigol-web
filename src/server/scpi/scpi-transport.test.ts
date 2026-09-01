@@ -68,6 +68,39 @@ describe("ScpiTransport", () => {
     transport.disconnect();
   });
 
+  it("frames multiple binary query responses from one compound program message", async () => {
+    const port = await peer((command, write) => {
+      expect(command).toBe("SRC1;DATA?;SRC2;DATA?");
+      write(Uint8Array.from([0x23, 0x31, 0x32, 1, 2, 0x3b, 0x23]));
+      queueMicrotask(() => write(Uint8Array.from([0x31, 0x32, 3, 4, 0x0a])));
+    });
+    const transport = new ScpiTransport(1000);
+    await transport.connect("127.0.0.1", port);
+    await expect(
+      transport.queryBinaryBlocks("SRC1;DATA?;SRC2;DATA?", 2),
+    ).resolves.toEqual([
+      Uint8Array.from([1, 2]),
+      Uint8Array.from([3, 4]),
+    ]);
+    transport.disconnect();
+  });
+
+  it("accepts line-separated compound binary responses", async () => {
+    const port = await peer((_command, write) => {
+      write(Uint8Array.from([
+        0x23, 0x31, 0x32, 1, 2, 0x0a,
+        0x23, 0x31, 0x32, 3, 4, 0x0a,
+      ]));
+    });
+    const transport = new ScpiTransport(1000);
+    await transport.connect("127.0.0.1", port);
+    await expect(transport.queryBinaryBlocks("MULTI?", 2)).resolves.toEqual([
+      Uint8Array.from([1, 2]),
+      Uint8Array.from([3, 4]),
+    ]);
+    transport.disconnect();
+  });
+
   it("consumes a binary type mismatch before the next query", async () => {
     const port = await peer((command, write) => {
       if (command === "BIN?") write(Uint8Array.from([0x23, 0x31, 0x32, 9, 8, 0x0a]));
