@@ -77,7 +77,6 @@ interface Dho804CoalesceKeys {
 
 const channels = [Channel.Ch1, Channel.Ch2, Channel.Ch3, Channel.Ch4] as const;
 const rawChunkSamples = 250_000;
-const horizontalHalfDivisions = 5;
 
 export class Dho804Driver {
   private waveformSetup: WaveformSetupCache = {
@@ -89,9 +88,6 @@ export class Dho804Driver {
   private readonly channelUnits = new Map<Channel, ChannelUnit>();
   private readonly channelScales = new Map<Channel, number>();
   private readonly liveWaveformPreambles = new Map<Channel, LiveWaveformPreambleCache>();
-  private horizontalMode: TimebaseMode | null = null;
-  private horizontalScale: number | null = null;
-  private horizontalPosition: number | null = null;
   private readonly coalesceKeys = createDho804CoalesceKeys();
 
   public constructor(private readonly scheduler: ScpiScheduler) {}
@@ -170,9 +166,6 @@ export class Dho804Driver {
       await this.queryText(":TIMebase:MAIN:OFFSet?", priority),
       "horizontal position",
     );
-    this.horizontalMode = mode;
-    this.horizontalScale = scale;
-    this.horizontalPosition = position;
     return { mode, scale, position };
   }
 
@@ -287,11 +280,7 @@ export class Dho804Driver {
       priority,
       this.coalesceKeys.horizontalScale,
       ScpiOperationKind.Write,
-      () => {
-        const previousScale = this.horizontalScale;
-        this.horizontalScale = value;
-        this.updateCachedHorizontalScale(previousScale, value);
-      },
+      () => this.liveWaveformPreambles.clear(),
     );
   }
 
@@ -309,11 +298,7 @@ export class Dho804Driver {
       priority,
       this.coalesceKeys.horizontalPosition,
       ScpiOperationKind.Write,
-      () => {
-        const previousPosition = this.horizontalPosition;
-        this.horizontalPosition = value;
-        this.updateCachedHorizontalPosition(previousPosition, value);
-      },
+      () => this.liveWaveformPreambles.clear(),
     );
   }
 
@@ -544,9 +529,6 @@ export class Dho804Driver {
     this.liveWaveformPreambles.clear();
     this.channelUnits.clear();
     this.channelScales.clear();
-    this.horizontalMode = null;
-    this.horizontalScale = null;
-    this.horizontalPosition = null;
   }
 
   private async queryText(
@@ -663,39 +645,6 @@ export class Dho804Driver {
       return;
     }
     cached.preamble.yOrigin = nextOffset / cached.preamble.yIncrement;
-  }
-
-  private canUpdateCachedHorizontalMetadata(): boolean {
-    return this.horizontalMode === TimebaseMode.Main || this.horizontalMode === TimebaseMode.Roll;
-  }
-
-  private updateCachedHorizontalScale(previousScale: number | null, nextScale: number): void {
-    if (
-      !this.canUpdateCachedHorizontalMetadata() ||
-      previousScale === null ||
-      previousScale <= 0 ||
-      nextScale <= 0
-    ) {
-      this.liveWaveformPreambles.clear();
-      return;
-    }
-    const ratio = nextScale / previousScale;
-    const originDelta = -horizontalHalfDivisions * (nextScale - previousScale);
-    for (const cached of this.liveWaveformPreambles.values()) {
-      cached.preamble.xIncrement *= ratio;
-      cached.preamble.xOrigin += originDelta;
-    }
-  }
-
-  private updateCachedHorizontalPosition(previousPosition: number | null, nextPosition: number): void {
-    if (!this.canUpdateCachedHorizontalMetadata() || previousPosition === null) {
-      this.liveWaveformPreambles.clear();
-      return;
-    }
-    const originDelta = nextPosition - previousPosition;
-    for (const cached of this.liveWaveformPreambles.values()) {
-      cached.preamble.xOrigin += originDelta;
-    }
   }
 }
 
