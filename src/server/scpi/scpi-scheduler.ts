@@ -264,6 +264,11 @@ export class ScpiScheduler {
   }
 
   private takeNext(): QueuedOperation | null {
+    const immediate = this.queueFor(ScpiPriority.Immediate).shift();
+    if (immediate !== undefined) {
+      return immediate;
+    }
+
     const interactiveQueue = this.queueFor(ScpiPriority.Interactive);
     const waveformQueue = this.queueFor(ScpiPriority.Waveform);
 
@@ -279,7 +284,12 @@ export class ScpiScheduler {
       }
     }
 
-    for (const priority of priorityValues) {
+    for (const priority of [
+      ScpiPriority.Interactive,
+      ScpiPriority.Normal,
+      ScpiPriority.Waveform,
+      ScpiPriority.Background,
+    ] as const) {
       const queue = this.queueFor(priority);
       const next = queue.shift();
       if (next !== undefined) {
