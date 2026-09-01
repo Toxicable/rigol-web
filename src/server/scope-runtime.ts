@@ -237,8 +237,6 @@ export class ScopeRuntime {
   }
 
   private async createSession(): Promise<ScopeSession> {
-    await this.runCompoundQueryProbeOnce();
-
     const transport = new ScpiTransport();
     let scheduler: ScpiScheduler | null = null;
     this.initializingTransport = transport;
@@ -248,6 +246,7 @@ export class ScopeRuntime {
       scheduler = new ScpiScheduler(transport);
       const driver = new Dho804Driver(scheduler);
       const info = await driver.identify();
+      await this.runCompoundQueryProbeOnce(driver);
       const initialState = await driver.readScopeState(ScpiPriority.Normal);
       const stateStore = new ScopeStateStore(initialState);
       const controller = new ScopeController(driver, stateStore);
@@ -291,29 +290,22 @@ export class ScopeRuntime {
     }
   }
 
-  private async runCompoundQueryProbeOnce(): Promise<void> {
+  private async runCompoundQueryProbeOnce(driver: Dho804Driver): Promise<void> {
     if (this.compoundQueryProbeComplete) {
       return;
     }
-
-    const transport = new ScpiTransport();
-    this.initializingTransport = transport;
+    this.compoundQueryProbeComplete = true;
     console.info(`[SCPI] compound-query-probe:start ${JSON.stringify({ command: COMPOUND_QUERY_PROBE })}`);
 
     try {
-      await this.connectTransport(transport);
-      const scale = await transport.queryText(":TIMebase:MAIN:SCALe?");
-      const offset = await transport.queryText(":TIMebase:MAIN:OFFSet?");
-      const compound = await transport.queryText(COMPOUND_QUERY_PROBE);
-      this.compoundQueryProbeComplete = true;
-      console.info(`[SCPI] compound-query-probe:result ${JSON.stringify({ scale, offset, compound })}`);
+      const response = await driver.executeRawScpi(COMPOUND_QUERY_PROBE);
+      console.info(`[SCPI] compound-query-probe:result ${JSON.stringify({ response })}`);
+      if (!response.includes(";")) {
+        throw new Error(`Compound query response did not contain a semicolon: ${response}`);
+      }
     } catch (error) {
       console.warn(`[SCPI] compound-query-probe:failed ${JSON.stringify({ error: errorMessage(error) })}`);
-    } finally {
-      transport.disconnect();
-      if (this.initializingTransport === transport) {
-        this.initializingTransport = null;
-      }
+      throw error;
     }
   }
 
