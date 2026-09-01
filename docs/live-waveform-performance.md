@@ -65,6 +65,8 @@ Existing DHO800 community code follows the same basic SCPI path rather than expo
 
 A DHO waveform gist from `steveway` also uses the documented source/mode/format/data sequence and queries scaling metadata separately; it does not show a hidden lower-latency `DATA?` variant. Source: https://gist.github.com/steveway/fbdd6be4c572919d45460cf3114abdf7
 
+Norbert Kiszka's DHO800/900 firmware mod changelog is notable because it explicitly claims optimisations to many SCPI commands, tested with a modified DSRemote client, alongside broader oscilloscope-app performance work. It does not publish a replacement waveform SCPI command or enough detail to attribute a specific `DATA?` latency improvement, but it is evidence that at least one community effort found scope-side SCPI software overhead worth optimising. Source: https://www.patreon.com/NorbertKiszka/posts/dho800-900-mod-131407128
+
 ## Remaining opportunities
 
 1. Benchmark 500-point `DATA?` and compare it against the 999-point baseline before reducing resolution further.
