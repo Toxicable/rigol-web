@@ -8,7 +8,6 @@ import { ScpiPriority, ScpiScheduler } from "./scpi/scpi-scheduler.js";
 import { ScpiTransport } from "./scpi/scpi-transport.js";
 import { Dho804Driver } from "./scope/dho804-driver.js";
 import { ScopeController } from "./scope/scope-controller.js";
-import { ScopePoller } from "./scope/scope-poller.js";
 import { ScopeStateStore } from "./scope/scope-state-store.js";
 import { DeepCaptureService } from "./waveform/deep-capture-service.js";
 import { LiveWaveformService } from "./waveform/live-waveform-service.js";
@@ -31,7 +30,6 @@ interface ScopeSession {
   scheduler: ScpiScheduler;
   stateStore: ScopeStateStore;
   controller: ScopeController;
-  poller: ScopePoller;
   live: LiveWaveformService;
   deep: DeepCaptureService;
   unsubscribeState: () => void;
@@ -198,7 +196,6 @@ export class ScopeRuntime {
           stateStore: session.stateStore,
           controller: session.controller,
         });
-        session.poller.start();
         session.live.start();
 
         const failure = await session.failure.promise;
@@ -251,7 +248,6 @@ export class ScopeRuntime {
       const stateStore = new ScopeStateStore(initialState);
       const controller = new ScopeController(driver, stateStore);
       const failure = createFailureSignal();
-      const poller = new ScopePoller(driver, controller, (error) => failure.fail(error));
       const live = new LiveWaveformService({
         driver,
         getScopeState: () => stateStore.getState(),
@@ -275,7 +271,6 @@ export class ScopeRuntime {
         scheduler,
         stateStore,
         controller,
-        poller,
         live,
         deep,
         unsubscribeState,
@@ -315,7 +310,6 @@ export class ScopeRuntime {
 
   private async disposeSession(session: ScopeSession, reason: Error): Promise<void> {
     session.unsubscribeState();
-    session.poller.stop();
     session.live.stop();
     session.scheduler.stop(reason);
     session.transport.disconnect();
