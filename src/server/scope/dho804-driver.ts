@@ -457,25 +457,11 @@ export class Dho804Driver {
     }
   }
 
-  public async readLiveWaveforms(
-    requestedChannels: readonly Channel[],
-    pointCount: number,
-  ): Promise<Dho804Waveform[]> {
+  public async readLiveWaveform(channel: Channel, pointCount: number): Promise<Dho804Waveform> {
     if (!Number.isInteger(pointCount) || pointCount < 1 || pointCount > 1_000) {
       throw new Error("Live waveform pointCount must be an integer from 1 to 1000");
     }
-    if (requestedChannels.length < 1 || requestedChannels.length > channels.length) {
-      throw new Error("Live waveform read requires one to four channels");
-    }
-    const uniqueChannels = new Set<Channel>();
-    for (const channel of requestedChannels) {
-      channelPrefix(channel);
-      if (uniqueChannels.has(channel)) {
-        throw new Error(`Duplicate live waveform channel: CH${channel}`);
-      }
-      uniqueChannels.add(channel);
-    }
-    const requested = [...requestedChannels];
+    channelPrefix(channel);
 
     return this.scheduler.scheduleLatest(
       ScpiPriority.Waveform,
@@ -484,39 +470,23 @@ export class Dho804Driver {
       async (transport, recorder) => {
         await this.ensureWaveformModeFormatPoints(transport, "NORM", "BYTE", pointCount);
 
-        const preambles = new Map<Channel, WaveformPreamble>();
-        const units = new Map<Channel, ChannelUnit>();
-        for (const channel of requested) {
-          preambles.set(channel, await this.liveWaveformPreamble(transport, channel, pointCount));
-          units.set(channel, await this.channelUnit(transport, channel));
+        // Real DHO804 captures show that chaining multiple DATA? units in one
+        // program message returns only the first non-empty waveform. Keep one
+        // channel per transaction while still combining source selection and
+        // DATA? into a single program message.
+        const command = `:WAVeform:SOURce CHANnel${channel};:WAVeform:DATA?`;
+        const payload = await transport.queryBinary(command);
+        this.waveformSetup.source = channel;
+        recorder.addBinaryBytes(payload.byteLength);
+        if (payload.byteLength !== pointCount) {
+          throw new Error(
+            `Expected ${pointCount} live waveform samples for CH${channel}, received ${payload.byteLength}`,
+          );
         }
 
-        const command = requested.flatMap((channel) => [
-          `:WAVeform:SOURce CHANnel${channel}`,
-          ":WAVeform:DATA?",
-        ]).join(";");
-        const payloads = await transport.queryBinaryBlocks(command, requested.length);
-        const lastChannel = requested[requested.length - 1];
-        if (lastChannel === undefined) {
-          throw new Error("Live waveform batch unexpectedly had no final channel");
-        }
-        this.waveformSetup.source = lastChannel;
-        recorder.addBinaryBytes(payloads.reduce((sum, payload) => sum + payload.byteLength, 0));
-
-        return requested.map((channel, index) => {
-          const payload = payloads[index];
-          const preamble = preambles.get(channel);
-          const unit = units.get(channel);
-          if (payload === undefined || preamble === undefined || unit === undefined) {
-            throw new Error(`Missing live waveform batch data for CH${channel}`);
-          }
-          if (payload.byteLength !== pointCount) {
-            throw new Error(
-              `Expected ${pointCount} live waveform samples for CH${channel}, received ${payload.byteLength}`,
-            );
-          }
-          return createWaveform(channel, unit, payload, preamble);
-        });
+        const preamble = await this.liveWaveformPreamble(transport, channel, pointCount);
+        const unit = await this.channelUnit(transport, channel);
+        return createWaveform(channel, unit, payload, preamble);
       },
     );
   }
