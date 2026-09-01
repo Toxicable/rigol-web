@@ -382,7 +382,7 @@ describe("Dho804Driver", () => {
     expect(transport.commands.filter((command) => command === ":WAVeform:PREamble?")).toHaveLength(1);
   });
 
-  it("updates cached horizontal position metadata without another preamble query", async () => {
+  it("refreshes horizontal position metadata after a write", async () => {
     const transport = new ScriptedTransport();
     respondHorizontal(transport, "1E-3", "2E-4");
     const driver = scriptedDriver(transport);
@@ -392,7 +392,12 @@ describe("Dho804Driver", () => {
       Uint8Array.from([10]),
       Uint8Array.from([10]),
     ]);
-    respond(transport, ":WAVeform:PREamble?", "0,0,1,1,1e-5,-4.8e-3,0,0.5,0,10");
+    respond(
+      transport,
+      ":WAVeform:PREamble?",
+      "0,0,1,1,1e-5,-4.8e-3,0,0.5,0,10",
+      "0,0,1,1,1e-5,-4.6e-3,0,0.5,0,10",
+    );
     respond(transport, ":CHANnel1:UNITs?", "VOLT");
 
     const first = await driver.readLiveWaveform(Channel.Ch1, 1);
@@ -402,10 +407,10 @@ describe("Dho804Driver", () => {
     expect(first.xOrigin).toBeCloseTo(-4.8e-3);
     expect(second.xOrigin).toBeCloseTo(-4.6e-3);
     expect(second.xIncrement).toBeCloseTo(1e-5);
-    expect(transport.commands.filter((command) => command === ":WAVeform:PREamble?")).toHaveLength(1);
+    expect(transport.commands.filter((command) => command === ":WAVeform:PREamble?")).toHaveLength(2);
   });
 
-  it("updates cached horizontal scale metadata without another preamble query", async () => {
+  it("refreshes horizontal scale metadata after a write", async () => {
     const transport = new ScriptedTransport();
     respondHorizontal(transport, "1E-3", "2E-4");
     const driver = scriptedDriver(transport);
@@ -415,7 +420,12 @@ describe("Dho804Driver", () => {
       Uint8Array.from([10]),
       Uint8Array.from([10]),
     ]);
-    respond(transport, ":WAVeform:PREamble?", "0,0,1,1,1e-5,-4.8e-3,0,0.5,0,10");
+    respond(
+      transport,
+      ":WAVeform:PREamble?",
+      "0,0,1,1,1e-5,-4.8e-3,0,0.5,0,10",
+      "0,0,1,1,2e-5,-9.8e-3,0,0.5,0,10",
+    );
     respond(transport, ":CHANnel1:UNITs?", "VOLT");
 
     const first = await driver.readLiveWaveform(Channel.Ch1, 1);
@@ -425,10 +435,10 @@ describe("Dho804Driver", () => {
     expect(first.xOrigin).toBeCloseTo(-4.8e-3);
     expect(second.xOrigin).toBeCloseTo(-9.8e-3);
     expect(second.xIncrement).toBeCloseTo(2e-5);
-    expect(transport.commands.filter((command) => command === ":WAVeform:PREamble?")).toHaveLength(1);
+    expect(transport.commands.filter((command) => command === ":WAVeform:PREamble?")).toHaveLength(2);
   });
 
-  it("falls back to a fresh preamble for XY horizontal writes", async () => {
+  it("refreshes horizontal metadata after XY writes", async () => {
     const transport = new ScriptedTransport();
     respond(transport, ":TIMebase:XY:ENABle?", "1");
     respond(transport, ":TIMebase:MODE?", "MAIN");
