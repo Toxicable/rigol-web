@@ -58,11 +58,13 @@ The same interaction capture also confirms that keeping waveform service active 
 
 ## Compound-query probe
 
-The runtime temporarily performs one crude compound-query benchmark on the normal session transport immediately after `*IDN?` and before the initial state snapshot. It issues `:TIMebase:MAIN:SCALe?;:TIMebase:MAIN:OFFSet?` once per process. Existing `query:complete` logging records the compound transaction latency, and the following initial state snapshot provides individual `SCALe?` and `OFFSet?` timings on the same connection for comparison.
+A real DHO804 startup benchmark tested `:TIMebase:MAIN:SCALe?;:TIMebase:MAIN:OFFSet?` as one compound text query. The compound transaction completed in 45.739 ms and returned both values correctly as `5.000000E-4;2.511289E-4`. The same startup then measured the individual queries at 24.008 ms and 24.731 ms, or 48.739 ms combined.
 
-The probe emits `compound-query-probe:start` and `compound-query-probe:result` records. A valid text-batching result is expected to contain both values separated by `;`. If the first attempt does not return a semicolon-separated response, the runtime logs `compound-query-probe:failed` and deliberately discards that session connection; the probe is not retried, so the following reconnect establishes the normal session without risking a leftover compound response corrupting subsequent query parsing.
+Result: text-query batching is supported by this DHO804, but it does not collapse two roughly 24 ms query operations into one roughly 24 ms transaction. The observed saving was about 3.0 ms, roughly 6%, so the dominant delay is per query unit processed inside the instrument rather than host/network round-trip overhead per program message.
 
-The important comparison is the compound `elapsedMs` against the sum of the later individual `SCALe?` and `OFFSet?` `elapsedMs` values. If the compound request is close to one ordinary text-query floor rather than the sum of two, text batching should become the default for grouped state and measurement reads. This is deliberately temporary diagnostic code.
+This changes the optimisation priority. Compound text queries remain a small efficiency win for grouped reads, but they are not a substitute for eliminating queries. For hot paths, prefer cached/derived state and write-only updates where correctness allows. Measurement statistics are still potentially expensive because six statistic queries are likely to consume close to six instrument query-processing slots even when encoded in one compound message.
+
+The temporary startup probe should be removed after this benchmark is no longer needed; retaining it would add about 46 ms to every first connection for no runtime benefit.
 
 ## DHO800 command knobs and prior art
 
@@ -70,9 +72,9 @@ RIGOL's DHO800/DHO900 Programming Guide documents `:WAVeform:POINts` as 1-1000 p
 
 There is no documented per-`DATA?` option such as a chunk-size, compression, or fast-response flag. TCP `NODELAY` is already enabled in `ScpiTransport`, so Nagle buffering is not a likely source of the observed 20-40 ms response times. At 500-1000 bytes, raw LAN transfer time itself is negligible compared with the measured scope response latency.
 
-SCPI program messages can contain semicolon-separated command/query units. This is now a high-priority DHO804 benchmark because the real scope shows a roughly 22-25 ms floor for ordinary text queries. A community DHO driver in `eicorg/epicsdev` actively batches multiple DHO queries into one program message, for example `:WAV:XORigin?;:XINC?;POINts?;:CHAN1:DISP?;...`, and splits the returned text response on semicolons. Its generic query helper similarly constructs multiple `?;:` query units and parses one semicolon-separated response. Source: https://github.com/eicorg/epicsdev/blob/e9bc3ad122d3e0e0526a9d7e050325d2ed1ce405/oscilloscope/rigol_dho/rigol_dho/__main__.py
+SCPI program messages can contain semicolon-separated command/query units. A community DHO driver in `eicorg/epicsdev` batches multiple DHO queries into one program message, for example `:WAV:XORigin?;:XINC?;POINts?;:CHAN1:DISP?;...`, and splits the returned text response on semicolons. Its generic query helper similarly constructs multiple `?;:` query units and parses one semicolon-separated response. Source: https://github.com/eicorg/epicsdev/blob/e9bc3ad122d3e0e0526a9d7e050325d2ed1ce405/oscilloscope/rigol_dho/rigol_dho/__main__.py
 
-The DHO800/DHO900 Programming Guide does not explicitly document or guarantee compound-query response behaviour, so support must still be verified on the project DHO804. Start with text-only batches because Rigol Web's existing transport can already consume the resulting newline-terminated response as one string. A useful benchmark is two timebase queries separately versus one program message such as `:TIMebase:MAIN:SCALe?;:TIMebase:MAIN:OFFSet?`. If two separate roughly 23 ms queries collapse toward one roughly 23-30 ms transaction, the dominant latency is per program message and batching should be applied aggressively to measurements and grouped state reads. If the compound request still takes roughly the sum of both queries, batching saves only host/network overhead.
+The project DHO804 benchmark confirms this compound text response behaviour works, but also shows that the instrument still spends nearly the sum of the individual query times processing the two query units. Use batching as a small overhead reduction, not as the primary latency strategy.
 
 Write-plus-query chaining is lower risk because it produces only one response. In particular, `:WAVeform:SOURce CHANnel1;:WAVeform:DATA?` is worth bench-verifying and would fold source selection into the same program message as the binary query. Its expected gain is smaller because source selection is already response-less.
 
@@ -88,12 +90,13 @@ Norbert Kiszka's DHO800/900 firmware mod changelog is notable because it explici
 
 ## Remaining opportunities
 
-1. Benchmark compound text queries on the real DHO804. If the roughly 22-25 ms floor is per program message, batch measurement statistics and any grouped state reads into one message instead of paying the floor per query.
+1. Remove the temporary startup compound-query probe now that the real DHO804 result is known.
 2. Narrow preamble invalidation. Horizontal and vertical interactive writes currently invalidate cached scaling metadata; the latest capture shows each horizontal drag update can add another roughly 22-24 ms `PREamble?` query. A safe cache-update strategy needs to preserve correct X/Y conversion rather than merely hiding the query.
-3. Bench `:WAVeform:SOURce CHANnel<n>;:WAVeform:DATA?` as a one-response compound message. Treat multi-channel/multi-binary query batching as unsupported until verified specifically on DHO804.
-4. Measure measurement-statistic query RTTs before changing their 1 Hz cadence; if text batching works, benchmark six statistic queries separately versus one compound query before reducing statistics or poll rate.
-5. If full-span `DATA?` remains mostly fixed-latency, compare raw TCP 5555 against USBTMC/VISA on the same scope. Raw TCP is already a low-overhead transport, so this should be measurement-led rather than assumed.
-6. Remove the duplicate zero-delay event-loop yields only after real SCPI timing confirms they are material relative to the 20-40 ms device latency.
+3. Audit every remaining routine SCPI query and eliminate or derive it where correctness allows. Since compound text batching only saved about 6% for two queries, reducing query count is substantially more valuable than batching alone.
+4. Bench `:WAVeform:SOURce CHANnel<n>;:WAVeform:DATA?` as a one-response compound message. Treat multi-channel/multi-binary query batching as unsupported until verified specifically on DHO804.
+5. Measure measurement-statistic query RTTs and consider reducing the number of statistics/read cadence. Compound batching may save a few milliseconds of host/message overhead but is unlikely to remove the instrument processing cost of six statistic queries.
+6. If full-span `DATA?` remains mostly fixed-latency, compare raw TCP 5555 against USBTMC/VISA on the same scope. Raw TCP is already a low-overhead transport, so this should be measurement-led rather than assumed.
+7. Remove the duplicate zero-delay event-loop yields only after real SCPI timing confirms they are material relative to the 20-40 ms device latency.
 
 Avoid multiple simultaneous scope sockets as a first-line optimisation. It is not documented as a way to parallelise per-channel waveform reads and would complicate command ordering/state ownership.
 
