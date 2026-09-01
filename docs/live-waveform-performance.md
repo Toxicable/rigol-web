@@ -78,7 +78,7 @@ The failed four-channel compound experiment produced a much larger example, abou
 
 Normal live response example:
 
-`[SCPI] query:complete {"command":":WAVeform:SOURce CHANnel1;:WAVeform:DATA?","elapsedMs":...,"responseKind":"binary-blocks","responseBlocks":1,"responseBytes":999}`
+`[SCPI] query:complete {"command":":WAVeform:SOURce CHANnel1;:WAVeform:DATA?","elapsedMs":...,"responseKind":"binary","responseBytes":999}`
 
 The rejected multi-channel experiment looked like:
 
