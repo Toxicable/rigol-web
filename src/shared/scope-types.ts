@@ -184,8 +184,15 @@ export interface MeasurementSpec {
   channel: Channel;
 }
 
-export interface MeasurementValue {
-  kind: MeasurementKind;
-  channel: Channel;
-  value: number;
+export interface MeasurementStatistics {
+  current: number;
+  minimum: number;
+  maximum: number;
+  average: number;
+  deviation: number;
+  count: number;
+}
+
+export interface MeasurementValue extends MeasurementSpec {
+  statistics: MeasurementStatistics;
 }
