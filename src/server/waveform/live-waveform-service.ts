@@ -4,10 +4,7 @@ import type { Dho804Waveform } from "../scope/dho804-driver.js";
 import { encodeWaveformFrame } from "./waveform-frame-encoder.js";
 
 export interface LiveWaveformDriver {
-  readLiveWaveforms(
-    channels: readonly Channel[],
-    pointCount: number,
-  ): Promise<Dho804Waveform[]>;
+  readLiveWaveform(channel: Channel, pointCount: number): Promise<Dho804Waveform>;
 }
 
 export interface LiveWaveformServiceOptions {
@@ -144,18 +141,9 @@ export class LiveWaveformService {
       if (!this.liveWanted || this.paused) {
         return false;
       }
-
-      // The DHO804 returns only the first waveform payload when multiple DATA?
-      // units share one SCPI program message. A singleton request still forces
-      // SOURCE;DATA? into one program message while preserving a scheduler
-      // boundary between channels.
-      const waveforms = await this.driver.readLiveWaveforms([channel], LIVE_POINT_COUNT);
+      const waveform = await this.driver.readLiveWaveform(channel, LIVE_POINT_COUNT);
       if (!this.liveWanted || this.paused) {
         return false;
-      }
-      const waveform = waveforms[0];
-      if (waveforms.length !== 1 || waveform === undefined) {
-        throw new Error(`Driver returned ${waveforms.length} live waveforms while reading CH${channel}`);
       }
       if (waveform.channel !== channel) {
         throw new Error(`Driver returned CH${waveform.channel} while reading CH${channel}`);
