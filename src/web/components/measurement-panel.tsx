@@ -3,9 +3,7 @@ import { useEffect, useState, type ChangeEvent } from "react";
 import {
   Channel,
   MeasurementKind,
-  type ScopeState,
 } from "../../shared/scope-types.js";
-import { formatAmplitude, formatHertz, formatSeconds } from "../format-value.js";
 import { useScopeStore } from "../scope-store.js";
 import type { ScopeWebSocketClient } from "../websocket-client.js";
 
@@ -41,13 +39,11 @@ const MEASUREMENT_GROUPS = [
 ] as const;
 
 interface MeasurementPanelProps {
-  scope: ScopeState;
   client: ScopeWebSocketClient;
 }
 
-export function MeasurementPanel({ scope, client }: MeasurementPanelProps) {
+export function MeasurementPanel({ client }: MeasurementPanelProps) {
   const specs = useScopeStore((state) => state.measurementSpecs);
-  const values = useScopeStore((state) => state.measurementValues);
   const setSpecs = useScopeStore((state) => state.setMeasurementSpecs);
   const [channel, setChannel] = useState(Channel.Ch1);
   const [kind, setKind] = useState(MeasurementKind.Vpp);
@@ -70,17 +66,6 @@ export function MeasurementPanel({ scope, client }: MeasurementPanelProps) {
     setSpecs([...specs, { channel, kind }]);
   };
 
-  const format = (value: number, measurementKind: MeasurementKind, source: Channel) => {
-    if (measurementKind === MeasurementKind.Frequency) {
-      return formatHertz(value);
-    }
-    if (measurementKind === MeasurementKind.Period) {
-      return formatSeconds(value);
-    }
-    const channelState = scope.channels[source - 1];
-    return channelState === undefined ? String(value) : formatAmplitude(value, channelState.unit);
-  };
-
   return (
     <section className="panel">
       <h2>Measurements</h2>
@@ -101,26 +86,18 @@ export function MeasurementPanel({ scope, client }: MeasurementPanelProps) {
       </div>
       {specs.length === 0 ? <p className="muted">No measurements selected.</p> : (
         <ul className="measurement-list">
-          {specs.map((spec, index) => {
-            const value = values[index];
-            return (
-              <li key={`${spec.channel}-${spec.kind}`}>
-                <span>CH{spec.channel} {KIND_LABELS[spec.kind]}</span>
-                <strong>
-                  {value !== undefined && value.channel === spec.channel && value.kind === spec.kind
-                    ? format(value.value, value.kind, value.channel)
-                    : "—"}
-                </strong>
-                <button
-                  type="button"
-                  className="text-button"
-                  onClick={() => setSpecs(specs.filter((_, candidate) => candidate !== index))}
-                >
-                  Remove
-                </button>
-              </li>
-            );
-          })}
+          {specs.map((spec, index) => (
+            <li key={`${spec.channel}-${spec.kind}`}>
+              <span>CH{spec.channel} {KIND_LABELS[spec.kind]}</span>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => setSpecs(specs.filter((_, candidate) => candidate !== index))}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
         </ul>
       )}
     </section>

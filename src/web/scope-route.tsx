@@ -2,6 +2,7 @@ import { useEffect } from "react";
 
 import { ChannelControls } from "./components/channel-controls.js";
 import { HorizontalControls } from "./components/horizontal-controls.js";
+import { MeasurementOverlay } from "./components/measurement-overlay.js";
 import { MeasurementPanel } from "./components/measurement-panel.js";
 import { ScopeToolbar } from "./components/scope-toolbar.js";
 import { TriggerControls } from "./components/trigger-controls.js";
@@ -39,6 +40,7 @@ export function ScopeRoute({ client, controller }: ScopeRouteProps) {
                 controller={controller}
                 client={client}
               />
+              <MeasurementOverlay scope={connection.scope} />
             </section>
             <aside className="control-stack">
               <ChannelControls channels={connection.scope.channels} client={client} />
@@ -47,7 +49,7 @@ export function ScopeRoute({ client, controller }: ScopeRouteProps) {
             </aside>
           </div>
           <div className="bottom-grid">
-            <MeasurementPanel scope={connection.scope} client={client} />
+            <MeasurementPanel client={client} />
           </div>
         </>
       ) : (

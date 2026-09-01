@@ -104,6 +104,7 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
 }
 .waveform-panel {
   min-height: 0;
+  position: relative;
 }
 .waveform-shell {
   position: relative;
@@ -140,6 +141,43 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
 .ch3 { --channel-accent: #3498db; }
 .ch4 { --channel-accent: #e74c3c; }
 .channel-marker, .channel-heading { color: var(--channel-accent); }
+.measurement-overlay {
+  position: absolute;
+  top: 0.7rem;
+  left: 2.7rem;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  max-width: calc(100% - 5.4rem);
+  pointer-events: none;
+}
+.measurement-overlay-item {
+  display: grid;
+  grid-template-columns: auto auto auto;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-height: 1.9rem;
+  padding: 0.3rem 0.55rem 0.3rem 0.65rem;
+  border: 1px solid #303741;
+  border-left: 3px solid var(--channel-accent);
+  border-radius: 5px;
+  background: rgb(7 9 11 / 88%);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 35%);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+.measurement-overlay-channel,
+.measurement-overlay-item strong {
+  color: var(--channel-accent);
+}
+.measurement-overlay-kind {
+  color: #a7b1bc;
+}
+.measurement-overlay-item strong {
+  font-weight: 700;
+}
 
 .control-stack {
   display: flex;
@@ -235,4 +273,12 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   .toolbar-actions { width: 100%; margin-left: 0; flex-wrap: wrap; }
   .channel-grid { grid-template-columns: 1fr; }
   .scope-layout, .bottom-grid { padding-left: 0.4rem; padding-right: 0.4rem; }
+  .measurement-overlay {
+    left: 2.3rem;
+    right: 2.3rem;
+    max-width: none;
+  }
+  .measurement-overlay-item {
+    font-size: 0.72rem;
+  }
 }
