@@ -33,12 +33,14 @@ than calculated from the reduced live plot data. The measurement selector is
 stacked below the waveform column and does not extend beneath the right-side
 scope controls.
 
-The waveform panel also renders a compact vertical-scale legend for every
-enabled channel using the same SI formatting as the channel controls. While an
-edge-trigger level marker is being dragged, a channel-coloured dashed horizontal
-guide follows the optimistic trigger position; the guide is browser-only and
-does not add any SCPI query traffic. The acquisition toolbar uses one Run/Stop
-button whose action follows the current scope run state.
+The waveform panel renders a colour-coded numeric vertical axis for every
+enabled channel. Axis ticks use that channel's own scale, offset and unit, with
+a one-division increment so the labels correspond directly to the waveform
+graticule. While an edge-trigger level marker is being dragged, a
+channel-coloured dashed horizontal guide follows the optimistic trigger
+position; the guide is browser-only and does not add any SCPI query traffic.
+The acquisition toolbar uses one Run/Stop button whose action follows the
+current scope run state.
 
 RIGOL documents the statistic query in the DHO800/DHO900 Programming Guide:
 https://download.rigol.com/en/Manual/Digital%20Oscilloscope/DHO800/DHO800900_ProgrammingGuide_EN.pdf
