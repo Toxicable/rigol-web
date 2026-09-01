@@ -18,6 +18,7 @@ import {
 
 const DEFAULT_RECONNECT_DELAY_MS = 2_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 3_000;
+const COMPOUND_QUERY_PROBE = ":TIMebase:MAIN:SCALe?;:TIMebase:MAIN:OFFSet?";
 
 interface FailureSignal {
   promise: Promise<Error>;
@@ -86,6 +87,7 @@ export class ScopeRuntime {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryResolve: (() => void) | null = null;
   private disconnectedReason = "Scope runtime inactive";
+  private compoundQueryProbeComplete = false;
 
   public constructor(options: ScopeRuntimeOptions) {
     if (options.host.trim().length === 0) {
@@ -235,6 +237,8 @@ export class ScopeRuntime {
   }
 
   private async createSession(): Promise<ScopeSession> {
+    await this.runCompoundQueryProbeOnce();
+
     const transport = new ScpiTransport();
     let scheduler: ScpiScheduler | null = null;
     this.initializingTransport = transport;
@@ -281,6 +285,32 @@ export class ScopeRuntime {
       transport.disconnect();
       throw error;
     } finally {
+      if (this.initializingTransport === transport) {
+        this.initializingTransport = null;
+      }
+    }
+  }
+
+  private async runCompoundQueryProbeOnce(): Promise<void> {
+    if (this.compoundQueryProbeComplete) {
+      return;
+    }
+
+    const transport = new ScpiTransport();
+    this.initializingTransport = transport;
+    console.info(`[SCPI] compound-query-probe:start ${JSON.stringify({ command: COMPOUND_QUERY_PROBE })}`);
+
+    try {
+      await this.connectTransport(transport);
+      const scale = await transport.queryText(":TIMebase:MAIN:SCALe?");
+      const offset = await transport.queryText(":TIMebase:MAIN:OFFSet?");
+      const compound = await transport.queryText(COMPOUND_QUERY_PROBE);
+      this.compoundQueryProbeComplete = true;
+      console.info(`[SCPI] compound-query-probe:result ${JSON.stringify({ scale, offset, compound })}`);
+    } catch (error) {
+      console.warn(`[SCPI] compound-query-probe:failed ${JSON.stringify({ error: errorMessage(error) })}`);
+    } finally {
+      transport.disconnect();
       if (this.initializingTransport === transport) {
         this.initializingTransport = null;
       }
