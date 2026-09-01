@@ -12,6 +12,7 @@
     "dev:web": "vite",
     "dev:server": "tsx watch src/server/server.ts",
     "start": "node dist/server/server/server.js",
+    "probe:four-channel": "node dist/server/server/probes/four-channel-compound-waveform.js",
     "typecheck": "tsc --noEmit -p tsconfig.server.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "build": "pnpm build:server && pnpm build:web",
