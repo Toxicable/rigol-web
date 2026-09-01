@@ -43,6 +43,14 @@ export function formatHertz(value: number): string {
   return formatSi(value, "Hz");
 }
 
+export function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) {
+    return `${String(value)} %`;
+  }
+  const digits = Math.abs(value) >= 100 ? 3 : Math.abs(value) >= 10 ? 3 : 4;
+  return `${Number(value.toPrecision(digits))} %`;
+}
+
 export function formatSampleRate(value: number): string {
   return formatSi(value, "Sa/s");
 }
