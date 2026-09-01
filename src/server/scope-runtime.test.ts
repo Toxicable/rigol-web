@@ -251,6 +251,37 @@ describe("ScopeRuntime integration", () => {
     }
   });
 
+  it("does not poll scope state after the initial connection snapshot", async () => {
+    const fake = new FakeDho804Server();
+    const port = await fake.start();
+    const connected: ConnectedScopeConnection[] = [];
+    const runtime = new ScopeRuntime({
+      host: "127.0.0.1",
+      port,
+      reconnectDelayMs: 20,
+      connectTimeoutMs: 500,
+      publishConnection: (connection) => {
+        if (connection.kind === ServerScopeConnectionKind.Connected) {
+          connected.push(connection);
+        }
+      },
+      publishWaveform: () => {},
+    });
+
+    try {
+      runtime.start();
+      await waitFor(() => connected[0]);
+      const connection = fake.connections[0];
+      expect(connection).toBeDefined();
+      expect(connection?.commands.filter((command) => command === ":CHANnel1:DISPlay?")).toHaveLength(1);
+      await delay(1_100);
+      expect(connection?.commands.filter((command) => command === ":CHANnel1:DISPlay?")).toHaveLength(1);
+    } finally {
+      await runtime.stop();
+      await fake.stop();
+    }
+  });
+
   it("reconnects with a fresh session and never reuses a stale controller", async () => {
     const fake = new FakeDho804Server();
     const port = await fake.start();
