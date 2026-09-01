@@ -146,6 +146,35 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   border-color: var(--channel-accent);
   color: var(--channel-accent);
 }
+.trigger-drag-guide {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  border-top: 1px dashed var(--channel-accent);
+  pointer-events: none;
+}
+.waveform-vertical-legend {
+  position: absolute;
+  left: 2.7rem;
+  bottom: 0.55rem;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.65rem;
+  max-width: calc(100% - 5.4rem);
+  padding: 0.28rem 0.45rem;
+  border: 1px solid #303741;
+  border-radius: 5px;
+  background: rgb(7 9 11 / 82%);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 30%);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.waveform-vertical-legend-item { color: var(--channel-accent); }
+.waveform-vertical-legend-item strong { color: #e8edf2; font-weight: 600; }
 .ch1 { --channel-accent: #f4d03f; }
 .ch2 { --channel-accent: #2ecc71; }
 .ch3 { --channel-accent: #3498db; }
@@ -293,6 +322,11 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   .channel-grid { grid-template-columns: 1fr; }
   .scope-layout { padding-left: 0.4rem; padding-right: 0.4rem; }
   .measurement-overlay {
+    left: 2.3rem;
+    right: 2.3rem;
+    max-width: none;
+  }
+  .waveform-vertical-legend {
     left: 2.3rem;
     right: 2.3rem;
     max-width: none;

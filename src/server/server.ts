@@ -65,6 +65,7 @@ const scopePower = new Dho804PowerControl(scopeEndpoint.host, readScopeAdbPort()
 
 const server = createServer(createHttpRequestHandler(undefined, {
   sleepScope: () => scopePower.sleep(),
+  wakeScope: () => scopePower.wake(),
 }));
 
 const initialScopeConnection: ServerScopeConnection = {

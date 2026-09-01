@@ -9,6 +9,7 @@ import {
   type ScopeState,
 } from "../../shared/scope-types.js";
 import { ControlKind, type InteractiveControl } from "../../shared/websocket-protocol.js";
+import { formatAmplitude } from "../format-value.js";
 import {
   channelOffsetFromMarkerDrag,
   horizontalPositionFromDrag,
@@ -101,6 +102,7 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
   const pendingInteractionRef = useRef<InteractiveControl | null>(null);
   const interactionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [size, setSize] = useState({ width: 1, height: 1 });
+  const [draggingTrigger, setDraggingTrigger] = useState(false);
   const applyOptimisticControl = useScopeStore(
     (state) => state.applyOptimisticControl,
   );
@@ -317,6 +319,7 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
       scale: source.scale,
       height: size.height,
     };
+    setDraggingTrigger(true);
   };
 
   const controlForPointer = (
@@ -421,6 +424,11 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
   };
 
   const finishPointer = (event: PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (drag?.kind === "trigger" && drag.pointerId === event.pointerId) {
+      setDraggingTrigger(false);
+    }
+
     if (updateDeepPan(event)) {
       dragRef.current = null;
       return;
@@ -456,6 +464,13 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
         onPointerUp={finishPointer}
         onPointerCancel={finishPointer}
       >
+        <div className="waveform-vertical-legend" aria-label="Vertical scales">
+          {scope.channels.map((channel) => channel.enabled ? (
+            <span className={`waveform-vertical-legend-item ch${channel.channel}`} key={channel.channel}>
+              CH{channel.channel} <strong>{formatAmplitude(channel.scale, channel.unit)}/div</strong>
+            </span>
+          ) : null)}
+        </div>
         {CHANNELS.map((channel) => {
           const channelState = scope.channels[channel - 1];
           if (channelState === undefined || !channelState.enabled) {
@@ -474,6 +489,13 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
             </button>
           );
         })}
+        {draggingTrigger && scope.trigger.type === TriggerType.Edge && triggerY !== null ? (
+          <div
+            className={`trigger-drag-guide ch${scope.trigger.source}`}
+            style={{ top: triggerY }}
+            aria-hidden="true"
+          />
+        ) : null}
         {scope.trigger.type === TriggerType.Edge && triggerY !== null ? (
           <button
             type="button"

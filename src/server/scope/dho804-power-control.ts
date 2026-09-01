@@ -9,6 +9,7 @@ export type AdbRunner = (args: readonly string[]) => Promise<AdbCommandResult>;
 
 const ADB_TIMEOUT_MS = 5_000;
 const ANDROID_KEYCODE_SLEEP = "223";
+const ANDROID_KEYCODE_WAKEUP = "224";
 
 function runAdb(args: readonly string[]): Promise<AdbCommandResult> {
   return new Promise((resolve, reject) => {
@@ -45,7 +46,15 @@ export class Dho804PowerControl {
     private readonly adb: AdbRunner = runAdb,
   ) {}
 
-  public async sleep(): Promise<void> {
+  public sleep(): Promise<void> {
+    return this.sendKeyEvent(ANDROID_KEYCODE_SLEEP);
+  }
+
+  public wake(): Promise<void> {
+    return this.sendKeyEvent(ANDROID_KEYCODE_WAKEUP);
+  }
+
+  private async sendKeyEvent(keyCode: string): Promise<void> {
     const target = adbTarget(this.host, this.port);
     const connection = await this.adb(["connect", target]);
     const connectionOutput = `${connection.stdout}\n${connection.stderr}`;
@@ -59,7 +68,7 @@ export class Dho804PowerControl {
       "shell",
       "input",
       "keyevent",
-      ANDROID_KEYCODE_SLEEP,
+      keyCode,
     ]);
   }
 }
