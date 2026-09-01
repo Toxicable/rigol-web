@@ -25,13 +25,15 @@ Deep capture remains an exception: it currently requests a full scope snapshot b
 
 ## Interaction stability
 
-A real-scope run after keeping live acquisition active during panning showed the scope/live path appearing to die while horizontal position was being dragged. Treat interleaving interactive scope mutation with repeated live `DATA?` acquisition as unsafe until proven otherwise.
+A real-scope run with live acquisition interleaved with horizontal panning showed the exact failure mechanism. The command stream repeatedly alternated `:TIMebase:MAIN:OFFSet ...`, `:WAVeform:DATA?`, and `:WAVeform:PREamble?`. One `DATA?` returned a zero-length binary payload; later a `DATA?` announced a 999-byte IEEE488.2 binary block (`#9000000999`) but only 985 total bytes reached the transport before the scope stopped sending and the 5 s query timeout expired. The transport correctly invalidated the connection because a partial binary block cannot be safely resynchronized.
 
-The server therefore wires the gateway interaction pause/resume hooks again. Interactive drag updates pause live waveform acquisition; the interaction commit resumes it after the existing 200 ms settle delay. This restores the previously stable transaction boundary instead of asking the DHO804 to process live waveform reads while interactive writes are still arriving.
+This is stronger evidence than the earlier subjective report: mutating the horizontal timebase while a NORMAL waveform transfer is active can cause the DHO804 to return an empty or truncated waveform response. Do not intentionally interleave horizontal drag writes with live `DATA?` traffic.
+
+The server therefore wires the gateway interaction pause/resume hooks again. Interactive drag updates pause live waveform acquisition; the interaction commit resumes it after the existing 200 ms settle delay. This restores a transaction boundary instead of asking the DHO804 to process live waveform reads while interactive writes are still arriving.
 
 The experimental synthesized horizontal preamble update was also removed. Horizontal scale/position writes now invalidate cached live preambles. Because acquisition is paused for the gesture, those invalidations do not create one `PREamble?` query per drag update: the first live frame after commit performs one fresh hardware `PREamble?`, then the cache is warm again.
 
-This is a stability rule, not evidence that the DHO804 fundamentally cannot interleave those operations. Revisit only with a controlled real-scope test.
+The failing capture above contains repeated waveform transfers during the drag, so it represents the unsafe interleaved behavior rather than the expected paused-drag behavior of this branch. A validation run of this branch should show no repeated `DATA?`/`PREamble?` sequence between the first interaction pause and the final commit/resume.
 
 ## Live waveform hot path
 
@@ -125,7 +127,7 @@ Norbert Kiszka's DHO800/900 firmware-mod changelog explicitly claims optimizatio
 ## Next hardware run
 
 1. Capture the two startup `*:summary` probe lines and use their median/spread, not the original single comparison, to decide whether batching/source+query chaining is useful.
-2. Pan horizontal position and scale and verify the scope/live path remains stable with acquisition paused during the drag and resumed after commit.
+2. Pan horizontal position and scale and verify there are no repeated live `DATA?`/`PREamble?` queries during the drag; live acquisition should resume only after commit plus the 200 ms settle delay.
 3. Confirm the first resumed frame performs one fresh `PREamble?` and the waveform X alignment is correct.
 4. Enable one measurement, then several, and capture `measurements:complete` plus the individual statistic timings to quantify actual link occupancy.
 5. After hardware-truth requirements are clarified, reduce deep-capture preflight from a full scope snapshot to only the fields it genuinely needs.
