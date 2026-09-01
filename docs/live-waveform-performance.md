@@ -25,6 +25,14 @@ The expected warm per-channel live path is therefore:
 
 For one enabled channel after setup is warm, the expected path is just `:WAVeform:DATA?` per frame.
 
+## Existing SCPI timing instrumentation
+
+`ScpiTransport` already measures every query from immediately before the program-message write until a complete SCPI response has been parsed. Each completed query emits a `[SCPI] query:complete` debug record containing the full command, `elapsedMs`, response kind, and response byte count. This is the measurement to use when deciding whether query count is actually a throughput problem; query count alone is not sufficient.
+
+For measurement statistics, one selected measurement currently performs six serialized statistic queries once per second. The relevant cost is therefore the sum of the six observed `elapsedMs` values, not simply the fact that there are six queries. Compare that summed time directly with `:WAVeform:DATA?` timings and with the one-second polling interval. Because SCPI is serialized, time spent waiting for measurement query responses is time during which a waveform query cannot be in flight, although higher-priority waveform work may run between individual measurement queries.
+
+A useful benchmark is to capture `query:complete` records for approximately 10 seconds with no measurements selected, then repeat with one and several measurements selected. Group total elapsed time by command family, especially `:WAVeform:DATA?` and `:MEASure:STATistic:ITEM?`, before changing measurement polling behavior.
+
 ## Remaining limits
 
 Enabled channels are still acquired serially, so per-channel cadence necessarily falls as more channels are enabled. The DHO800 waveform source is a single selected source, so there is no documented all-analog-channel `:WAVeform:DATA?` request. The source-select command is write-only in our transport and does not wait for a scope response; therefore combining source selection with `DATA?` can save a small host write/packet cost but does not remove a SCPI response round trip. The unavoidable steady-state cost is one `DATA?` response per enabled channel.
