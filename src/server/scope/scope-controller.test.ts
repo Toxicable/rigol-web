@@ -240,7 +240,7 @@ describe("ScopeController", () => {
     expect(driver.calls).toEqual(["setChannelOffset:1:0.35:1"]);
   });
 
-  it("reads channel and acquisition state after changing channel enable", async () => {
+  it("changes channel enable without routine state readback", async () => {
     const { controller, driver, store } = createController();
 
     await controller.setControl({
@@ -249,17 +249,13 @@ describe("ScopeController", () => {
       value: true,
     });
 
-    expect(driver.calls).toEqual([
-      "setChannelEnabled:2:true:2",
-      "readChannelState:2:2",
-      "readAcquisitionState:2",
-    ]);
+    expect(driver.calls).toEqual(["setChannelEnabled:2:true:2"]);
     expect(store.getState().channels[1].enabled).toBe(true);
-    expect(store.getState().acquisition.memoryDepth).toBe(500_000);
+    expect(store.getState().acquisition.memoryDepth).toBe(1_000_000);
   });
 
-  it("reads dependent Edge trigger state after changing the trigger source channel scale", async () => {
-    const { controller, driver } = createController();
+  it("changes channel scale without dependent state readback", async () => {
+    const { controller, driver, store } = createController();
 
     await controller.setControl({
       kind: ControlKind.ChannelScale,
@@ -267,14 +263,12 @@ describe("ScopeController", () => {
       value: 2,
     });
 
-    expect(driver.calls).toEqual([
-      "setChannelScale:1:2:2",
-      "readChannelState:1:2",
-      "readTriggerState:2",
-    ]);
+    expect(driver.calls).toEqual(["setChannelScale:1:2:2"]);
+    expect(store.getState().channels[0].scale).toBe(2);
+    expect(store.getState().channels[0].offset).toBe(0);
   });
 
-  it("commits final interactive values at Immediate priority before authoritative readback", async () => {
+  it("commits final interactive values at Immediate priority without readback", async () => {
     const { controller, driver, store } = createController();
 
     await controller.commitInteraction({
@@ -282,42 +276,28 @@ describe("ScopeController", () => {
       value: 2e-3,
     });
 
-    expect(driver.calls).toEqual([
-      "setHorizontalScale:0.002:0",
-      "readHorizontalState:0",
-      "readAcquisitionState:0",
-    ]);
-    expect(store.getState().horizontal.position).toBe(0.5);
-    expect(store.getState().acquisition.sampleRate).toBe(50_000_000);
+    expect(driver.calls).toEqual(["setHorizontalScale:0.002:0"]);
+    expect(store.getState().horizontal.scale).toBe(2e-3);
+    expect(store.getState().horizontal.position).toBe(0);
+    expect(store.getState().acquisition.sampleRate).toBe(100_000_000);
   });
 
-  it("does not apply an older readback after a newer optimistic mutation", async () => {
+  it("keeps the latest optimistic interaction value", async () => {
     const { controller, driver, store } = createController();
-    let resolveRead: ((value: HorizontalState) => void) | undefined;
-    const readHorizontalState = vi.spyOn(driver, "readHorizontalState").mockImplementationOnce(
-      () => new Promise<HorizontalState>((resolve) => {
-        resolveRead = resolve;
-      }),
-    );
 
-    const commit = controller.commitInteraction({
+    await controller.commitInteraction({
       kind: ControlKind.HorizontalPosition,
       value: 0.25,
     });
-    await vi.waitFor(() => expect(readHorizontalState).toHaveBeenCalledOnce());
-
     await controller.updateInteraction({
       kind: ControlKind.HorizontalPosition,
       value: 0.5,
     });
 
-    if (resolveRead === undefined) {
-      throw new Error("Expected pending horizontal readback");
-    }
-
-    resolveRead({ ...driver.state.horizontal, position: 0.25 });
-    await commit;
-
+    expect(driver.calls).toEqual([
+      "setHorizontalPosition:0.25:0",
+      "setHorizontalPosition:0.5:1",
+    ]);
     expect(store.getState().horizontal.position).toBe(0.5);
   });
 
