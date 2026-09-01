@@ -21,8 +21,17 @@ interface PendingResponse {
   bytesReadAtStart: number;
 }
 
+const SUPPRESSED_DEBUG_EVENTS = new Set([
+  "query:start",
+  "query:data",
+  "query:binary-progress",
+]);
+
 function scpiDebug(event: string, detail: Record<string, unknown>): void {
-  console.debug(`[SCPI] ${event}`, detail);
+  if (SUPPRESSED_DEBUG_EVENTS.has(event)) {
+    return;
+  }
+  console.debug(`[SCPI] ${event} ${JSON.stringify(detail)}`);
 }
 
 export class ScpiTransport {
@@ -274,7 +283,7 @@ export class ScpiTransport {
       clearTimeout(pending.timer);
       scpiDebug("query:complete", {
         command: pending.command,
-        elapsedMs: performance.now() - pending.startedAt,
+        elapsedMs: Number((performance.now() - pending.startedAt).toFixed(3)),
         responseKind: response.kind === ScpiResponseKind.Binary ? "binary" : "text",
         responseBytes: response.kind === ScpiResponseKind.Binary
           ? response.value.byteLength

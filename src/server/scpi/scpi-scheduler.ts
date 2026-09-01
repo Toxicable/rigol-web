@@ -73,6 +73,7 @@ export class ScpiScheduler {
   private readonly metrics: ScpiOperationMetric[] = [];
   private coalescedInteractiveCount = 0;
   private supersededLatestCount = 0;
+  private interactiveBurstCount = 0;
 
   public constructor(private readonly transport: ScpiTransport) {}
 
@@ -263,10 +264,40 @@ export class ScpiScheduler {
   }
 
   private takeNext(): QueuedOperation | null {
-    for (const priority of priorityValues) {
+    const immediate = this.queueFor(ScpiPriority.Immediate).shift();
+    if (immediate !== undefined) {
+      return immediate;
+    }
+
+    const interactiveQueue = this.queueFor(ScpiPriority.Interactive);
+    const waveformQueue = this.queueFor(ScpiPriority.Waveform);
+
+    if (
+      this.interactiveBurstCount > 0
+      && interactiveQueue.length > 0
+      && waveformQueue.length > 0
+    ) {
+      const waveform = waveformQueue.shift();
+      if (waveform !== undefined) {
+        this.interactiveBurstCount = 0;
+        return waveform;
+      }
+    }
+
+    for (const priority of [
+      ScpiPriority.Interactive,
+      ScpiPriority.Normal,
+      ScpiPriority.Waveform,
+      ScpiPriority.Background,
+    ] as const) {
       const queue = this.queueFor(priority);
       const next = queue.shift();
       if (next !== undefined) {
+        if (priority === ScpiPriority.Interactive) {
+          this.interactiveBurstCount += 1;
+        } else if (priority === ScpiPriority.Waveform) {
+          this.interactiveBurstCount = 0;
+        }
         return next;
       }
     }

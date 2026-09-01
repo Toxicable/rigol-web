@@ -169,12 +169,15 @@ export class ScopeController {
     this.validateControl(control);
     const revision = this.incrementMutationRevision();
 
-    if (control.kind !== ControlKind.TriggerType) {
-      this.applyOptimisticControl(control);
+    if (control.kind === ControlKind.TriggerType) {
+      await this.writeControl(control, PRIORITY_NORMAL);
+      const trigger = await this.driver.readTriggerState(PRIORITY_NORMAL);
+      this.applyReconciledUpdate(revision, (state) => ({ ...state, trigger }));
+      return;
     }
 
+    this.applyOptimisticControl(control);
     await this.writeControl(control, PRIORITY_NORMAL);
-    await this.reconcileControl(control, PRIORITY_NORMAL, revision);
   }
 
   public async updateInteraction(control: InteractiveControl): Promise<void> {
@@ -186,10 +189,9 @@ export class ScopeController {
 
   public async commitInteraction(control: InteractiveControl): Promise<void> {
     this.validateControl(control);
-    const revision = this.incrementMutationRevision();
+    this.incrementMutationRevision();
     this.applyOptimisticControl(control);
     await this.writeControl(control, PRIORITY_IMMEDIATE);
-    await this.reconcileControl(control, PRIORITY_IMMEDIATE, revision);
   }
 
   public async performAcquisitionAction(action: AcquisitionAction): Promise<void> {
@@ -292,7 +294,7 @@ export class ScopeController {
         requireFinite(control.value, "Horizontal position");
         return;
       case ControlKind.TriggerLevel:
-        requireFinite(control.value, "Trigger level");
+        requireFinite(control.value, "trigger level");
         requireEdgeTrigger(this.stateStore.getState());
         return;
       case ControlKind.TriggerType:
@@ -385,64 +387,6 @@ export class ScopeController {
       case ControlKind.TriggerSlope:
         await this.driver.setTriggerSlope(control.value, priority);
         return;
-    }
-  }
-
-  private async reconcileControl(
-    control: ControlChange,
-    priority: ScopeDriverPriority,
-    capturedRevision: number,
-  ): Promise<void> {
-    switch (control.kind) {
-      case ControlKind.ChannelEnabled: {
-        const channel = await this.driver.readChannelState(control.channel, priority);
-        const acquisition = await this.driver.readAcquisitionState(priority);
-        this.applyReconciledUpdate(capturedRevision, (state) => ({
-          ...replaceChannel(state, control.channel, channel),
-          acquisition,
-        }));
-        return;
-      }
-      case ControlKind.ChannelScale:
-      case ControlKind.ChannelOffset: {
-        const channel = await this.driver.readChannelState(control.channel, priority);
-        const currentState = this.stateStore.getState();
-        const triggerMatches =
-          currentState.trigger.type === TriggerType.Edge &&
-          currentState.trigger.source === control.channel;
-        const trigger = triggerMatches
-          ? await this.driver.readTriggerState(priority)
-          : undefined;
-
-        this.applyReconciledUpdate(capturedRevision, (state) => {
-          const withChannel = replaceChannel(state, control.channel, channel);
-          return trigger === undefined ? withChannel : { ...withChannel, trigger };
-        });
-        return;
-      }
-      case ControlKind.HorizontalScale: {
-        const horizontal = await this.driver.readHorizontalState(priority);
-        const acquisition = await this.driver.readAcquisitionState(priority);
-        this.applyReconciledUpdate(capturedRevision, (state) => ({
-          ...state,
-          horizontal,
-          acquisition,
-        }));
-        return;
-      }
-      case ControlKind.HorizontalPosition: {
-        const horizontal = await this.driver.readHorizontalState(priority);
-        this.applyReconciledUpdate(capturedRevision, (state) => ({ ...state, horizontal }));
-        return;
-      }
-      case ControlKind.TriggerType:
-      case ControlKind.TriggerSource:
-      case ControlKind.TriggerSlope:
-      case ControlKind.TriggerLevel: {
-        const trigger = await this.driver.readTriggerState(priority);
-        this.applyReconciledUpdate(capturedRevision, (state) => ({ ...state, trigger }));
-        return;
-      }
     }
   }
 }

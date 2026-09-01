@@ -15,9 +15,9 @@ export interface LiveWaveformServiceOptions {
   pointCount?: number;
 }
 
-// The DHO804 firmware returns 999 samples when NORMAL/BYTE mode is asked for
-// 1000 points, so keep the live request within its effective limit.
-const DEFAULT_POINT_COUNT = 999;
+// Deliberately keep live display reads at 500 NORMAL/BYTE samples while
+// benchmarking DHO804 query latency. Deep capture remains full-resolution.
+const DEFAULT_POINT_COUNT = 500;
 const RESUME_SETTLE_DELAY_MS = 200;
 
 function nextUint32(value: number): number {

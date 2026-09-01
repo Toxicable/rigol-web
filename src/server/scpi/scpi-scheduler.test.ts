@@ -37,6 +37,41 @@ describe("ScpiScheduler", () => {
     expect(order).toEqual([0, 11, 12, 4]);
   });
 
+  it("services a pending waveform between consecutive interactive writes", async () => {
+    const scheduler = new ScpiScheduler(fakeTransport());
+    const gate = deferred();
+    const order: string[] = [];
+    const running = scheduler.schedule({
+      priority: ScpiPriority.Normal,
+      kind: ScpiOperationKind.Write,
+      execute: async () => gate.promise,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    const interactiveA = scheduler.schedule({
+      priority: ScpiPriority.Interactive,
+      kind: ScpiOperationKind.Write,
+      execute: async () => { order.push("interactive-a"); },
+    });
+    const interactiveB = scheduler.schedule({
+      priority: ScpiPriority.Interactive,
+      kind: ScpiOperationKind.Write,
+      execute: async () => { order.push("interactive-b"); },
+    });
+    const waveform = scheduler.schedule({
+      priority: ScpiPriority.Waveform,
+      kind: ScpiOperationKind.BinaryTransfer,
+      execute: async () => { order.push("waveform"); },
+    });
+    const immediate = scheduler.schedule({
+      priority: ScpiPriority.Immediate,
+      kind: ScpiOperationKind.Action,
+      execute: async () => { order.push("immediate"); },
+    });
+    gate.resolve();
+    await Promise.all([running, interactiveA, interactiveB, waveform, immediate]);
+    expect(order).toEqual(["immediate", "interactive-a", "waveform", "interactive-b"]);
+  });
+
   it("coalesces interactive work by opaque caller-owned key", async () => {
     const scheduler = new ScpiScheduler(fakeTransport());
     const gate = deferred();
