@@ -61,6 +61,11 @@ interface WaveformSetupCache {
   points: number | null;
 }
 
+interface LiveWaveformPreambleCache {
+  pointCount: number;
+  preamble: WaveformPreamble;
+}
+
 interface Dho804CoalesceKeys {
   channelScale: Readonly<Record<Channel, ScpiCoalesceKey>>;
   channelOffset: Readonly<Record<Channel, ScpiCoalesceKey>>;
@@ -80,6 +85,8 @@ export class Dho804Driver {
     format: null,
     points: null,
   };
+  private readonly channelUnits = new Map<Channel, ChannelUnit>();
+  private readonly liveWaveformPreambles = new Map<Channel, LiveWaveformPreambleCache>();
   private readonly coalesceKeys = createDho804CoalesceKeys();
 
   public constructor(private readonly scheduler: ScpiScheduler) {}
@@ -129,6 +136,7 @@ export class Dho804Driver {
     const enabled = parseBoolean(await this.queryText(`${prefix}:DISPlay?`, priority));
     const coupling = parseChannelCoupling(await this.queryText(`${prefix}:COUPling?`, priority));
     const unit = parseChannelUnit(await this.queryText(`${prefix}:UNITs?`, priority));
+    this.channelUnits.set(channel, unit);
     const scale = parseFiniteNumber(await this.queryText(`${prefix}:SCALe?`, priority), "channel scale");
     const offset = parseFiniteNumber(await this.queryText(`${prefix}:OFFSet?`, priority), "channel offset");
     const probeRatio = parsePositiveNumber(
@@ -230,6 +238,7 @@ export class Dho804Driver {
       priority,
       this.coalesceKeys.channelScale[channel],
     );
+    this.liveWaveformPreambles.delete(channel);
   }
 
   public async readChannelOffset(channel: Channel, priority: ScpiPriority): Promise<number> {
@@ -246,6 +255,7 @@ export class Dho804Driver {
       priority,
       this.coalesceKeys.channelOffset[channel],
     );
+    this.liveWaveformPreambles.delete(channel);
   }
 
   public async readHorizontalScale(priority: ScpiPriority): Promise<number> {
@@ -262,6 +272,7 @@ export class Dho804Driver {
       priority,
       this.coalesceKeys.horizontalScale,
     );
+    this.liveWaveformPreambles.clear();
   }
 
   public async readHorizontalPosition(priority: ScpiPriority): Promise<number> {
@@ -278,6 +289,7 @@ export class Dho804Driver {
       priority,
       this.coalesceKeys.horizontalPosition,
     );
+    this.liveWaveformPreambles.clear();
   }
 
   public async readTriggerType(priority: ScpiPriority): Promise<TriggerType> {
@@ -442,13 +454,13 @@ export class Dho804Driver {
         await this.ensureWaveformSetup(transport, channel, "NORM", "BYTE", pointCount);
         const payload = await transport.queryBinary(":WAVeform:DATA?");
         recorder.addBinaryBytes(payload.byteLength);
-        const preamble = parseWaveformPreamble(await transport.queryText(":WAVeform:PREamble?"));
-        const unit = parseChannelUnit(await transport.queryText(`${channelPrefix(channel)}:UNITs?`));
         if (payload.byteLength !== pointCount) {
           throw new Error(
             `Expected ${pointCount} live waveform samples, received ${payload.byteLength}`,
           );
         }
+        const preamble = await this.liveWaveformPreamble(transport, channel, pointCount);
+        const unit = await this.channelUnit(transport, channel);
         return createWaveform(channel, unit, payload, preamble);
       },
     );
@@ -490,6 +502,7 @@ export class Dho804Driver {
 
         const preamble = parseWaveformPreamble(await transport.queryText(":WAVeform:PREamble?"));
         const unit = parseChannelUnit(await transport.queryText(`${channelPrefix(channel)}:UNITs?`));
+        this.channelUnits.set(channel, unit);
         return createWaveform(channel, unit, native, preamble);
       },
     });
@@ -497,6 +510,8 @@ export class Dho804Driver {
 
   public invalidateWaveformSetup(): void {
     this.waveformSetup = { source: null, mode: null, format: null, points: null };
+    this.liveWaveformPreambles.clear();
+    this.channelUnits.clear();
   }
 
   private async queryText(
@@ -558,6 +573,30 @@ export class Dho804Driver {
       await transport.command(`:WAVeform:POINts ${points}`);
       this.waveformSetup.points = points;
     }
+  }
+
+  private async liveWaveformPreamble(
+    transport: ScpiTransport,
+    channel: Channel,
+    pointCount: number,
+  ): Promise<WaveformPreamble> {
+    const cached = this.liveWaveformPreambles.get(channel);
+    if (cached !== undefined && cached.pointCount === pointCount) {
+      return cached.preamble;
+    }
+    const preamble = parseWaveformPreamble(await transport.queryText(":WAVeform:PREamble?"));
+    this.liveWaveformPreambles.set(channel, { pointCount, preamble });
+    return preamble;
+  }
+
+  private async channelUnit(transport: ScpiTransport, channel: Channel): Promise<ChannelUnit> {
+    const cached = this.channelUnits.get(channel);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const unit = parseChannelUnit(await transport.queryText(`${channelPrefix(channel)}:UNITs?`));
+    this.channelUnits.set(channel, unit);
+    return unit;
   }
 }
 

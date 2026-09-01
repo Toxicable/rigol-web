@@ -304,14 +304,51 @@ describe("Dho804Driver", () => {
     ]);
   });
 
-  it("converts NORMAL BYTE data using preamble Y metadata", async () => {
+  it("reuses cached live unit and preamble metadata", async () => {
     const transport = new ScriptedTransport();
-    transport.binary.set(":WAVeform:DATA?", [Uint8Array.from([10, 12])]);
+    respondChannel(transport, Channel.Ch1, "1", "DC", "VOLT");
+    const driver = scriptedDriver(transport);
+    await driver.readChannelState(Channel.Ch1, ScpiPriority.Normal);
+
+    transport.binary.set(":WAVeform:DATA?", [
+      Uint8Array.from([10, 12]),
+      Uint8Array.from([10, 14]),
+    ]);
     respond(transport, ":WAVeform:PREamble?", "0,0,2,1,1e-6,0,0,0.5,10,0");
+
+    const first = await driver.readLiveWaveform(Channel.Ch1, 2);
+    const second = await driver.readLiveWaveform(Channel.Ch1, 2);
+
+    expect(first.unit).toBe(ChannelUnit.Volts);
+    expect([...first.samples]).toEqual([0, 1]);
+    expect([...second.samples]).toEqual([0, 2]);
+    expect(transport.commands.filter((command) => command === ":WAVeform:PREamble?")).toHaveLength(1);
+    expect(transport.commands.filter((command) => command === ":CHANnel1:UNITs?")).toHaveLength(1);
+  });
+
+  it("refreshes cached live preamble after a vertical scale write", async () => {
+    const transport = new ScriptedTransport();
+    transport.binary.set(":WAVeform:DATA?", [
+      Uint8Array.from([10, 12]),
+      Uint8Array.from([10, 12]),
+    ]);
+    respond(
+      transport,
+      ":WAVeform:PREamble?",
+      "0,0,2,1,1e-6,0,0,0.5,10,0",
+      "0,0,2,1,1e-6,0,0,1,10,0",
+    );
     respond(transport, ":CHANnel1:UNITs?", "VOLT");
-    const waveform = await scriptedDriver(transport).readLiveWaveform(Channel.Ch1, 2);
-    expect(waveform.unit).toBe(ChannelUnit.Volts);
-    expect([...waveform.samples]).toEqual([0, 1]);
+    const driver = scriptedDriver(transport);
+
+    const first = await driver.readLiveWaveform(Channel.Ch1, 2);
+    await driver.setChannelScale(Channel.Ch1, 2, ScpiPriority.Normal);
+    const second = await driver.readLiveWaveform(Channel.Ch1, 2);
+
+    expect([...first.samples]).toEqual([0, 1]);
+    expect([...second.samples]).toEqual([0, 2]);
+    expect(transport.commands.filter((command) => command === ":WAVeform:PREamble?")).toHaveLength(2);
+    expect(transport.commands.filter((command) => command === ":CHANnel1:UNITs?")).toHaveLength(1);
   });
 
   it("assembles RAW WORD chunks without exposing native codes", async () => {
