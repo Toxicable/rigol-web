@@ -36,7 +36,7 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
 }
 .scope-route {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
 }
 .instrument-shell {
@@ -72,7 +72,6 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   align-items: center;
   gap: 0.8rem;
 }
-.scope-identity { color: #9aa6b2; font-size: 0.9rem; }
 .status-pill {
   padding: 0.2rem 0.5rem;
   border: 1px solid #47515c;
@@ -102,6 +101,12 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   gap: 0.75rem;
   padding: 0.75rem;
 }
+.waveform-column {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+}
 .waveform-panel {
   min-height: 0;
   position: relative;
@@ -128,14 +133,19 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   transform: translateY(-50%);
   min-width: 28px;
   height: 24px;
-  padding: 0;
+  padding: 0 0.35rem;
   border-radius: 3px;
   z-index: 4;
   user-select: none;
   touch-action: none;
 }
-.channel-marker { left: 2px; }
-.trigger-marker { right: 2px; border-color: #f5a623; color: #f5a623; }
+.channel-marker { left: 2px; padding: 0; }
+.trigger-marker {
+  right: 2px;
+  min-width: 46px;
+  border-color: var(--channel-accent);
+  color: var(--channel-accent);
+}
 .ch1 { --channel-accent: #f4d03f; }
 .ch2 { --channel-accent: #2ecc71; }
 .ch3 { --channel-accent: #3498db; }
@@ -153,12 +163,8 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   pointer-events: none;
 }
 .measurement-overlay-item {
-  display: grid;
-  grid-template-columns: auto auto auto;
-  align-items: baseline;
-  gap: 0.4rem;
   min-height: 1.9rem;
-  padding: 0.3rem 0.55rem 0.3rem 0.65rem;
+  padding: 0.3rem 0.55rem 0.35rem 0.65rem;
   border: 1px solid #303741;
   border-left: 3px solid var(--channel-accent);
   border-radius: 5px;
@@ -168,16 +174,33 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
 }
+.measurement-overlay-primary {
+  display: grid;
+  grid-template-columns: auto auto auto;
+  align-items: baseline;
+  gap: 0.4rem;
+}
 .measurement-overlay-channel,
-.measurement-overlay-item strong {
+.measurement-overlay-primary strong {
   color: var(--channel-accent);
 }
-.measurement-overlay-kind {
+.measurement-overlay-kind { color: #a7b1bc; }
+.measurement-overlay-primary strong { font-weight: 700; }
+.measurement-overlay-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.7rem;
+  margin: 0.25rem 0 0;
   color: #a7b1bc;
+  font-size: 0.69rem;
 }
-.measurement-overlay-item strong {
-  font-weight: 700;
+.measurement-overlay-stats div {
+  display: flex;
+  gap: 0.25rem;
 }
+.measurement-overlay-stats dt,
+.measurement-overlay-stats dd { margin: 0; }
+.measurement-overlay-stats dd { color: #d7e0e8; }
 
 .control-stack {
   display: flex;
@@ -219,9 +242,6 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
 .horizontal-details dd { margin-top: 0.15rem; color: #e8edf2; }
 .notice, .muted { color: #8e9aa6; font-size: 0.8rem; }
 
-.bottom-grid {
-  padding: 0 0.75rem 0.75rem;
-}
 .measurement-add, .scpi-input-row { display: flex; gap: 0.4rem; }
 .measurement-list {
   display: grid;
@@ -233,13 +253,12 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
 }
 .measurement-list li {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto;
   gap: 0.6rem;
   align-items: center;
   padding: 0.35rem 0;
   border-top: 1px solid #242a31;
 }
-.measurement-list strong { color: #f8fbff; }
 .text-button { border: 0; background: transparent; color: #9aa6b2; padding: 0.2rem; }
 .scpi-input-row input { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .scpi-history { max-height: 240px; overflow: auto; margin-top: 0.6rem; }
@@ -272,13 +291,12 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   .scope-toolbar-content { flex-wrap: wrap; width: 100%; }
   .toolbar-actions { width: 100%; margin-left: 0; flex-wrap: wrap; }
   .channel-grid { grid-template-columns: 1fr; }
-  .scope-layout, .bottom-grid { padding-left: 0.4rem; padding-right: 0.4rem; }
+  .scope-layout { padding-left: 0.4rem; padding-right: 0.4rem; }
   .measurement-overlay {
     left: 2.3rem;
     right: 2.3rem;
     max-width: none;
   }
-  .measurement-overlay-item {
-    font-size: 0.72rem;
-  }
+  .measurement-overlay-item { font-size: 0.72rem; }
+  .measurement-overlay-stats { font-size: 0.65rem; }
 }
