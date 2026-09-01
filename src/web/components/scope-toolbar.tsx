@@ -52,7 +52,7 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
     }
   };
 
-  const powerAction = async (action: "sleep" | "wake") => {
+  const screenAction = async (action: "screen-off" | "screen-on") => {
     try {
       const response = await fetch(`/api/scope/${action}`, { method: "POST" });
       if (!response.ok) {
@@ -84,8 +84,8 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
           >
             Deep Capture
           </button>
-          <button type="button" onClick={() => void powerAction("sleep")}>Sleep</button>
-          <button type="button" onClick={() => void powerAction("wake")}>Wake</button>
+          <button type="button" onClick={() => void screenAction("screen-off")}>Screen Off</button>
+          <button type="button" onClick={() => void screenAction("screen-on")}>Screen On</button>
         </div>
         {lastError !== null ? <span className="error-text">{lastError}</span> : null}
       </div>
