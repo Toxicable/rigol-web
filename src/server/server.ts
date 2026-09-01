@@ -65,6 +65,7 @@ const scopePower = new Dho804PowerControl(scopeEndpoint.host, readScopeAdbPort()
 
 const server = createServer(createHttpRequestHandler(undefined, {
   sleepScope: () => scopePower.sleep(),
+  wakeScope: () => scopePower.wake(),
 }));
 
 const initialScopeConnection: ServerScopeConnection = {
@@ -139,6 +140,8 @@ async function shutdown(signal: string): Promise<void> {
     await instruments.stopAll();
     await gateway.close();
     await closeHttpServer();
+    console.log("Rigol Web shutdown complete");
+    process.exitCode = 0;
   } catch (error) {
     console.error("Rigol Web shutdown failed", error);
     process.exitCode = 1;
@@ -152,11 +155,6 @@ process.once("SIGTERM", () => {
   void shutdown("SIGTERM");
 });
 
-server.once("error", (error) => {
-  console.error("Rigol Web server failed", error);
-  process.exitCode = 1;
-});
-
 server.listen(httpPort, () => {
-  console.log(`Rigol Web server listening on http://localhost:${httpPort}`);
+  console.log(`Rigol Web listening on http://0.0.0.0:${httpPort}`);
 });
