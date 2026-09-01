@@ -1,4 +1,6 @@
 node_modules/
+.env
+deploy.conf
 dist/
 coverage/
 .vite/

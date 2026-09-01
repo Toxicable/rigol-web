@@ -9,12 +9,16 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    allowedHosts: ["rigol-web.fabianserver.xyz"],
     proxy: {
       "/ws": {
         target: "http://localhost:3000",
         ws: true,
       },
       "/health": {
+        target: "http://localhost:3000",
+      },
+      "/api": {
         target: "http://localhost:3000",
       },
     },

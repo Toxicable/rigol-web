@@ -76,6 +76,10 @@ export interface ScopeControllerDriver {
     specs: MeasurementSpec[],
     priority: ScopeDriverPriority,
   ): Promise<MeasurementValue[]>;
+  setMeasurements(
+    specs: MeasurementSpec[],
+    priority: ScopeDriverPriority,
+  ): Promise<void>;
   executeRawScpi(command: string): Promise<string>;
 }
 
@@ -238,6 +242,11 @@ export class ScopeController {
     }
 
     return values;
+  }
+
+  public async setMeasurements(measurements: MeasurementSpec[]): Promise<void> {
+    this.incrementMutationRevision();
+    await this.driver.setMeasurements(measurements, PRIORITY_NORMAL);
   }
 
   public async executeRawScpi(command: string): Promise<string> {

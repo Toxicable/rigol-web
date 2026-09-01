@@ -231,6 +231,18 @@ export class ScpiScheduler {
         waiter.resolve(result);
       }
     } catch (error) {
+      const finishedAt = performance.now();
+      console.error("SCPI operation failed", {
+        kind: next.operation.kind,
+        priority: next.operation.priority,
+        queueWaitMs: startedAt - next.queuedAt,
+        durationMs: finishedAt - startedAt,
+        binaryByteCount,
+        transportUsable: this.transport.isUsable(),
+        error: error instanceof Error
+          ? { name: error.name, message: error.message, stack: error.stack }
+          : String(error),
+      });
       for (const waiter of next.waiters) {
         waiter.reject(error);
       }

@@ -6,6 +6,7 @@
 }
 
 * { box-sizing: border-box; }
+html, body, #root { height: 100%; }
 body { margin: 0; min-width: 320px; background: #0b0d10; }
 button, input, select { font: inherit; }
 button, select, input {
@@ -19,15 +20,33 @@ button:hover:not(:disabled) { border-color: #6d7b8a; }
 button:disabled { opacity: 0.45; cursor: default; }
 input, select { padding: 0.35rem 0.45rem; min-width: 0; }
 
-.app-shell { min-height: 100vh; }
+.app-shell {
+  height: 100dvh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.scope-route,
+.dmm-route {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.scope-route {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
 .instrument-shell {
-  min-height: 46px;
+  min-height: 54px;
   display: flex;
   align-items: center;
-  gap: 1rem;
-  padding: 0.45rem 1rem;
+  gap: 0.8rem;
+  padding: 0.65rem 1rem;
   border-bottom: 1px solid #282f37;
-  background: #0d1014;
+  background: #111419;
   position: sticky;
   top: 0;
   z-index: 20;
@@ -46,17 +65,12 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   background: #171b20;
   border-color: #47515c;
 }
-.scope-toolbar {
-  min-height: 54px;
+.scope-toolbar-content {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 0.8rem;
-  padding: 0.65rem 1rem;
-  border-bottom: 1px solid #282f37;
-  background: #111419;
-  position: sticky;
-  top: 46px;
-  z-index: 10;
 }
 .scope-identity { color: #9aa6b2; font-size: 0.9rem; }
 .status-pill {
@@ -67,20 +81,34 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   font-size: 0.78rem;
 }
 .toolbar-actions { display: flex; gap: 0.4rem; margin-left: auto; }
+.acquisition-state-button.is-running {
+  border-color: #2ecc71;
+  background: #153923;
+  color: #cbf4d8;
+  box-shadow: inset 0 0 0 1px #2ecc71;
+}
+.acquisition-state-button.is-stopped {
+  border-color: #e74c3c;
+  background: #451c1a;
+  color: #ffd3cf;
+  box-shadow: inset 0 0 0 1px #e74c3c;
+}
 .error-text { color: #ff8c8c; font-size: 0.85rem; }
 
 .scope-layout {
+  min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
   gap: 0.75rem;
   padding: 0.75rem;
 }
-.waveform-panel { min-height: 560px; }
+.waveform-panel {
+  min-height: 0;
+}
 .waveform-shell {
   position: relative;
   width: 100%;
-  height: min(68vh, 720px);
-  min-height: 480px;
+  height: 100%;
   overflow: hidden;
   border: 1px solid #303741;
   border-radius: 8px;
@@ -113,7 +141,12 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
 .ch4 { --channel-accent: #e74c3c; }
 .channel-marker, .channel-heading { color: var(--channel-accent); }
 
-.control-stack { display: flex; flex-direction: column; gap: 0.75rem; }
+.control-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 0;
+}
 .panel {
   border: 1px solid #2d343d;
   border-radius: 8px;
@@ -141,19 +174,25 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
 .compact-details div { display: flex; justify-content: space-between; gap: 0.75rem; }
 .compact-details dt, .compact-details dd { margin: 0; }
 .control-row { display: grid; gap: 0.4rem; }
+.timebase-control { display: flex; gap: 0.35rem; }
+.step-button { min-width: 1.7rem; padding: 0.1rem 0.35rem; }
 .horizontal-details { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
 .horizontal-details div { display: block; }
 .horizontal-details dd { margin-top: 0.15rem; color: #e8edf2; }
 .notice, .muted { color: #8e9aa6; font-size: 0.8rem; }
 
 .bottom-grid {
-  display: grid;
-  grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.2fr);
-  gap: 0.75rem;
   padding: 0 0.75rem 0.75rem;
 }
 .measurement-add, .scpi-input-row { display: flex; gap: 0.4rem; }
-.measurement-list { list-style: none; padding: 0; margin: 0.7rem 0 0; }
+.measurement-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0 0.75rem;
+  list-style: none;
+  padding: 0;
+  margin: 0.7rem 0 0;
+}
 .measurement-list li {
   display: grid;
   grid-template-columns: 1fr auto auto;
@@ -162,6 +201,7 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   padding: 0.35rem 0;
   border-top: 1px solid #242a31;
 }
+.measurement-list strong { color: #f8fbff; }
 .text-button { border: 0; background: transparent; color: #9aa6b2; padding: 0.2rem; }
 .scpi-input-row input { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .scpi-history { max-height: 240px; overflow: auto; margin-top: 0.6rem; }
@@ -174,16 +214,25 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
 .dmm-route-shell h1 { color: #e8edf2; margin-bottom: 0.4rem; }
 
 @media (max-width: 1050px) {
+  .scope-route { overflow: auto; }
   .scope-layout { grid-template-columns: 1fr; }
-  .waveform-panel { min-height: 440px; }
-  .waveform-shell { height: 55vh; min-height: 420px; }
-  .bottom-grid { grid-template-columns: 1fr; }
+  .waveform-panel { min-height: 420px; }
+}
+
+@media (max-height: 850px) and (min-width: 1051px) {
+  .control-stack { gap: 0.45rem; }
+  .control-stack .panel { padding: 0.55rem; }
+  .control-stack .panel h2 { margin-bottom: 0.35rem; }
+  .control-stack .channel-card { padding: 0.35rem; }
+  .control-stack .channel-card label,
+  .control-stack .control-row label { margin: 0.15rem 0; }
+  .control-stack .compact-details { display: none; }
 }
 
 @media (max-width: 620px) {
   .instrument-shell { flex-wrap: wrap; gap: 0.4rem; }
-  .scope-toolbar { flex-wrap: wrap; }
-  .toolbar-actions { width: 100%; margin-left: 0; }
+  .scope-toolbar-content { flex-wrap: wrap; width: 100%; }
+  .toolbar-actions { width: 100%; margin-left: 0; flex-wrap: wrap; }
   .channel-grid { grid-template-columns: 1fr; }
   .scope-layout, .bottom-grid { padding-left: 0.4rem; padding-right: 0.4rem; }
 }

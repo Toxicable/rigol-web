@@ -88,6 +88,8 @@ export type ServerDmmConnection =
 export interface WaveformRequestHandlers {
   requestDeepCapture(requestId: number): Promise<DeepCaptureReadyMessage>;
   requestViewport(request: WaveformViewportRequestMessage): Promise<Uint8Array>;
+  pauseLiveWaveform?: () => void;
+  resumeLiveWaveform?: () => void;
 }
 
 export interface DmmRequestHandlers {
@@ -103,6 +105,7 @@ export interface WebSocketGatewayOptions {
 }
 
 interface ClientState {
+  id: number;
   socket: WebSocket;
   protocolReady: boolean;
   subscriptions: Set<SupportedInstrument>;
@@ -215,6 +218,22 @@ function readMeasurementKind(value: unknown): MeasurementKind {
     case MeasurementKind.Vrms:
     case MeasurementKind.Frequency:
     case MeasurementKind.Period:
+    case MeasurementKind.Vtop:
+    case MeasurementKind.Vbase:
+    case MeasurementKind.Vamp:
+    case MeasurementKind.Vupper:
+    case MeasurementKind.Vmid:
+    case MeasurementKind.Vlower:
+    case MeasurementKind.Overshoot:
+    case MeasurementKind.Preshoot:
+    case MeasurementKind.RiseTime:
+    case MeasurementKind.FallTime:
+    case MeasurementKind.PositiveWidth:
+    case MeasurementKind.NegativeWidth:
+    case MeasurementKind.PositiveDuty:
+    case MeasurementKind.NegativeDuty:
+    case MeasurementKind.Tvmax:
+    case MeasurementKind.Tvmin:
       return value;
     default:
       throw new Error("Invalid measurement kind");
@@ -303,6 +322,14 @@ function readMeasurements(value: unknown): NonEmptyArray<MeasurementSpec> {
     throw new Error("measurements must contain at least one item");
   }
 
+  return readMeasurementList(value) as NonEmptyArray<MeasurementSpec>;
+}
+
+function readMeasurementList(value: unknown): MeasurementSpec[] {
+  if (!Array.isArray(value)) {
+    throw new Error("measurements must be an array");
+  }
+
   const measurements = value.map((item): MeasurementSpec => {
     if (!isRecord(item)) {
       throw new Error("measurement must be an object");
@@ -314,7 +341,7 @@ function readMeasurements(value: unknown): NonEmptyArray<MeasurementSpec> {
     };
   });
 
-  return measurements as NonEmptyArray<MeasurementSpec>;
+  return measurements;
 }
 
 function readAcquisitionAction(value: unknown): AcquisitionAction {
@@ -488,6 +515,12 @@ function parseClientMessage(value: unknown): ClientMessage {
         requestId: readRequestId(value.requestId),
         measurements: readMeasurements(value.measurements),
       };
+    case MessageType.MeasurementSet:
+      return {
+        type: MessageType.MeasurementSet,
+        requestId: readRequestId(value.requestId),
+        measurements: readMeasurementList(value.measurements),
+      };
     case MessageType.DmmControlSet:
       return {
         type: MessageType.DmmControlSet,
@@ -555,6 +588,7 @@ function rawDataToText(data: RawData): string {
 export class WebSocketGateway {
   private readonly webSocketServer: WebSocketServer;
   private readonly clients = new Map<WebSocket, ClientState>();
+  private nextClientId = 1;
   private readonly instruments: InstrumentRegistry;
   private readonly waveformHandlers: WaveformRequestHandlers;
   private readonly dmmHandlers: DmmRequestHandlers;
@@ -672,6 +706,7 @@ export class WebSocketGateway {
 
   private acceptClient(socket: WebSocket): void {
     const client: ClientState = {
+      id: this.nextClientId++,
       socket,
       protocolReady: false,
       subscriptions: new Set(),
@@ -686,7 +721,13 @@ export class WebSocketGateway {
       this.receiveClientMessage(client, data, isBinary);
     });
 
-    socket.on("close", () => {
+    socket.on("close", (code, reason) => {
+      console.info("WebSocket client closed", {
+        clientId: client.id,
+        code,
+        reason: reason.toString("utf8"),
+        bufferedBytes: socket.bufferedAmount,
+      });
       client.subscriptions.clear();
       client.pendingLiveFrames.clear();
       client.viewportGenerations.clear();
@@ -697,7 +738,12 @@ export class WebSocketGateway {
     });
 
     socket.on("error", (error) => {
-      console.error("WebSocket client error", error);
+      console.error("WebSocket client error", {
+        clientId: client.id,
+        readyState: socket.readyState,
+        bufferedBytes: socket.bufferedAmount,
+        error,
+      });
     });
 
     this.sendJson(client, {
@@ -774,14 +820,33 @@ export class WebSocketGateway {
         case MessageType.ControlSet: {
           this.requireSubscribed(client, SupportedInstrument.Dho804);
           const { controller, revision } = this.connectedScopeController();
-          await controller.setControl(message.control);
-          this.requireScopeConnectionRevision(revision);
-          this.sendCompleted(client, message.requestId);
+          const pausesLive =
+            message.control.kind === ControlKind.HorizontalScale ||
+            message.control.kind === ControlKind.HorizontalPosition;
+          if (pausesLive) {
+            this.waveformHandlers.pauseLiveWaveform?.();
+          }
+          console.info("Scope control requested", {
+            kind: message.control.kind,
+            value: message.control.value,
+            channel: "channel" in message.control ? message.control.channel : undefined,
+            pausesLive,
+          });
+          try {
+            await controller.setControl(message.control);
+            this.requireScopeConnectionRevision(revision);
+            this.sendCompleted(client, message.requestId);
+          } finally {
+            if (pausesLive) {
+              this.waveformHandlers.resumeLiveWaveform?.();
+            }
+          }
           return;
         }
         case MessageType.InteractionUpdate: {
           this.requireSubscribed(client, SupportedInstrument.Dho804);
           const { controller } = this.connectedScopeController();
+          this.waveformHandlers.pauseLiveWaveform?.();
           try {
             await controller.updateInteraction(message.control);
           } catch (error) {
@@ -792,9 +857,13 @@ export class WebSocketGateway {
         case MessageType.InteractionCommit: {
           this.requireSubscribed(client, SupportedInstrument.Dho804);
           const { controller, revision } = this.connectedScopeController();
-          await controller.commitInteraction(message.control);
-          this.requireScopeConnectionRevision(revision);
-          this.sendCompleted(client, message.requestId);
+          try {
+            await controller.commitInteraction(message.control);
+            this.requireScopeConnectionRevision(revision);
+            this.sendCompleted(client, message.requestId);
+          } finally {
+            this.waveformHandlers.resumeLiveWaveform?.();
+          }
           return;
         }
         case MessageType.AcquisitionAction: {
@@ -815,6 +884,14 @@ export class WebSocketGateway {
             requestId: message.requestId,
             values,
           });
+          return;
+        }
+        case MessageType.MeasurementSet: {
+          this.requireSubscribed(client, SupportedInstrument.Dho804);
+          const { controller, revision } = this.connectedScopeController();
+          await controller.setMeasurements(message.measurements);
+          this.requireScopeConnectionRevision(revision);
+          this.sendCompleted(client, message.requestId);
           return;
         }
         case MessageType.ScpiExecute: {
@@ -1061,8 +1138,14 @@ export class WebSocketGateway {
     }
 
     client.socket.send(JSON.stringify(message), { compress: false }, (error) => {
-      if (error !== undefined) {
-        console.error("WebSocket JSON send failed", error);
+      if (error !== undefined && error !== null) {
+        console.error("WebSocket JSON send failed", {
+          clientId: client.id,
+          readyState: client.socket.readyState,
+          bufferedBytes: client.socket.bufferedAmount,
+          messageType: message.type,
+          error,
+        });
         return;
       }
 
@@ -1099,8 +1182,14 @@ export class WebSocketGateway {
       (error) => {
         client.liveSendInFlight = false;
 
-        if (error !== undefined) {
-          console.error("WebSocket live waveform send failed", error);
+        if (error !== undefined && error !== null) {
+          console.error("WebSocket live waveform send failed", {
+            clientId: client.id,
+            readyState: client.socket.readyState,
+            bufferedBytes: client.socket.bufferedAmount,
+            frameBytes: frame.byteLength,
+            error,
+          });
           return;
         }
 
@@ -1137,8 +1226,14 @@ export class WebSocketGateway {
       frame,
       { binary: true, compress: false },
       (error) => {
-        if (error !== undefined) {
-          console.error("WebSocket waveform send failed", error);
+        if (error !== undefined && error !== null) {
+          console.error("WebSocket waveform send failed", {
+            clientId: client.id,
+            readyState: client.socket.readyState,
+            bufferedBytes: client.socket.bufferedAmount,
+            frameBytes: frame.byteLength,
+            error,
+          });
           return;
         }
 

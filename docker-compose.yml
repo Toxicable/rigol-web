@@ -1,0 +1,26 @@
+services:
+  rigol-web:
+    build: .
+    container_name: rigol-web
+    environment:
+      RIGOL_SCOPE_HOST: ${RIGOL_SCOPE_HOST:?set RIGOL_SCOPE_HOST in .env}
+      RIGOL_SCOPE_PORT: ${RIGOL_SCOPE_PORT:?set RIGOL_SCOPE_PORT in .env}
+      RIGOL_SCOPE_ADB_PORT: ${RIGOL_SCOPE_ADB_PORT:-55555}
+      RIGOL_DMM_HOST: ${RIGOL_DMM_HOST:?set RIGOL_DMM_HOST in .env}
+      RIGOL_DMM_PORT: ${RIGOL_DMM_PORT:?set RIGOL_DMM_PORT in .env}
+      PORT: "3000"
+    ports:
+      - "3018:3000"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1));",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

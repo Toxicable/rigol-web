@@ -1,0 +1,12 @@
+.git
+.env
+.env.*
+!.env.example
+deploy.conf
+node_modules
+dist
+coverage
+.vite
+*.tsbuildinfo
+npm-debug.log*
+pnpm-debug.log*

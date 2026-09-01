@@ -355,6 +355,21 @@ export class Dho804Driver {
     return values;
   }
 
+  public async setMeasurements(
+    specs: MeasurementSpec[],
+    priority: ScpiPriority,
+  ): Promise<void> {
+    await this.command(":MEASure:CLEar", priority, null, ScpiOperationKind.Measurement);
+    for (const spec of specs) {
+      await this.command(
+        `:MEASure:ITEM ${measurementItem(spec.kind)},CHANnel${spec.channel}`,
+        priority,
+        null,
+        ScpiOperationKind.Measurement,
+      );
+    }
+  }
+
   public async executeRawScpi(command: string): Promise<string> {
     const messageKind = classifyScpiProgramMessage(command);
     try {
@@ -658,6 +673,22 @@ function measurementItem(kind: MeasurementKind): string {
     case MeasurementKind.Vrms: return "VRMS";
     case MeasurementKind.Frequency: return "FREQuency";
     case MeasurementKind.Period: return "PERiod";
+    case MeasurementKind.Vtop: return "VTOP";
+    case MeasurementKind.Vbase: return "VBASe";
+    case MeasurementKind.Vamp: return "VAMP";
+    case MeasurementKind.Vupper: return "VUPPer";
+    case MeasurementKind.Vmid: return "VMID";
+    case MeasurementKind.Vlower: return "VLOWer";
+    case MeasurementKind.Overshoot: return "OVERshoot";
+    case MeasurementKind.Preshoot: return "PREShoot";
+    case MeasurementKind.RiseTime: return "RTIMe";
+    case MeasurementKind.FallTime: return "FTIMe";
+    case MeasurementKind.PositiveWidth: return "PWIDth";
+    case MeasurementKind.NegativeWidth: return "NWIDth";
+    case MeasurementKind.PositiveDuty: return "PDUTy";
+    case MeasurementKind.NegativeDuty: return "NDUTy";
+    case MeasurementKind.Tvmax: return "TVMAX";
+    case MeasurementKind.Tvmin: return "TVMIN";
   }
 }
 

@@ -24,6 +24,8 @@ interface WaveformPlotProps {
   client: ScopeWebSocketClient;
 }
 
+const INTERACTION_UPDATE_INTERVAL_MS = 50;
+
 type DragState =
   | {
       kind: "live-horizontal";
@@ -93,6 +95,8 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const plotRef = useRef<uPlot | null>(null);
   const dragRef = useRef<DragState | null>(null);
+  const pendingInteractionRef = useRef<InteractiveControl | null>(null);
+  const interactionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [size, setSize] = useState({ width: 1, height: 1 });
   const applyOptimisticControl = useScopeStore(
     (state) => state.applyOptimisticControl,
@@ -124,7 +128,15 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
         ch3: { auto: false },
         ch4: { auto: false },
       },
-      axes: [],
+      axes: [
+        {
+          stroke: "#d5e0ea",
+          font: "12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+          grid: { show: false },
+          ticks: { show: false },
+          size: 28,
+        },
+      ],
       series: [
         {},
         {
@@ -361,6 +373,30 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
     return true;
   };
 
+  const queueInteractionUpdate = (control: InteractiveControl): void => {
+    pendingInteractionRef.current = control;
+    if (interactionTimerRef.current !== null) {
+      return;
+    }
+
+    interactionTimerRef.current = setTimeout(() => {
+      interactionTimerRef.current = null;
+      const pending = pendingInteractionRef.current;
+      pendingInteractionRef.current = null;
+      if (pending !== null) {
+        client.interactionUpdate(pending);
+      }
+    }, INTERACTION_UPDATE_INTERVAL_MS);
+  };
+
+  const flushInteractionUpdate = (): void => {
+    if (interactionTimerRef.current !== null) {
+      clearTimeout(interactionTimerRef.current);
+      interactionTimerRef.current = null;
+    }
+    pendingInteractionRef.current = null;
+  };
+
   const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
     if (updateDeepPan(event)) {
       return;
@@ -371,7 +407,7 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
       return;
     }
     applyOptimisticControl(control);
-    client.interactionUpdate(control);
+    queueInteractionUpdate(control);
   };
 
   const finishPointer = (event: PointerEvent<HTMLDivElement>) => {
@@ -381,6 +417,7 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
     }
 
     const control = controlForPointer(event);
+    flushInteractionUpdate();
     dragRef.current = null;
     if (control === null) {
       return;
