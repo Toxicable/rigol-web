@@ -38,6 +38,7 @@ export interface ScopeControllerDriver {
   readHorizontalState(priority: ScopeDriverPriority): Promise<HorizontalState>;
   readAcquisitionState(priority: ScopeDriverPriority): Promise<AcquisitionState>;
   readTriggerState(priority: ScopeDriverPriority): Promise<TriggerState>;
+  readRunState(priority: ScopeDriverPriority): Promise<ScopeRunState>;
 
   setChannelEnabled(
     channel: Channel,
