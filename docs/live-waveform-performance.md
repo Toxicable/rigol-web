@@ -56,6 +56,18 @@ Live NORMAL/BYTE reads are therefore restored to 999 points, the DHO804's observ
 
 The same interaction capture also confirms that keeping waveform service active during horizontal drags exposes a different cost: each horizontal offset write invalidates the cached waveform preamble, and the following live frame pays another roughly 22-24 ms `:WAVeform:PREamble?` query. Narrowing or updating preamble metadata during interaction is therefore now a higher-value optimisation than reducing live point count.
 
+## Compound-query probe
+
+The runtime temporarily performs one crude compound-query benchmark before establishing the normal scope session. It uses a throwaway SCPI connection so an unexpected multi-line or otherwise incompatible compound response cannot poison the main transport receive buffer. The probe runs once per process after it succeeds and issues, in order:
+
+1. `:TIMebase:MAIN:SCALe?`
+2. `:TIMebase:MAIN:OFFSet?`
+3. `:TIMebase:MAIN:SCALe?;:TIMebase:MAIN:OFFSet?`
+
+Existing `query:complete` logging provides the elapsed time for each transaction. The probe also emits one `compound-query-probe:result` record containing the two individual responses and the compound response. The important comparison is the compound `elapsedMs` against the sum of the two individual `elapsedMs` values. If the compound request is close to one ordinary text-query floor rather than the sum of two, text batching should become the default for grouped state and measurement reads.
+
+This probe is deliberately temporary diagnostic code, not a permanent extra connection or startup requirement. If the probe itself fails it logs the failure and the normal runtime still connects normally.
+
 ## DHO800 command knobs and prior art
 
 RIGOL's DHO800/DHO900 Programming Guide documents `:WAVeform:POINts` as 1-1000 points in NORMAL mode. `:WAVeform:DATA?` itself has no arguments; source, reading mode, format, and point count are configured separately with `:WAVeform:SOURce`, `:WAVeform:MODE`, `:WAVeform:FORMat`, and `:WAVeform:POINts`. Rigol Web already uses the lowest-payload documented live combination: NORMAL mode plus BYTE format. Source: https://download.rigol.com/en/Manual/Digital%20Oscilloscope/DHO900/DHO800900_ProgrammingGuide_EN.pdf
