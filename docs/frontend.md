@@ -227,15 +227,25 @@ newHorizontalPosition =
   startPosition - dx * (10 * horizontalScale) / W;
 ```
 
-For plot height `H`:
+Vertical channel/trigger markers are clamped to the visible top/bottom edge when their true reference position is outside the plot. Drag math therefore starts from the marker's **displayed** Y coordinate rather than blindly continuing from the far-offscreen domain value.
+
+For plot height `H`, channel scale `s`, displayed channel marker coordinate `startMarkerY`, and pointer movement `dy`:
 
 ```ts
 newChannelOffset =
-  startOffset - dy * (8 * channelScale) / H;
-
-newTriggerLevel =
-  startLevel - dy * (8 * sourceChannelScale) / H;
+  4 * s - (startMarkerY + dy) * (8 * s) / H;
 ```
+
+When the marker is already in range, this is algebraically equivalent to `startOffset - dy * (8 * s) / H`. When the marker is clamped at an edge, the first actual drag movement rebases the offset onto the visible eight-division scale so a trace that is many divisions offscreen can be pulled back into view in one gesture. A click/release with zero movement preserves the original offset.
+
+For an Edge trigger marker using source-channel offset `sourceOffset` and source scale `s`:
+
+```ts
+newTriggerLevel =
+  -sourceOffset + 4 * s - (startMarkerY + dy) * (8 * s) / H;
+```
+
+The same clamped-marker rebasing rule applies to trigger level; zero pointer movement preserves the starting trigger level.
 
 ## DHO804 binary waveform handling
 

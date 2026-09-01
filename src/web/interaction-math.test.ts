@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  channelOffsetFromDrag,
+  channelOffsetFromMarkerDrag,
   horizontalPositionFromDrag,
   horizontalRangeFromDrag,
-  triggerLevelFromDrag,
+  triggerLevelFromMarkerDrag,
 } from "./interaction-math.js";
 
 describe("interaction math", () => {
@@ -24,12 +24,26 @@ describe("interaction math", () => {
     });
   });
 
-  it("converts vertical channel drag using eight divisions", () => {
-    expect(channelOffsetFromDrag(0, -100, 800, 2)).toBeCloseTo(2);
-    expect(channelOffsetFromDrag(0, 100, 800, 2)).toBeCloseTo(-2);
+  it("converts an in-range channel marker drag using eight divisions", () => {
+    expect(channelOffsetFromMarkerDrag(0, 400, -100, 800, 2)).toBeCloseTo(2);
+    expect(channelOffsetFromMarkerDrag(0, 400, 100, 800, 2)).toBeCloseTo(-2);
   });
 
-  it("uses the same vertical sign and division scaling for trigger level", () => {
-    expect(triggerLevelFromDrag(1, -50, 400, 0.5)).toBeCloseTo(1.5);
+  it("rebases a clamped offscreen channel marker onto the visible scale once dragged", () => {
+    expect(channelOffsetFromMarkerDrag(-10, 800, -100, 800, 0.25)).toBeCloseTo(-0.75);
+    expect(channelOffsetFromMarkerDrag(10, 0, 100, 800, 0.25)).toBeCloseTo(0.75);
+  });
+
+  it("does not rebase a clamped channel marker on click without movement", () => {
+    expect(channelOffsetFromMarkerDrag(-10, 800, 0, 800, 0.25)).toBe(-10);
+  });
+
+  it("rebases trigger level from the displayed marker position once dragged", () => {
+    expect(triggerLevelFromMarkerDrag(1, 100, -50, 400, 0.5, 0)).toBeCloseTo(1.5);
+    expect(triggerLevelFromMarkerDrag(50, 400, -100, 400, 0.5, -10)).toBeCloseTo(9);
+  });
+
+  it("does not rebase a clamped trigger marker on click without movement", () => {
+    expect(triggerLevelFromMarkerDrag(50, 400, 0, 400, 0.5, -10)).toBe(50);
   });
 });
