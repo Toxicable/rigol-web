@@ -242,14 +242,17 @@ export class Dho804Driver {
 
   public async setChannelScale(channel: Channel, value: number, priority: ScpiPriority): Promise<void> {
     requireFinite(value, "channel scale");
-    const previousScale = this.channelScales.get(channel);
     await this.command(
       `${channelPrefix(channel)}:SCALe ${value}`,
       priority,
       this.coalesceKeys.channelScale[channel],
+      ScpiOperationKind.Write,
+      () => {
+        const previousScale = this.channelScales.get(channel);
+        this.channelScales.set(channel, value);
+        this.updateCachedChannelScale(channel, previousScale, value);
+      },
     );
-    this.channelScales.set(channel, value);
-    this.updateCachedChannelScale(channel, previousScale, value);
   }
 
   public async readChannelOffset(channel: Channel, priority: ScpiPriority): Promise<number> {
@@ -265,8 +268,9 @@ export class Dho804Driver {
       `${channelPrefix(channel)}:OFFSet ${value}`,
       priority,
       this.coalesceKeys.channelOffset[channel],
+      ScpiOperationKind.Write,
+      () => this.updateCachedChannelOffset(channel, value),
     );
-    this.updateCachedChannelOffset(channel, value);
   }
 
   public async readHorizontalScale(priority: ScpiPriority): Promise<number> {
@@ -278,14 +282,17 @@ export class Dho804Driver {
 
   public async setHorizontalScale(value: number, priority: ScpiPriority): Promise<void> {
     requireFinite(value, "horizontal scale");
-    const previousScale = this.horizontalScale;
     await this.command(
       `:TIMebase:MAIN:SCALe ${value}`,
       priority,
       this.coalesceKeys.horizontalScale,
+      ScpiOperationKind.Write,
+      () => {
+        const previousScale = this.horizontalScale;
+        this.horizontalScale = value;
+        this.updateCachedHorizontalScale(previousScale, value);
+      },
     );
-    this.horizontalScale = value;
-    this.updateCachedHorizontalScale(previousScale, value);
   }
 
   public async readHorizontalPosition(priority: ScpiPriority): Promise<number> {
@@ -297,14 +304,17 @@ export class Dho804Driver {
 
   public async setHorizontalPosition(value: number, priority: ScpiPriority): Promise<void> {
     requireFinite(value, "horizontal position");
-    const previousPosition = this.horizontalPosition;
     await this.command(
       `:TIMebase:MAIN:OFFSet ${value}`,
       priority,
       this.coalesceKeys.horizontalPosition,
+      ScpiOperationKind.Write,
+      () => {
+        const previousPosition = this.horizontalPosition;
+        this.horizontalPosition = value;
+        this.updateCachedHorizontalPosition(previousPosition, value);
+      },
     );
-    this.horizontalPosition = value;
-    this.updateCachedHorizontalPosition(previousPosition, value);
   }
 
   public async readTriggerType(priority: ScpiPriority): Promise<TriggerType> {
@@ -556,9 +566,11 @@ export class Dho804Driver {
     priority: ScpiPriority,
     coalesceKey: ScpiCoalesceKey | null,
     kind = ScpiOperationKind.Write,
+    onExecuted?: () => void,
   ): Promise<void> {
     const execute = async (transport: ScpiTransport): Promise<void> => {
       await transport.command(command);
+      onExecuted?.();
     };
 
     if (priority === ScpiPriority.Interactive) {
