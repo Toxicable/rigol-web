@@ -470,6 +470,13 @@ export class Dho804Driver {
       async (transport, recorder) => {
         await this.ensureWaveformModeFormatPoints(transport, "NORM", "BYTE", pointCount);
 
+        // A horizontal write invalidates live preambles. On the real DHO804,
+        // issuing DATA? immediately after that invalidation can return an empty
+        // block after a long stall. Refresh metadata first on a cache miss so
+        // the scope establishes the new waveform context before binary data.
+        const preamble = await this.liveWaveformPreamble(transport, channel, pointCount);
+        const unit = await this.channelUnit(transport, channel);
+
         // Real DHO804 captures show that chaining multiple DATA? units in one
         // program message returns only the first non-empty waveform. Keep one
         // channel per transaction while still combining source selection and
@@ -484,8 +491,6 @@ export class Dho804Driver {
           );
         }
 
-        const preamble = await this.liveWaveformPreamble(transport, channel, pointCount);
-        const unit = await this.channelUnit(transport, channel);
         return createWaveform(channel, unit, payload, preamble);
       },
     );

@@ -82,9 +82,9 @@ Each browser channel frame retains an independent sequence number.
 
 Channel units are seeded from the initial scope snapshot and cached. NORMAL preambles are cached per channel.
 
-On a preamble cache miss, the driver selects that channel and queries `:WAVeform:PREamble?`. Once the cache is warm, a normal channel read is the single `SOURCE CHx;DATA?` transaction.
+On a preamble cache miss, the driver selects that channel and queries `:WAVeform:PREamble?` **before** issuing `SOURCE CHx;DATA?`. This ordering is deliberate: a real post-pan capture showed that asking for binary data first could stall for 1744 ms and return an empty block, while the immediately following read succeeded. Once the cache is warm, a normal channel read is only the single `SOURCE CHx;DATA?` transaction.
 
-App-driven vertical scale/offset writes update cached Y metadata locally. Horizontal scale/position writes invalidate live preambles; acquisition is paused during the gesture, and the first resumed read refreshes the required preamble metadata before continuing.
+App-driven vertical scale/offset writes update cached Y metadata locally. Horizontal scale/position writes invalidate live preambles; acquisition is paused during the gesture, and the first resumed read for each enabled channel refreshes that channel's preamble before requesting waveform data.
 
 Raw SCPI invalidates waveform setup and metadata caches because arbitrary commands may alter scope state.
 

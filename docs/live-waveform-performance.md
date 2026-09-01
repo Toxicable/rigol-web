@@ -35,6 +35,8 @@ The production live path now uses one program message per enabled channel:
 
 That keeps source selection and waveform query combined while giving the scheduler and live-service pause logic a boundary between channels. It is the only live acquisition path; there is no multi-channel batching option or fallback mode.
 
+A post-fix four-channel capture showed the expected stable single-channel transactions, generally about 28-38 ms each, with every returned block containing 999 bytes.
+
 NORMAL/BYTE preambles remain cached per channel. Channel units are seeded by the initial scope snapshot and cached.
 
 ## Interaction stability
@@ -42,6 +44,10 @@ NORMAL/BYTE preambles remain cached per channel. Channel units are seeded by the
 A real-scope run proved that horizontal writes must not be interleaved with live waveform transfer. During repeated `:TIMebase:MAIN:OFFSet` writes, one `DATA?` returned zero bytes and a later 999-byte block stopped after 985 total bytes, eventually timing out.
 
 Interactive drags therefore pause live waveform acquisition. Commit resumes acquisition after a 200 ms settle delay. Horizontal scale/position writes invalidate cached preambles so the first resumed read obtains fresh X metadata; the drag itself does not issue repeated live `DATA?`/`PREamble?` traffic.
+
+A later run exposed a second post-pan failure mode in the single-channel live path. After a horizontal drag, the first resumed CH1 `SOURCE;DATA?` took 1744.384 ms and returned a zero-length block. The immediately following CH1 read took 29.492 ms and returned all 999 bytes, after which `PREamble?` completed in 23.401 ms. The driver had been attempting binary data before refreshing the invalidated preamble.
+
+The live read order is now deterministic on a metadata cache miss: select the channel, refresh `PREamble?`, then issue `SOURCE CHx;DATA?`. Warm steady-state reads still use only the single `SOURCE CHx;DATA?` transaction. This keeps the metadata refresh as the recovery/readiness step after horizontal mutation instead of using an empty binary transfer as the first probe.
 
 App-driven vertical scale/offset changes update warm Y metadata locally:
 
@@ -60,7 +66,7 @@ Steady-state query policy:
 
 - live waveform: one `SOURCE CHx;DATA?` compound transaction per enabled channel;
 - vertical metadata: `PREamble?` only on a cache miss;
-- horizontal metadata: one fresh `PREamble?` after a committed horizontal interaction;
+- horizontal metadata: one fresh `PREamble?` per enabled channel after a committed horizontal interaction, before that channel's first resumed `DATA?`;
 - measurements: six native statistic queries per selected measurement;
 - trigger-type transition: complete trigger-state readback because Edge-specific fields may not be known locally;
 - deep capture: still performs a fresh hardware-state read before RAW capture;
