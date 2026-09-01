@@ -39,18 +39,11 @@ function validateEndpoint(name: string, endpoint: InstrumentEndpoint): void {
   }
 }
 
-function scpiDebugEnabled(): boolean {
-  return process.env.RIGOL_SCPI_DEBUG === "1";
-}
-
 function debugLifecycle(
   event: string,
   instrument: SupportedInstrument,
   entry: InstrumentEntry,
 ): void {
-  if (!scpiDebugEnabled()) {
-    return;
-  }
   console.debug(`[SCPI] instrument ${event}`, {
     instrument,
     subscribers: entry.subscribers.size,

@@ -53,15 +53,14 @@ the open-source ADB client to the container image.
 Android documents key code 223 as `KEYCODE_SLEEP`:
 https://developer.android.com/reference/android/view/KeyEvent#KEYCODE_SLEEP
 
-For SCPI/TCP troubleshooting, temporarily set `RIGOL_SCPI_DEBUG=1`. Debug mode
-logs instrument subscribe/unsubscribe transitions, runtime start/stop causes,
-query timing, TCP chunk sizes, binary-block receive progress, and buffered-byte
-counts at a timeout. Leave it at the default `0` for normal use. Deliberate
-runtime shutdown now treats an in-flight SCPI cancellation as cancellation
-rather than printing it as an operation failure; genuine transport failures
-and query timeouts remain errors. A waveform timeout also reports how many TCP
-bytes arrived and how many remained buffered, which helps distinguish a scope
-that sent nothing from a partial/malformed binary response.
+SCPI/TCP diagnostics are always enabled. The server logs instrument
+subscribe/unsubscribe transitions, runtime start/stop causes, query timing, TCP
+chunk sizes, binary-block receive progress, and buffered-byte counts at a
+timeout. Deliberate runtime shutdown treats an in-flight SCPI cancellation as
+cancellation rather than printing it as an operation failure; genuine transport
+failures and query timeouts remain errors. A waveform timeout also reports how
+many TCP bytes arrived and how many remained buffered, which helps distinguish
+a scope that sent nothing from a partial/malformed binary response.
 
 ```bash
 docker compose up --build --detach
