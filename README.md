@@ -33,6 +33,13 @@ than calculated from the reduced live plot data. The measurement selector is
 stacked below the waveform column and does not extend beneath the right-side
 scope controls.
 
+The waveform panel also renders a compact vertical-scale legend for every
+enabled channel using the same SI formatting as the channel controls. While an
+edge-trigger level marker is being dragged, a channel-coloured dashed horizontal
+guide follows the optimistic trigger position; the guide is browser-only and
+does not add any SCPI query traffic. The acquisition toolbar uses one Run/Stop
+button whose action follows the current scope run state.
+
 RIGOL documents the statistic query in the DHO800/DHO900 Programming Guide:
 https://download.rigol.com/en/Manual/Digital%20Oscilloscope/DHO800/DHO800900_ProgrammingGuide_EN.pdf
 
@@ -42,16 +49,20 @@ Copy `.env.example` to `.env`, then set `RIGOL_SCOPE_HOST` and
 `RIGOL_SCOPE_PORT` to the DHO804's verified raw SCPI/TCP endpoint. Configure
 `RIGOL_DMM_HOST` and `RIGOL_DMM_PORT` for the DM858E endpoint.
 
-The DHO804 **Sleep** button is deliberately separate from SCPI. The runtime
-container includes the Debian `adb` client and sends Android `KEYCODE_SLEEP`
-(`223`) to the scope over ADB. `RIGOL_SCOPE_ADB_PORT` defaults to `55555` and
-can be changed if the scope exposes ADB elsewhere. If ADB is disabled or not
-reachable, the UI reports the failed sleep request rather than pretending the
-scope slept. This adds no paid software or hardware dependency; it only adds
-the open-source ADB client to the container image.
+The DHO804 **Sleep** and **Wake** buttons are deliberately separate from SCPI.
+The runtime container includes the Debian `adb` client and sends Android
+`KEYCODE_SLEEP` (`223`) or `KEYCODE_WAKEUP` (`224`) to the scope over ADB.
+`RIGOL_SCOPE_ADB_PORT` defaults to `55555` and can be changed if the scope
+exposes ADB elsewhere. The dedicated wake key is used instead of the Android
+power-toggle key so requesting Wake has no effect when the scope is already
+awake. If ADB is disabled or not reachable, the UI reports the failed power
+request rather than pretending the scope changed state. This adds no paid
+software or hardware dependency; it only uses the open-source ADB client
+already present in the runtime image.
 
-Android documents key code 223 as `KEYCODE_SLEEP`:
+Android documents the key codes here:
 https://developer.android.com/reference/android/view/KeyEvent#KEYCODE_SLEEP
+https://developer.android.com/reference/android/view/KeyEvent#KEYCODE_WAKEUP
 
 SCPI/TCP diagnostics are always enabled. The server logs instrument
 subscribe/unsubscribe transitions, runtime start/stop causes, query timing, TCP
@@ -70,5 +81,5 @@ The HTTP and WebSocket service listens on port `3000` in the container. Its
 `/health` endpoint verifies only that the Node process is running; it remains
 healthy while the scope is disconnected.
 
-The scope statistics and diagnostics changes add no hardware, paid service, or
-runtime dependency. Cost impact: **$0**.
+The scope UI, power controls, statistics and diagnostics changes add no
+hardware, paid service, or runtime dependency. Cost impact: **$0**.
