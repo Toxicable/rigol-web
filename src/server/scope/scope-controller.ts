@@ -4,13 +4,13 @@ import type {
   HorizontalState,
   MeasurementSpec,
   MeasurementValue,
-  ScopeRunState,
   ScopeState,
   TriggerState,
 } from "../../shared/scope-types.js";
 import {
   Channel,
   EdgeSlope,
+  ScopeRunState,
   TriggerType,
 } from "../../shared/scope-types.js";
 import type { NonEmptyArray } from "../../shared/websocket-protocol.js";
@@ -38,7 +38,6 @@ export interface ScopeControllerDriver {
   readHorizontalState(priority: ScopeDriverPriority): Promise<HorizontalState>;
   readAcquisitionState(priority: ScopeDriverPriority): Promise<AcquisitionState>;
   readTriggerState(priority: ScopeDriverPriority): Promise<TriggerState>;
-  readRunState(priority: ScopeDriverPriority): Promise<ScopeRunState>;
 
   setChannelEnabled(
     channel: Channel,
@@ -195,24 +194,27 @@ export class ScopeController {
   }
 
   public async performAcquisitionAction(action: AcquisitionAction): Promise<void> {
-    const revision = this.incrementMutationRevision();
+    this.incrementMutationRevision();
+    let runState: ScopeRunState;
 
     switch (action) {
       case AcquisitionAction.Run:
         await this.driver.run();
+        runState = ScopeRunState.Running;
         break;
       case AcquisitionAction.Stop:
         await this.driver.stop();
+        runState = ScopeRunState.Stopped;
         break;
       case AcquisitionAction.Single:
         await this.driver.single();
+        runState = ScopeRunState.Waiting;
         break;
       default:
         throw new Error(`Unsupported acquisition action: ${String(action)}`);
     }
 
-    const runState = await this.driver.readRunState(PRIORITY_IMMEDIATE);
-    this.applyReconciledUpdate(revision, (state) => ({ ...state, runState }));
+    this.stateStore.update((state) => ({ ...state, runState }));
   }
 
   public async readMeasurements(
