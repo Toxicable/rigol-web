@@ -9,9 +9,9 @@ npm run dev
 ```
 
 It starts the TypeScript backend with `.env` loaded and Vite on
-`http://localhost:5173`. Vite proxies `/ws` and `/health` to the backend on
-port `3000`, so browser UI edits hot-reload without rebuilding the Docker
-image.
+`http://localhost:5173`. Vite proxies `/ws`, `/health` and `/api` to the
+backend on port `3000`, so browser UI edits hot-reload without rebuilding the
+Docker image.
 
 To use the authenticated external hostname during development, run:
 
