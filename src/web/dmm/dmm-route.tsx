@@ -9,6 +9,7 @@ import {
   dmmControlMatchesState,
 } from "../components/dmm/dmm-controls.js";
 import { DmmReading } from "../components/dmm/dmm-reading.js";
+import { InstrumentHeader } from "../components/instrument-header.js";
 import type { ScopeWebSocketClient } from "../websocket-client.js";
 import "./dmm.css";
 import { bindDmmRoute } from "./dmm-route-binding.js";
@@ -84,17 +85,19 @@ export function DmmRouteView({
 }: DmmRouteViewProps) {
   return (
     <section className="dmm-route">
-      <header className="dmm-toolbar">
-        <div>
-          <strong>DM858E</strong>
-          {connection.kind === DmmBrowserConnectionKind.Connected ? (
-            <span className="dmm-identity">
-              {connection.info.manufacturer} · {connection.info.serialNumber}
-            </span>
-          ) : null}
+      <InstrumentHeader>
+        <div className="dmm-toolbar-content">
+          <div>
+            <strong>DM858E</strong>
+            {connection.kind === DmmBrowserConnectionKind.Connected ? (
+              <span className="dmm-identity">
+                {connection.info.manufacturer} · {connection.info.serialNumber}
+              </span>
+            ) : null}
+          </div>
+          <span className="status-pill" aria-live="polite">{connectionLabel(connection)}</span>
         </div>
-        <span className="status-pill" aria-live="polite">{connectionLabel(connection)}</span>
-      </header>
+      </InstrumentHeader>
 
       {connection.kind === DmmBrowserConnectionKind.Connected ? (
         <>
