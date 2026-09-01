@@ -34,13 +34,20 @@ export function horizontalRangeFromDrag(
 }
 
 export function channelOffsetFromMarkerDrag(
+  startOffset: number,
   startMarkerY: number,
   deltaY: number,
   plotHeight: number,
   channelScale: number,
 ): number {
+  if (!Number.isFinite(startOffset)) {
+    throw new Error("Channel offset must be finite");
+  }
   if (!(plotHeight > 0) || !(channelScale > 0)) {
     throw new Error("Plot height and channel scale must be positive");
+  }
+  if (deltaY === 0) {
+    return startOffset;
   }
 
   const markerY = startMarkerY + deltaY;
@@ -48,17 +55,22 @@ export function channelOffsetFromMarkerDrag(
 }
 
 export function triggerLevelFromMarkerDrag(
+  startLevel: number,
   startMarkerY: number,
   deltaY: number,
   plotHeight: number,
   sourceChannelScale: number,
   sourceChannelOffset: number,
 ): number {
-  if (!Number.isFinite(sourceChannelOffset)) {
-    throw new Error("Source channel offset must be finite");
+  if (!Number.isFinite(startLevel) || !Number.isFinite(sourceChannelOffset)) {
+    throw new Error("Trigger level and source channel offset must be finite");
+  }
+  if (deltaY === 0) {
+    return startLevel;
   }
 
   return -sourceChannelOffset + channelOffsetFromMarkerDrag(
+    startLevel,
     startMarkerY,
     deltaY,
     plotHeight,
