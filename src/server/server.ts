@@ -105,6 +105,8 @@ gateway = new WebSocketGateway(server, initialScopeConnection, {
   waveformHandlers: {
     requestDeepCapture: (requestId) => scopeRuntime.requestDeepCapture(requestId),
     requestViewport: (request) => scopeRuntime.requestViewport(request),
+    pauseLiveWaveform: () => scopeRuntime.pauseLiveWaveform(),
+    resumeLiveWaveform: () => scopeRuntime.resumeLiveWaveform(),
   },
   dmmHandlers: {
     setControl: (control) => dmmRuntime.setControl(control),
