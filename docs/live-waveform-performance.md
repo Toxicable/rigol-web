@@ -25,9 +25,11 @@ Deep capture remains an exception: it currently requests a full scope snapshot b
 
 ## Interaction stability
 
-A real-scope run after keeping live acquisition active during panning showed the scope/live path appearing to die while horizontal position was being dragged. Treat interleaving horizontal timebase mutation with repeated live `DATA?` acquisition as unsafe until proven otherwise.
+A real-scope run after keeping live acquisition active during panning showed the scope/live path appearing to die while horizontal position was being dragged. Treat interleaving interactive scope mutation with repeated live `DATA?` acquisition as unsafe until proven otherwise.
 
-The server therefore wires the gateway interaction pause/resume hooks again. Interactive drag updates pause live waveform acquisition; the interaction commit resumes it after the existing 200 ms settle delay. This restores the previously stable transaction boundary instead of asking the DHO804 to process live waveform reads while its interactive settings are still changing.
+The server therefore wires the gateway interaction pause/resume hooks again. Interactive drag updates pause live waveform acquisition; the interaction commit resumes it after the existing 200 ms settle delay. This restores the previously stable transaction boundary instead of asking the DHO804 to process live waveform reads while interactive writes are still arriving.
+
+The experimental synthesized horizontal preamble update was also removed. Horizontal scale/position writes now invalidate cached live preambles. Because acquisition is paused for the gesture, those invalidations do not create one `PREamble?` query per drag update: the first live frame after commit performs one fresh hardware `PREamble?`, then the cache is warm again.
 
 This is a stability rule, not evidence that the DHO804 fundamentally cannot interleave those operations. Revisit only with a controlled real-scope test.
 
@@ -39,21 +41,18 @@ Units are seeded from the initial channel snapshot and cached. NORMAL/BYTE pream
 
 With multiple enabled channels, source selection is also required when the active source changes.
 
-App-driven scale/offset/timebase writes no longer blindly invalidate a warm NORMAL preamble. The driver updates cached metadata locally when the relationship is known and falls back to invalidation when it is not safe:
+App-driven vertical scale/offset writes update cached Y metadata locally:
 
 - Vertical scale: `YINCrement` is scaled by `newScale / oldScale`; `YORigin` is inversely scaled so the existing vertical offset is preserved.
 - Vertical offset: `YORigin = VerticalOffset / YINCrement`.
-- Main/Roll horizontal scale: `XINCrement` is scaled by `newScale / oldScale`; `XORigin` is shifted by the corresponding five-division left-edge change.
-- Main/Roll horizontal position: `XORigin` is shifted by the position delta.
-- XY mode or missing/unsafe metadata: invalidate and query a fresh preamble.
-- Raw SCPI: invalidate waveform setup, unit/scale metadata, and cached preambles because arbitrary commands may have changed the scope.
 
-RIGOL's DHO800/DHO900 Programming Guide explicitly defines NORMAL-mode `YINCrement = VerticalScale/7500` and `YORigin = VerticalOffset/YINCrement`, and defines the preamble fields as `<xincrement>,<xorigin>,<xreference>,<yincrement>,<yorigin>,<yreference>`. The user guide defines horizontal position as the trigger position relative to the center of the display, and the programming guide uses the ten-division main-window relationship `LeftTime = 5 × MainScale - MainOffset` / `RightTime = 5 × MainScale + MainOffset`. Sources:
+Horizontal scale/position writes deliberately invalidate the live preamble and take one fresh preamble after the interaction commits. Raw SCPI invalidates waveform setup, unit/scale metadata, and cached preambles because arbitrary commands may have changed the scope.
+
+RIGOL's DHO800/DHO900 Programming Guide explicitly defines NORMAL-mode `YINCrement = VerticalScale/7500` and `YORigin = VerticalOffset/YINCrement`, and defines the preamble fields as `<xincrement>,<xorigin>,<xreference>,<yincrement>,<yorigin>,<yreference>`. Source:
 
 - https://download.rigol.com/en/Manual/Digital%20Oscilloscope/DHO800/DHO800900_ProgrammingGuide_EN.pdf
-- https://static.eleshop.nl/mage/media/downloads/DHO800-Series_userguide_EN.pdf
 
-The relative-update implementation deliberately does not hard-code the documented vertical divisor; it transforms the preamble already returned by the actual DHO804 firmware. Horizontal transforms still need real-scope validation, especially the sign and exact behavior of `XORigin` movement.
+The vertical relative-update implementation deliberately does not hard-code the documented divisor; it transforms the preamble already returned by the actual DHO804 firmware.
 
 ## SCPI timing instrumentation
 
@@ -100,7 +99,8 @@ Steady-state live traffic after this pass is intentionally narrow:
 
 - initial connection: one full scope snapshot;
 - live waveform: `DATA?` per frame, plus a write-only source select when switching channels;
-- live metadata: one preamble on cache miss; app-driven Main/Roll horizontal and vertical scale/offset changes update a warm cache locally;
+- vertical live metadata: one preamble on cache miss; app-driven vertical scale/offset changes update a warm cache locally;
+- horizontal live metadata: horizontal scale/position invalidates preamble; one fresh `PREamble?` is taken after the interaction resumes;
 - interactive drags: live acquisition is paused until commit to keep the DHO804 transaction stream stable;
 - measurements: six statistic queries per selected measurement at the existing measurement cadence, now measured as a complete poll;
 - trigger type change: one complete trigger-state readback after selecting Edge;
@@ -126,7 +126,7 @@ Norbert Kiszka's DHO800/900 firmware-mod changelog explicitly claims optimizatio
 
 1. Capture the two startup `*:summary` probe lines and use their median/spread, not the original single comparison, to decide whether batching/source+query chaining is useful.
 2. Pan horizontal position and scale and verify the scope/live path remains stable with acquisition paused during the drag and resumed after commit.
-3. Confirm horizontal waveform X alignment after resume; the local `XORigin`/`XINCrement` transform remains experimental until this passes on the real DHO804.
+3. Confirm the first resumed frame performs one fresh `PREamble?` and the waveform X alignment is correct.
 4. Enable one measurement, then several, and capture `measurements:complete` plus the individual statistic timings to quantify actual link occupancy.
 5. After hardware-truth requirements are clarified, reduce deep-capture preflight from a full scope snapshot to only the fields it genuinely needs.
 
