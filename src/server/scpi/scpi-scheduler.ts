@@ -64,10 +64,6 @@ const priorityValues = [
   ScpiPriority.Background,
 ] as const;
 
-function scpiDebugEnabled(): boolean {
-  return process.env.RIGOL_SCPI_DEBUG === "1";
-}
-
 export class ScpiScheduler {
   private readonly queues = new Map<ScpiPriority, QueuedOperation[]>(
     priorityValues.map((priority) => [priority, []]),
@@ -248,9 +244,7 @@ export class ScpiScheduler {
           : String(error),
       };
       if (this.stopped) {
-        if (scpiDebugEnabled()) {
-          console.debug("[SCPI] operation cancelled during scheduler stop", detail);
-        }
+        console.debug("[SCPI] operation cancelled during scheduler stop", detail);
       } else {
         console.error("SCPI operation failed", detail);
       }
