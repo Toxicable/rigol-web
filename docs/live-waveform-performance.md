@@ -27,12 +27,19 @@ For one enabled channel after setup is warm, the expected path is just `:WAVefor
 
 ## Remaining limits
 
-Enabled channels are still acquired serially, so per-channel cadence necessarily falls as more channels are enabled. The next benchmark should measure scope-side latency of source selection and `:WAVeform:DATA?` separately before changing the renderer or point count.
+Enabled channels are still acquired serially, so per-channel cadence necessarily falls as more channels are enabled. The DHO800 waveform source is a single selected source, so there is no documented all-analog-channel `:WAVeform:DATA?` request. The source-select command is write-only in our transport and does not wait for a scope response; therefore combining source selection with `DATA?` can save a small host write/packet cost but does not remove a SCPI response round trip. The unavoidable steady-state cost is one `DATA?` response per enabled channel.
 
-Possible later work:
+## Next opportunities
 
-- verify on real DHO804 hardware whether source selection and `:WAVeform:DATA?` can safely be combined in one SCPI program message;
-- benchmark a smaller live point count only if binary transfer time is material;
-- design an explicit strategy for detecting front-panel/external changes without restoring high-rate full-state polling.
+Prioritise these before renderer work:
+
+1. **Remove post-write control reconciliation traffic where local state is sufficient.** `ScopeController` still performs readbacks after discrete controls and interaction commits. A channel scale/offset commit can read a six-query channel snapshot plus trigger state; horizontal-scale commit reads horizontal and acquisition state. If we accept local state as authoritative for normal UI writes, these bursts can be removed and authoritative state can be read only for operations that genuinely need it (for example deep capture already reads fresh scope state).
+2. **Reduce explicit event-loop yield overhead without sacrificing I/O fairness.** `LiveWaveformService` currently uses `setTimeout(..., 0)` after every channel and again after each completed cycle, meaning the last channel gets two explicit timer yields. Prefer one fairness yield per channel/cycle boundary, and benchmark `setImmediate` on Node rather than zero-delay timers.
+3. **Treat measurement statistics as optional SCPI load.** When measurements are selected, the browser polls once per second and the driver issues six statistic queries per measurement (`current`, `min`, `max`, `average`, `deviation`, `count`). This does not affect the default empty-measurement case, but it can materially consume SCPI bandwidth when several measurements are enabled. Consider a slower statistics cadence, a fast current-value cadence plus slower full statistics, or explicit/manual statistics refresh depending on desired UI semantics.
+4. **Benchmark live point count.** NORMAL mode allows at most 1,000 points and Rigol Web currently requests 999. Compare `DATA?` duration at 999, 750, 500 and 250 points. Only reduce the default or make it channel-count dependent if the real scope shows transfer time scaling materially with point count; otherwise keep the resolution.
+5. **Preamble invalidation can be narrower.** Horizontal writes currently clear every channel's complete preamble cache. X metadata is common horizontal state while each channel's Y metadata remains valid. At minimum, one post-horizontal-change preamble read can refresh shared X metadata while retaining other channels' Y metadata instead of forcing one preamble query per enabled channel. A further optimisation could update NORMAL-mode metadata from known control deltas and use a later authoritative read only as validation, but that needs real-scope verification before relying on formulas across firmware versions.
+6. **Compound source-select + data query is a minor experimental optimisation.** Verify whether the DHO804 accepts a compound program message such as `:WAVeform:SOURce CHANnel2;:WAVeform:DATA?`. Because source selection currently has no response, the likely gain is small compared with `DATA?` itself.
+
+Avoid multiple simultaneous scope sockets as a first-line optimisation. It is not documented as a way to parallelise per-channel waveform reads and would complicate command ordering/state ownership; only bench it if single-socket `DATA?` latency proves to be the hard ceiling.
 
 Do not optimise uPlot rendering unless a later trace shows browser main-thread or paint/composite pressure after acquisition cadence is increased.
