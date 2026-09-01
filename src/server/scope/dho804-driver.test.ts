@@ -79,6 +79,22 @@ function respondChannel(
   respond(transport, `${prefix}:PROBe?`, "10");
 }
 
+function respondMeasurementStatistics(
+  transport: ScriptedTransport,
+  item: string,
+  channel: Channel,
+  values: readonly [string, string, string, string, string, string],
+): void {
+  const source = `CHANnel${channel}`;
+  const [current, minimum, maximum, average, deviation, count] = values;
+  respond(transport, `:MEASure:STATistic:ITEM? CURRent,${item},${source}`, current);
+  respond(transport, `:MEASure:STATistic:ITEM? MINimum,${item},${source}`, minimum);
+  respond(transport, `:MEASure:STATistic:ITEM? MAXimum,${item},${source}`, maximum);
+  respond(transport, `:MEASure:STATistic:ITEM? AVERages,${item},${source}`, average);
+  respond(transport, `:MEASure:STATistic:ITEM? DEViation,${item},${source}`, deviation);
+  respond(transport, `:MEASure:STATistic:ITEM? CNT,${item},${source}`, count);
+}
+
 describe("Dho804Driver", () => {
   it("identifies only an exact DHO804", async () => {
     const transport = new ScriptedTransport();
@@ -229,15 +245,63 @@ describe("Dho804Driver", () => {
     await expect(scriptedDriver(transport).executeRawScpi(":SYSTem:ERRor?")).resolves.toBe("0,No error");
   });
 
-  it("preserves measurement order", async () => {
+  it("preserves measurement order with native statistics", async () => {
     const transport = new ScriptedTransport();
-    respond(transport, ":MEASure:ITEM? VPP,CHANnel1", "2.5");
-    respond(transport, ":MEASure:ITEM? FREQuency,CHANnel2", "1000");
+    respondMeasurementStatistics(
+      transport,
+      "VPP",
+      Channel.Ch1,
+      ["2.5", "2.4", "2.6", "2.51", "0.02", "17"],
+    );
+    respondMeasurementStatistics(
+      transport,
+      "FREQuency",
+      Channel.Ch2,
+      ["1000", "995", "1005", "1000.5", "2.2", "17"],
+    );
     const values = await scriptedDriver(transport).readMeasurements([
       { kind: MeasurementKind.Vpp, channel: Channel.Ch1 },
       { kind: MeasurementKind.Frequency, channel: Channel.Ch2 },
     ], ScpiPriority.Background);
-    expect(values.map((value) => value.value)).toEqual([2.5, 1000]);
+    expect(values).toEqual([
+      {
+        kind: MeasurementKind.Vpp,
+        channel: Channel.Ch1,
+        statistics: {
+          current: 2.5,
+          minimum: 2.4,
+          maximum: 2.6,
+          average: 2.51,
+          deviation: 0.02,
+          count: 17,
+        },
+      },
+      {
+        kind: MeasurementKind.Frequency,
+        channel: Channel.Ch2,
+        statistics: {
+          current: 1000,
+          minimum: 995,
+          maximum: 1005,
+          average: 1000.5,
+          deviation: 2.2,
+          count: 17,
+        },
+      },
+    ]);
+  });
+
+  it("configures scope-native statistics for selected measurements", async () => {
+    const transport = new ScriptedTransport();
+    await scriptedDriver(transport).setMeasurements([
+      { kind: MeasurementKind.Vpp, channel: Channel.Ch1 },
+    ], ScpiPriority.Normal);
+    expect(transport.commands).toEqual([
+      ":MEASure:CLEar",
+      ":MEASure:STATistic:RESet",
+      ":MEASure:ITEM VPP,CHANnel1",
+      ":MEASure:STATistic:ITEM VPP,CHANnel1",
+    ]);
   });
 
   it("converts NORMAL BYTE data using preamble Y metadata", async () => {
