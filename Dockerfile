@@ -17,6 +17,10 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 
+RUN apt-get update \
+  && apt-get install --yes --no-install-recommends adb \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY --from=build --chown=node:node /app/package.json ./
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
