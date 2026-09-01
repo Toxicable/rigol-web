@@ -18,7 +18,15 @@ import {
 
 const DEFAULT_RECONNECT_DELAY_MS = 2_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 3_000;
-const COMPOUND_QUERY_PROBE = ":TIMebase:MAIN:SCALe?;:TIMebase:MAIN:OFFSet?";
+const SCPI_PROBE_ROUNDS = 10;
+const SCALE_QUERY_PROBE = ":TIMebase:MAIN:SCALe?";
+const OFFSET_QUERY_PROBE = ":TIMebase:MAIN:OFFSet?";
+const COMPOUND_QUERY_PROBE = `${SCALE_QUERY_PROBE};${OFFSET_QUERY_PROBE}`;
+const WAVEFORM_SOURCE_PROBE = ":WAVeform:SOURce CHANnel1";
+const WAVEFORM_OTHER_SOURCE_PROBE = ":WAVeform:SOURce CHANnel2";
+const WAVEFORM_DATA_PROBE = ":WAVeform:DATA?";
+const COMPOUND_WAVEFORM_PROBE = `${WAVEFORM_SOURCE_PROBE};${WAVEFORM_DATA_PROBE}`;
+const WAVEFORM_PROBE_POINTS = 999;
 
 interface FailureSignal {
   promise: Promise<Error>;
@@ -35,6 +43,14 @@ interface ScopeSession {
   deep: DeepCaptureService;
   unsubscribeState: () => void;
   failure: FailureSignal;
+}
+
+interface TimingSummary {
+  count: number;
+  medianMs: number;
+  meanMs: number;
+  minMs: number;
+  maxMs: number;
 }
 
 export interface ScopeRuntimeOptions {
@@ -73,6 +89,35 @@ function createFailureSignal(): FailureSignal {
   };
 }
 
+function summarizeTimings(values: number[]): TimingSummary {
+  if (values.length === 0) {
+    throw new Error("SCPI timing summary requires at least one sample");
+  }
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  const lower = sorted[middle - 1];
+  const upper = sorted[middle];
+  if (upper === undefined) {
+    throw new Error("SCPI timing summary has no median sample");
+  }
+  const medianMs = sorted.length % 2 === 0
+    ? ((lower ?? upper) + upper) / 2
+    : upper;
+  return {
+    count: values.length,
+    medianMs,
+    meanMs: values.reduce((sum, value) => sum + value, 0) / values.length,
+    minMs: sorted[0] ?? upper,
+    maxMs: sorted[sorted.length - 1] ?? upper,
+  };
+}
+
+async function timeOperation<T>(operation: () => Promise<T>): Promise<{ elapsedMs: number; value: T }> {
+  const startedAt = performance.now();
+  const value = await operation();
+  return { elapsedMs: performance.now() - startedAt, value };
+}
+
 export class ScopeRuntime {
   private readonly host: string;
   private readonly port: number;
@@ -87,7 +132,7 @@ export class ScopeRuntime {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryResolve: (() => void) | null = null;
   private disconnectedReason = "Scope runtime inactive";
-  private compoundQueryProbeComplete = false;
+  private scpiPerformanceProbeComplete = false;
 
   public constructor(options: ScopeRuntimeOptions) {
     if (options.host.trim().length === 0) {
@@ -246,7 +291,7 @@ export class ScopeRuntime {
       scheduler = new ScpiScheduler(transport);
       const driver = new Dho804Driver(scheduler);
       const info = await driver.identify();
-      await this.runCompoundQueryProbeOnce(driver);
+      await this.runScpiPerformanceProbeOnce(driver, transport);
       const initialState = await driver.readScopeState(ScpiPriority.Normal);
       const stateStore = new ScopeStateStore(initialState);
       const controller = new ScopeController(driver, stateStore);
@@ -290,23 +335,116 @@ export class ScopeRuntime {
     }
   }
 
-  private async runCompoundQueryProbeOnce(driver: Dho804Driver): Promise<void> {
-    if (this.compoundQueryProbeComplete) {
+  private async runScpiPerformanceProbeOnce(
+    driver: Dho804Driver,
+    transport: ScpiTransport,
+  ): Promise<void> {
+    if (this.scpiPerformanceProbeComplete) {
       return;
     }
-    this.compoundQueryProbeComplete = true;
-    console.info(`[SCPI] compound-query-probe:start ${JSON.stringify({ command: COMPOUND_QUERY_PROBE })}`);
+    this.scpiPerformanceProbeComplete = true;
 
     try {
-      const response = await driver.executeRawScpi(COMPOUND_QUERY_PROBE);
-      console.info(`[SCPI] compound-query-probe:result ${JSON.stringify({ response })}`);
-      if (!response.includes(";")) {
-        throw new Error(`Compound query response did not contain a semicolon: ${response}`);
-      }
+      await this.runCompoundTextQueryProbe(driver);
+      await this.runWaveformSourceQueryProbe(transport);
     } catch (error) {
-      console.warn(`[SCPI] compound-query-probe:failed ${JSON.stringify({ error: errorMessage(error) })}`);
+      console.warn(`[SCPI] performance-probe:failed ${JSON.stringify({ error: errorMessage(error) })}`);
       throw error;
     }
+  }
+
+  private async runCompoundTextQueryProbe(driver: Dho804Driver): Promise<void> {
+    const compoundMs: number[] = [];
+    const separateMs: number[] = [];
+    console.info(`[SCPI] compound-query-probe:start ${JSON.stringify({ rounds: SCPI_PROBE_ROUNDS })}`);
+
+    const runCompound = async (): Promise<void> => {
+      const measured = await timeOperation(() => driver.executeRawScpi(COMPOUND_QUERY_PROBE));
+      const fields = measured.value.split(";");
+      if (fields.length !== 2) {
+        throw new Error(`Compound query response did not contain two fields: ${measured.value}`);
+      }
+      compoundMs.push(measured.elapsedMs);
+    };
+
+    const runSeparate = async (): Promise<void> => {
+      const measured = await timeOperation(async () => {
+        await driver.executeRawScpi(SCALE_QUERY_PROBE);
+        await driver.executeRawScpi(OFFSET_QUERY_PROBE);
+      });
+      separateMs.push(measured.elapsedMs);
+    };
+
+    for (let round = 0; round < SCPI_PROBE_ROUNDS; round += 1) {
+      if (round % 2 === 0) {
+        await runSeparate();
+        await runCompound();
+      } else {
+        await runCompound();
+        await runSeparate();
+      }
+    }
+
+    console.info(`[SCPI] compound-query-probe:summary ${JSON.stringify({
+      rounds: SCPI_PROBE_ROUNDS,
+      compound: summarizeTimings(compoundMs),
+      separate: summarizeTimings(separateMs),
+    })}`);
+  }
+
+  private async runWaveformSourceQueryProbe(transport: ScpiTransport): Promise<void> {
+    await transport.command(":WAVeform:MODE NORM");
+    await transport.command(":WAVeform:FORMat BYTE");
+    await transport.command(`:WAVeform:POINts ${WAVEFORM_PROBE_POINTS}`);
+
+    const compoundMs: number[] = [];
+    const separateMs: number[] = [];
+    console.info(`[SCPI] waveform-source-query-probe:start ${JSON.stringify({
+      rounds: SCPI_PROBE_ROUNDS,
+      points: WAVEFORM_PROBE_POINTS,
+    })}`);
+
+    const validatePayload = (payload: Uint8Array): void => {
+      if (payload.byteLength !== WAVEFORM_PROBE_POINTS) {
+        throw new Error(
+          `Waveform source-query probe expected ${WAVEFORM_PROBE_POINTS} bytes, got ${payload.byteLength}`,
+        );
+      }
+    };
+
+    const runCompound = async (): Promise<void> => {
+      await transport.command(WAVEFORM_OTHER_SOURCE_PROBE);
+      const measured = await timeOperation(() => transport.queryBinary(COMPOUND_WAVEFORM_PROBE));
+      validatePayload(measured.value);
+      compoundMs.push(measured.elapsedMs);
+    };
+
+    const runSeparate = async (): Promise<void> => {
+      await transport.command(WAVEFORM_OTHER_SOURCE_PROBE);
+      const measured = await timeOperation(async () => {
+        await transport.command(WAVEFORM_SOURCE_PROBE);
+        return transport.queryBinary(WAVEFORM_DATA_PROBE);
+      });
+      validatePayload(measured.value);
+      separateMs.push(measured.elapsedMs);
+    };
+
+    for (let round = 0; round < SCPI_PROBE_ROUNDS; round += 1) {
+      if (round % 2 === 0) {
+        await runSeparate();
+        await runCompound();
+      } else {
+        await runCompound();
+        await runSeparate();
+      }
+    }
+
+    console.info(`[SCPI] waveform-source-query-probe:summary ${JSON.stringify({
+      rounds: SCPI_PROBE_ROUNDS,
+      points: WAVEFORM_PROBE_POINTS,
+      compound: summarizeTimings(compoundMs),
+      separate: summarizeTimings(separateMs),
+    })}`);
   }
 
   private async connectTransport(transport: ScpiTransport): Promise<void> {
