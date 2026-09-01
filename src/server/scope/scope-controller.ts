@@ -194,7 +194,7 @@ export class ScopeController {
   }
 
   public async performAcquisitionAction(action: AcquisitionAction): Promise<void> {
-    this.incrementMutationRevision();
+    const revision = this.incrementMutationRevision();
     let runState: ScopeRunState;
 
     switch (action) {
@@ -214,7 +214,7 @@ export class ScopeController {
         throw new Error(`Unsupported acquisition action: ${String(action)}`);
     }
 
-    this.stateStore.update((state) => ({ ...state, runState }));
+    this.applyReconciledUpdate(revision, (state) => ({ ...state, runState }));
   }
 
   public async readMeasurements(
