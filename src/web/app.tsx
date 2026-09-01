@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { NavLink, Route, Routes } from "react-router-dom";
+import { Route, Routes } from "react-router-dom";
 
 import { DmmRoute } from "./dmm/dmm-route.js";
 import { ScopeRoute } from "./scope-route.js";
@@ -32,24 +32,6 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <header className="instrument-shell">
-        <strong>Rigol Web</strong>
-        <nav className="instrument-switcher" aria-label="Instrument">
-          <NavLink
-            to="/"
-            end
-            className={({ isActive }) => isActive ? "instrument-link active" : "instrument-link"}
-          >
-            DHO804
-          </NavLink>
-          <NavLink
-            to="/dm858e"
-            className={({ isActive }) => isActive ? "instrument-link active" : "instrument-link"}
-          >
-            DM858E
-          </NavLink>
-        </nav>
-      </header>
       <Routes>
         <Route path="/" element={<ScopeRoute client={client} controller={controller} />} />
         <Route path="/dm858e" element={<DmmRoute client={client} />} />
