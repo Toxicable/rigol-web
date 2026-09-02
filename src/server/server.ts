@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 
+import { SupportedInstrument } from "../shared/instrument-types.js";
 import { DmmRuntime } from "./dmm/dmm-runtime.js";
 import { createHttpRequestHandler } from "./http-handler.js";
 import { InstrumentRegistry } from "./instruments/instrument-registry.js";
@@ -63,11 +64,6 @@ const dmmEndpoint = {
 };
 const scopePower = new Dho804PowerControl(scopeEndpoint.host, readScopeAdbPort());
 
-const server = createServer(createHttpRequestHandler(undefined, {
-  sleepScope: () => scopePower.sleep(),
-  wakeScope: () => scopePower.wake(),
-}));
-
 const initialScopeConnection: ServerScopeConnection = {
   kind: ServerScopeConnectionKind.Disconnected,
   reason: "Scope runtime inactive",
@@ -96,6 +92,26 @@ const instruments = new InstrumentRegistry({
     runtime: dmmRuntime,
   },
 });
+
+const server = createServer(createHttpRequestHandler(undefined, {
+  sleepScope: async () => {
+    await instruments.suspend(SupportedInstrument.Dho804);
+    try {
+      await scopePower.sleep();
+    } catch (error) {
+      try {
+        await instruments.resume(SupportedInstrument.Dho804);
+      } catch (resumeError) {
+        console.error("Failed to resume DHO804 SCPI runtime after Sleep failure", resumeError);
+      }
+      throw error;
+    }
+  },
+  wakeScope: async () => {
+    await scopePower.wake();
+    await instruments.resume(SupportedInstrument.Dho804);
+  },
+}));
 
 gateway = new WebSocketGateway(server, initialScopeConnection, {
   instruments,
