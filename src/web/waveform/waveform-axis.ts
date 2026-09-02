@@ -23,6 +23,14 @@ export function divisionSplits(min: number, max: number, divisions: number): num
   return Array.from({ length: divisions + 1 }, (_unused, index) => min + index * step);
 }
 
+export function timeAxisUnit(scaleSeconds: number): TimeAxisUnit {
+  if (!Number.isFinite(scaleSeconds) || !(scaleSeconds > 0)) {
+    throw new Error("Horizontal scale must be a positive finite number");
+  }
+  const selected = TIME_AXIS_UNITS.find((unit) => scaleSeconds >= unit.seconds);
+  return selected ?? TIME_AXIS_UNITS[TIME_AXIS_UNITS.length - 1]!;
+}
+
 function timeAxisUnitForTicks(ticksSeconds: readonly number[]): TimeAxisUnit {
   const maximumMagnitude = ticksSeconds.reduce(
     (maximum, value) => Math.max(maximum, Math.abs(value)),
@@ -30,6 +38,14 @@ function timeAxisUnitForTicks(ticksSeconds: readonly number[]): TimeAxisUnit {
   );
   const selected = TIME_AXIS_UNITS.find((unit) => maximumMagnitude >= unit.seconds);
   return selected ?? TIME_AXIS_UNITS[TIME_AXIS_UNITS.length - 1]!;
+}
+
+function displayTimeAxisUnit(
+  ticksSeconds: readonly number[],
+  preferredUnit: TimeAxisUnit,
+): TimeAxisUnit {
+  const rangeUnit = timeAxisUnitForTicks(ticksSeconds);
+  return rangeUnit.seconds > preferredUnit.seconds ? rangeUnit : preferredUnit;
 }
 
 function timeAxisDecimalPlaces(
@@ -59,11 +75,14 @@ function formatScaledTime(value: number, decimalPlaces: number): string {
   return String(Object.is(rounded, -0) ? 0 : rounded);
 }
 
-export function formatTimeAxisValues(ticksSeconds: readonly number[]): string[] {
+export function formatTimeAxisValues(
+  ticksSeconds: readonly number[],
+  preferredUnit: TimeAxisUnit,
+): string[] {
   if (ticksSeconds.length === 0) {
     return [];
   }
-  const unit = timeAxisUnitForTicks(ticksSeconds);
+  const unit = displayTimeAxisUnit(ticksSeconds, preferredUnit);
   const decimalPlaces = timeAxisDecimalPlaces(ticksSeconds, unit);
   return ticksSeconds.map((tick, index) => {
     const value = formatScaledTime(tick / unit.seconds, decimalPlaces);
