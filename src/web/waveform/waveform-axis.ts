@@ -11,6 +11,8 @@ const TIME_AXIS_UNITS: readonly TimeAxisUnit[] = [
   { seconds: 1e-12, symbol: "ps" },
 ];
 
+const TIME_AXIS_SIGNIFICANT_DIGITS = 3;
+
 export function divisionSplits(min: number, max: number, divisions: number): number[] {
   if (!Number.isSafeInteger(divisions) || divisions < 1) {
     throw new Error("Axis division count must be a positive integer");
@@ -36,6 +38,9 @@ function timeAxisUnitForTicks(ticksSeconds: readonly number[]): TimeAxisUnit {
     (maximum, value) => Math.max(maximum, Math.abs(value)),
     0,
   );
+  if (!(maximumMagnitude > 0)) {
+    return TIME_AXIS_UNITS[TIME_AXIS_UNITS.length - 1]!;
+  }
   const selected = TIME_AXIS_UNITS.find((unit) => maximumMagnitude >= unit.seconds);
   return selected ?? TIME_AXIS_UNITS[TIME_AXIS_UNITS.length - 1]!;
 }
@@ -48,30 +53,11 @@ function displayTimeAxisUnit(
   return rangeUnit.seconds > preferredUnit.seconds ? rangeUnit : preferredUnit;
 }
 
-function timeAxisDecimalPlaces(
-  ticksSeconds: readonly number[],
-  unit: TimeAxisUnit,
-): number {
-  if (ticksSeconds.length < 2) {
-    return 0;
-  }
-  const first = ticksSeconds[0];
-  const second = ticksSeconds[1];
-  if (first === undefined || second === undefined) {
-    return 0;
-  }
-  const step = Math.abs(second - first) / unit.seconds;
-  if (!Number.isFinite(step) || !(step > 0)) {
-    return 0;
-  }
-  return Math.max(0, Math.min(6, 1 - Math.floor(Math.log10(step))));
-}
-
-function formatScaledTime(value: number, decimalPlaces: number): string {
+function formatScaledTime(value: number): string {
   if (!Number.isFinite(value)) {
     return String(value);
   }
-  const rounded = Number(value.toFixed(decimalPlaces));
+  const rounded = Number(value.toPrecision(TIME_AXIS_SIGNIFICANT_DIGITS));
   return String(Object.is(rounded, -0) ? 0 : rounded);
 }
 
@@ -83,9 +69,8 @@ export function formatTimeAxisValues(
     return [];
   }
   const unit = displayTimeAxisUnit(ticksSeconds, preferredUnit);
-  const decimalPlaces = timeAxisDecimalPlaces(ticksSeconds, unit);
   return ticksSeconds.map((tick, index) => {
-    const value = formatScaledTime(tick / unit.seconds, decimalPlaces);
+    const value = formatScaledTime(tick / unit.seconds);
     return index === ticksSeconds.length - 1 ? `${value} ${unit.symbol}` : value;
   });
 }
