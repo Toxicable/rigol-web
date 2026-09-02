@@ -32,6 +32,11 @@ export type BrowserConnection =
       scope: ScopeState;
     };
 
+export enum MeasurementSource {
+  Scope = 1,
+  Local = 2,
+}
+
 export enum DeepCaptureKind {
   None = 1,
   Capturing = 2,
@@ -51,6 +56,7 @@ export type DeepCaptureState =
 
 export interface ScopeStoreState {
   connection: BrowserConnection;
+  measurementSource: MeasurementSource;
   measurementSpecs: MeasurementSpec[];
   measurementValues: MeasurementValue[];
   deepCapture: DeepCaptureState;
@@ -61,6 +67,7 @@ export interface ScopeStoreState {
   setScopeConnected(info: ScopeInfo, scope: ScopeState): void;
   replaceScope(scope: ScopeState): void;
   applyOptimisticControl(control: ControlChange): void;
+  setMeasurementSource(source: MeasurementSource): void;
   setMeasurementSpecs(specs: MeasurementSpec[]): void;
   setMeasurementValues(values: MeasurementValue[]): void;
   setDeepCapturing(requestId: number): void;
@@ -142,6 +149,7 @@ const noDeepCapture = (): DeepCaptureState => ({ kind: DeepCaptureKind.None });
 
 export const useScopeStore = create<ScopeStoreState>((set) => ({
   connection: { kind: BrowserConnectionKind.Connecting },
+  measurementSource: MeasurementSource.Scope,
   measurementSpecs: [],
   measurementValues: [],
   deepCapture: noDeepCapture(),
@@ -199,6 +207,8 @@ export const useScopeStore = create<ScopeStoreState>((set) => ({
       };
     }),
 
+  setMeasurementSource: (measurementSource) =>
+    set({ measurementSource, measurementValues: [] }),
   setMeasurementSpecs: (measurementSpecs) => set({ measurementSpecs }),
   setMeasurementValues: (measurementValues) => set({ measurementValues }),
   setDeepCapturing: (requestId) =>
