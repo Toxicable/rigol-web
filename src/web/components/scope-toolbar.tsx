@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import { ScopeRunState } from "../../shared/scope-types.js";
 import { AcquisitionAction } from "../../shared/websocket-protocol.js";
 import { BrowserConnectionKind, useScopeStore } from "../scope-store.js";
@@ -40,29 +42,42 @@ async function powerActionError(action: ScopePowerAction, response: Response): P
   return new Error(detail);
 }
 
-async function powerAction(action: ScopePowerAction): Promise<void> {
+async function powerAction(action: ScopePowerAction): Promise<boolean> {
   try {
     const response = await fetch(`/api/scope/${action}`, { method: "POST" });
     if (!response.ok) {
       throw await powerActionError(action, response);
     }
+    return true;
   } catch (error) {
     surfaceError(error);
+    return false;
   }
 }
 
 export function ScopeToolbar({ client }: ScopeToolbarProps) {
   const connection = useScopeStore((state) => state.connection);
   const lastError = useScopeStore((state) => state.lastError);
+  const [sleepRequested, setSleepRequested] = useState(false);
+  const connected = connection.kind === BrowserConnectionKind.ScopeConnected;
+  const instrumentPowerAction: "sleep" | "wake" = connected && !sleepRequested ? "sleep" : "wake";
 
-  if (connection.kind !== BrowserConnectionKind.ScopeConnected) {
+  const runInstrumentPowerAction = async () => {
+    const succeeded = await powerAction(instrumentPowerAction);
+    if (!succeeded) {
+      return;
+    }
+    setSleepRequested(instrumentPowerAction === "sleep");
+  };
+
+  if (!connected) {
     const reason = "reason" in connection ? connection.reason : "Connecting";
     return (
       <InstrumentHeader>
         <div className="scope-toolbar-content">
           <span className="status-pill">{reason}</span>
           <div className="toolbar-actions">
-            <button type="button" onClick={() => void powerAction("wake")}>Wake</button>
+            <button type="button" onClick={() => void runInstrumentPowerAction()}>Wake</button>
           </div>
           {lastError !== null ? <span className="error-text">{lastError}</span> : null}
         </div>
@@ -106,8 +121,9 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
           </button>
           <button type="button" onClick={() => void powerAction("screen-off")}>Screen Off</button>
           <button type="button" onClick={() => void powerAction("screen-on")}>Screen On</button>
-          <button type="button" onClick={() => void powerAction("sleep")}>Sleep</button>
-          <button type="button" onClick={() => void powerAction("wake")}>Wake</button>
+          <button type="button" onClick={() => void runInstrumentPowerAction()}>
+            {instrumentPowerAction === "sleep" ? "Sleep" : "Wake"}
+          </button>
         </div>
         {lastError !== null ? <span className="error-text">{lastError}</span> : null}
       </div>
