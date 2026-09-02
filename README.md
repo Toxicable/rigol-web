@@ -29,9 +29,11 @@ panel. Each overlay item reuses the exact CH1-CH4 accent variable used by the
 corresponding trace and channel marker. The overlay displays the scope's native
 current, minimum, average, maximum, standard-deviation and count statistics;
 these are read with the DHO800/DHO900 `:MEASure:STATistic:ITEM?` commands rather
-than calculated from the reduced live plot data. The measurement selector is
-stacked below the waveform column and does not extend beneath the right-side
-scope controls.
+than calculated from the reduced live plot data. Measurement values use a
+stable three decimal places after SI scaling and reserved-width tabular numeric
+cells so changing values do not make decimal points or neighbouring statistics
+jump around. The measurement selector is stacked below the waveform column and
+does not extend beneath the right-side scope controls.
 
 The waveform panel renders a colour-coded numeric vertical axis for every
 enabled channel. Axis ticks use that channel's own scale, offset and unit, with
@@ -62,29 +64,26 @@ Copy `.env.example` to `.env`, then set `RIGOL_SCOPE_HOST` and
 `RIGOL_SCOPE_PORT` to the DHO804's verified raw SCPI/TCP endpoint. Configure
 `RIGOL_DMM_HOST` and `RIGOL_DMM_PORT` for the DM858E endpoint.
 
-The DHO804 **Screen Off** and **Screen On** controls are deliberately separate
-from instrument sleep. The runtime container includes the Debian `adb` client
-and sends Android `KEYCODE_SLEEP` (`223`) or `KEYCODE_WAKEUP` (`224`) to the
-scope over ADB. On the DHO804 these commands have been bench-verified to blank
-and restore the display while the oscilloscope continues operating and Rigol
-Web continues receiving telemetry. They remain display controls only.
+Rigol Web exposes one adaptive DHO804 **Sleep/Wake** control. It does not expose
+separate display-only Screen On/Screen Off actions.
 
-The separate **Sleep** control invokes the DHO804's own `Power > Sleep` path
-instead of reproducing Rigol's private shutdown sequence. Rigol Web injects the
-scope's panel-power key (`1073741851`), waits 500 ms for the stock power popup,
-and taps the stock Sleep-button centre at `(324, 373)`. That coordinate is
-derived from the decompiled DHO800 layout: the centered `560x270 dp` power
-popup and its `110x35 dp` Sleep button in the left third of the fixed
-`1024x600` instrument UI. Real-scope testing confirmed that the injected panel
-power key opens the correct Rigol popup. The earlier `uiautomator` discovery
-path did not click the button reliably on the scope and has been removed.
+For **Sleep**, Rigol Web invokes the DHO804's own `Power > Sleep` path instead
+of reproducing Rigol's private shutdown sequence. It injects the scope's
+panel-power key (`1073741851`), waits 500 ms for the stock power popup, and taps
+the stock Sleep-button centre at `(324, 375)`. That coordinate is derived from
+the decompiled DHO800 layout and confirmed against a real 1024x600 DHO804
+framebuffer capture. Real-scope testing confirmed that the injected panel power
+key opens the correct Rigol popup. The earlier `uiautomator` discovery path did
+not click the button reliably on the scope and has been removed.
 
 The installed Rigol application owns the actual sleep transition after the tap,
 including its CIL, watchdog and `quick_boot_test.sh` behavior.
 
-The **Wake** control is intentionally diagnostic while proper-sleep wake behavior
-is being established on the real scope. A single click attempts both known
-candidates independently:
+The adaptive button changes to **Wake** after a successful Sleep request and is
+also forced to Wake whenever the normal scope connection is down. Wake is
+intentionally diagnostic while proper-sleep wake behavior is being established
+on the real scope. A single Wake request attempts both known candidates
+independently:
 
 1. Rigol panel-power key `1073741851`;
 2. Android `KEYCODE_WAKEUP` (`224`).
@@ -93,8 +92,7 @@ The server logs success or failure for each attempt and, if ADB remains
 reachable afterwards, runs `dumpsys power` and logs Android's reported
 `mWakefulness` value. Wake returns an HTTP failure only if both key-injection
 methods fail; a failed power-state probe is logged but does not by itself make
-the wake request fail. The Wake button remains available even when the scope's
-SCPI/WebSocket connection is down.
+the wake request fail.
 
 Power-control errors shown in the toolbar are sanitized. Short `text/plain`
 backend errors are shown verbatim; HTML/proxy error pages and oversized response
@@ -108,12 +106,8 @@ https://www.rigol.com/dam/global/downloads/brochures/en/user-manual/oscilloscope
 
 `RIGOL_SCOPE_ADB_PORT` defaults to `55555` and can be changed if the scope
 exposes ADB elsewhere. If ADB is disabled or not reachable, the UI reports the
-failed control request. This adds no paid software or hardware dependency; it
-only uses the open-source ADB client already present in the runtime image.
-
-Android documents the standard display key codes here:
-https://developer.android.com/reference/android/view/KeyEvent#KEYCODE_SLEEP
-https://developer.android.com/reference/android/view/KeyEvent#KEYCODE_WAKEUP
+failed power-control request. This adds no paid software or hardware dependency;
+it only uses the open-source ADB client already present in the runtime image.
 
 SCPI/TCP diagnostics are always enabled. The server logs instrument
 subscribe/unsubscribe transitions, runtime start/stop causes, query timing, TCP
@@ -132,5 +126,5 @@ The HTTP and WebSocket service listens on port `3000` in the container. Its
 `/health` endpoint verifies only that the Node process is running; it remains
 healthy while the scope is disconnected.
 
-The scope UI, display/power controls, statistics and diagnostics changes add no
+The scope UI, power controls, statistics and diagnostics changes add no
 hardware, paid service, or runtime dependency. Cost impact: **A$0**.
