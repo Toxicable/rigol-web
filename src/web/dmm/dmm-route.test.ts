@@ -22,7 +22,6 @@ import {
 import {
   BrowserTransportKind,
   type BrowserTransportState,
-  type ScopeWebSocketClient,
 } from "../websocket-client.js";
 import {
   bindDmmRoute,
@@ -313,13 +312,7 @@ describe("DM858E route lifecycle", () => {
   });
 
   it("renders disconnected transport state without a plausible measurement", () => {
-    const client = new FakeDmmLifecycleClient({
-      kind: BrowserTransportKind.Disconnected,
-      reason: "socket lost",
-    });
-
     const markup = renderToStaticMarkup(createElement(DmmRouteView, {
-      client: client as unknown as ScopeWebSocketClient,
       connection: {
         kind: DmmBrowserConnectionKind.TransportDisconnected,
         reason: "socket lost",
@@ -335,11 +328,8 @@ describe("DM858E route lifecycle", () => {
     expect(markup).not.toContain("Latest reading");
   });
 
-  it("renders the connected reading and DM858E-targeted console", () => {
-    const client = new FakeDmmLifecycleClient({ kind: BrowserTransportKind.Connected });
-
+  it("renders the connected reading, trend and horizontal controls", () => {
     const markup = renderToStaticMarkup(createElement(DmmRouteView, {
-      client: client as unknown as ScopeWebSocketClient,
       connection: {
         kind: DmmBrowserConnectionKind.Connected,
         info,
@@ -361,6 +351,10 @@ describe("DM858E route lifecycle", () => {
     expect(markup).toContain("Latest reading");
     expect(markup).toContain(">12.34<");
     expect(markup).not.toContain("12.3400");
-    expect(markup).toContain("placeholder=\"DATA:LAST?\"");
+    expect(markup).toContain("Snapshot trend");
+    expect(markup).toContain("Horizontal");
+    expect(markup).toContain("Time/div");
+    expect(markup).toContain("Latest");
+    expect(markup).not.toContain("DATA:LAST?");
   });
 });
