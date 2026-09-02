@@ -60,11 +60,16 @@ Web continues receiving telemetry. They remain display controls only.
 
 The separate **Sleep** control invokes the DHO804's own `Power > Sleep` path
 instead of reproducing Rigol's private shutdown sequence. Rigol Web injects the
-scope's panel-power key (`1073741851`), waits for the stock Rigol power popup,
-dumps the Android UI hierarchy, locates
-`com.rigol.scope:id/button_sleep`, and taps the centre of that native control.
-The installed Rigol application then owns the actual sleep transition, including
-its CIL, watchdog and `quick_boot_test.sh` behavior.
+scope's panel-power key (`1073741851`), waits 500 ms for the stock power popup,
+and taps the stock Sleep-button centre at `(324, 373)`. That coordinate is
+derived from the decompiled DHO800 layout: the centered `560x270 dp` power
+popup and its `110x35 dp` Sleep button in the left third of the fixed
+`1024x600` instrument UI. Real-scope testing confirmed that the injected panel
+power key opens the correct Rigol popup. The earlier `uiautomator` discovery
+path did not click the button reliably on the scope and has been removed.
+
+The installed Rigol application owns the actual sleep transition after the tap,
+including its CIL, watchdog and `quick_boot_test.sh` behavior.
 
 The **Wake** control is intentionally diagnostic while proper-sleep wake behavior
 is being established on the real scope. A single click attempts both known
@@ -77,7 +82,13 @@ The server logs success or failure for each attempt and, if ADB remains
 reachable afterwards, runs `dumpsys power` and logs Android's reported
 `mWakefulness` value. Wake returns an HTTP failure only if both key-injection
 methods fail; a failed power-state probe is logged but does not by itself make
-the wake request fail.
+the wake request fail. The Wake button remains available even when the scope's
+SCPI/WebSocket connection is down.
+
+Power-control errors shown in the toolbar are sanitized. Short `text/plain`
+backend errors are shown verbatim; HTML/proxy error pages and oversized response
+bodies are replaced with a concise HTTP-status message so an upstream error page
+cannot be dumped into the instrument header.
 
 RIGOL documents instrument **Sleep** under the scope's own Power menu. The
 DHO800 user guide states that Sleep keeps some processes alive, uses more power
