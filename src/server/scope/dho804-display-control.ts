@@ -13,9 +13,9 @@ const ADB_TIMEOUT_MS = 5_000;
 const ANDROID_KEYCODE_SLEEP = "223";
 const ANDROID_KEYCODE_WAKEUP = "224";
 const RIGOL_PANEL_POWER_KEYCODE = "1073741851";
-const RIGOL_SLEEP_RESOURCE_ID = "com.rigol.scope:id/button_sleep";
-const UI_DUMP_PATH = "/sdcard/rigol-web-window.xml";
-const POWER_POPUP_SETTLE_MS = 300;
+const RIGOL_SLEEP_TAP_X = "324";
+const RIGOL_SLEEP_TAP_Y = "373";
+const POWER_POPUP_SETTLE_MS = 500;
 
 function runAdb(args: readonly string[]): Promise<AdbCommandResult> {
   return new Promise((resolve, reject) => {
@@ -55,25 +55,6 @@ function errorDetail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function findResourceCentre(xml: string, resourceId: string): { x: number; y: number } {
-  const nodes = xml.match(/<node\b[^>]*>/g) ?? [];
-  const node = nodes.find((candidate) => candidate.includes(`resource-id="${resourceId}"`));
-  if (node === undefined) {
-    throw new Error(`Rigol sleep control ${resourceId} was not found in the UI hierarchy`);
-  }
-
-  const bounds = node.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
-  if (bounds === null) {
-    throw new Error(`Rigol sleep control ${resourceId} has no usable bounds`);
-  }
-
-  const [, left, top, right, bottom] = bounds;
-  return {
-    x: Math.round((Number(left) + Number(right)) / 2),
-    y: Math.round((Number(top) + Number(bottom)) / 2),
-  };
-}
-
 export class Dho804DisplayControl {
   public constructor(
     private readonly host: string,
@@ -97,20 +78,21 @@ export class Dho804DisplayControl {
     await this.sendConnectedKeyEvent(target, RIGOL_PANEL_POWER_KEYCODE);
     await this.wait(POWER_POPUP_SETTLE_MS);
 
-    await this.adb(["-s", target, "shell", "uiautomator", "dump", UI_DUMP_PATH]);
-    const hierarchy = await this.adb(["-s", target, "shell", "cat", UI_DUMP_PATH]);
-    const sleepButton = findResourceCentre(hierarchy.stdout, RIGOL_SLEEP_RESOURCE_ID);
-
+    // The stock DHO800 power popup is 560x270 dp centred on the fixed
+    // 1024x600 instrument UI. Its 110x35 dp Sleep button is centred in the
+    // left third, placing the button centre at approximately (324, 373).
+    // Bench testing confirmed the panel-power key opens this exact popup;
+    // uiautomator hierarchy dumping on the scope did not expose/click it.
     await this.adb([
       "-s",
       target,
       "shell",
       "input",
       "tap",
-      String(sleepButton.x),
-      String(sleepButton.y),
+      RIGOL_SLEEP_TAP_X,
+      RIGOL_SLEEP_TAP_Y,
     ]);
-    this.log(`[DHO804 sleep] clicked native Rigol Sleep control at ${sleepButton.x},${sleepButton.y}`);
+    this.log(`[DHO804 sleep] clicked native Rigol Sleep control at ${RIGOL_SLEEP_TAP_X},${RIGOL_SLEEP_TAP_Y}`);
   }
 
   public async wake(): Promise<void> {
