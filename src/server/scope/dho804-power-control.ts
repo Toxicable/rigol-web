@@ -14,7 +14,7 @@ const ANDROID_KEYCODE_WAKEUP = "224";
 const RIGOL_PANEL_POWER_KEYCODE = "1073741851";
 const RIGOL_SLEEP_TAP_X = "324";
 const RIGOL_SLEEP_TAP_Y = "375";
-const POWER_POPUP_SETTLE_MS = 500;
+const POWER_POPUP_SETTLE_MS = 1_500;
 
 function runAdb(args: readonly string[]): Promise<AdbCommandResult> {
   return new Promise((resolve, reject) => {
@@ -67,6 +67,10 @@ export class Dho804PowerControl {
     const target = adbTarget(this.host, this.port);
     await this.ensureConnected(target);
     await this.sendConnectedKeyEvent(target, RIGOL_PANEL_POWER_KEYCODE);
+
+    // The panel-power key only queues the stock Rigol popup. On the real
+    // instrument the ADB keyevent can return before that popup has finished
+    // rendering, so leave enough margin before injecting the coordinate tap.
     await this.wait(POWER_POPUP_SETTLE_MS);
 
     // The stock DHO800 power popup is 560x270 dp centred on the fixed
