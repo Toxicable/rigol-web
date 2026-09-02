@@ -36,24 +36,30 @@ jump around. The measurement selector is stacked below the waveform column and
 does not extend beneath the right-side scope controls.
 
 The waveform panel renders a colour-coded numeric vertical axis for every
-enabled channel. Axis ticks use that channel's own scale, offset and unit, with
-a one-division increment so the labels correspond directly to the waveform
-graticule. While an edge-trigger level marker is being dragged, a
-channel-coloured dashed horizontal guide follows the optimistic trigger
-position; the guide is browser-only and does not add any SCPI query traffic.
-The acquisition toolbar uses one Run/Stop button whose action follows the
-current scope run state.
+enabled channel. Vertical ticks are locked to the scope's exact eight divisions
+between the configured min/max instead of allowing the plotting library to add
+"nice" ticks outside that range; Live and Deep Capture therefore use identical
+vertical endpoints. The horizontal axis is locked to the ten scope divisions
+and formats its numbers in the SI time unit selected from the active seconds-per-
+division scale (`s`, `ms`, `µs`, `ns`, or `ps`). The unit is shown only on the
+final horizontal label rather than repeated on every tick. While an edge-trigger
+level marker is being dragged, a channel-coloured dashed horizontal guide
+follows the optimistic trigger position; the guide is browser-only and does not
+add any SCPI query traffic. The acquisition toolbar uses one Run/Stop button
+whose action follows the current scope run state.
 
 The shared **Copy Screenshot** control captures the currently visible Rigol Web
 viewport and copies it as PNG. Clipboard writes are initiated directly from the
 button click so browsers retain user activation; there is no separate
-application-managed clipboard permission prompt. The page must be HTTPS or
-localhost. Chromium may expose a persistent Clipboard site permission if the
-user has previously blocked the site; Firefox and Safari rely on the user
-activation instead. The DOM-to-image rasterizer uses a data-URL SVG because
-blob-URL SVGs containing `foreignObject` can taint export canvases in WebKit.
-Screenshot failures display the underlying browser error in the header and log
-it to the console.
+application-managed clipboard permission prompt. The button remains **Copy
+Screenshot** after success; successful copies are acknowledged by a transient
+**Screenshot copied** toast instead. The page must be HTTPS or localhost.
+Chromium may expose a persistent Clipboard site permission if the user has
+previously blocked the site; Firefox and Safari rely on the user activation
+instead. The DOM-to-image rasterizer uses a data-URL SVG because blob-URL SVGs
+containing `foreignObject` can taint export canvases in WebKit. Screenshot
+failures display the underlying browser error in the header and log it to the
+console.
 
 RIGOL documents the statistic query in the DHO800/DHO900 Programming Guide:
 https://download.rigol.com/en/Manual/Digital%20Oscilloscope/DHO800/DHO800900_ProgrammingGuide_EN.pdf
