@@ -13,6 +13,51 @@ Live acquisition therefore uses a fixed 999-point NORMAL/BYTE path. There is no 
 
 All software changes in this workstream cost $0.
 
+## Retrospective: what helped
+
+The biggest gains came from reducing the number of scope transactions rather than trying to move fewer waveform bytes. The useful changes were:
+
+- instrument the transport first: log the exact SCPI command, elapsed time, response kind and returned byte count so scope-side latency and malformed responses are visible;
+- use real DHO804 captures as the deciding evidence instead of assuming that SCPI syntax support, another Rigol family, or a programming-guide example implies equivalent runtime behavior;
+- remove the 1 Hz full-state poller and keep the connected-session state authoritative for app-originated writes;
+- cache channel units and NORMAL waveform preambles so the warm live path does not spend another 20-30 ms on metadata queries every frame;
+- combine source selection and waveform read for one channel as `SOURCE CHx;DATA?`, removing a separate source-write transaction without changing binary-response semantics;
+- keep one scheduler operation per channel, which gives interactive work a safe boundary between channel reads;
+- pause live waveform acquisition while horizontal interaction writes are in flight instead of allowing timebase writes to interleave with binary transfers;
+- invalidate horizontal metadata and refresh `PREamble?` once before the first resumed `DATA?`, rather than trying to make the binary read itself establish the new waveform context;
+- update vertical cached metadata locally where the DHO800/DHO900 preamble relationships are explicit and the transform is deterministic;
+- compare repeated or representative measurements and their spread. A single faster observation is evidence that a command works, not evidence of a meaningful performance improvement.
+
+The debugging logs were especially valuable when a change failed. Zero-byte and truncated binary responses identified transaction-ordering problems that would have been easy to misdiagnose as browser rendering or parser faults.
+
+## Retrospective: what did not help
+
+Several plausible optimizations were tested and rejected:
+
+- lowering NORMAL/BYTE live data from 999 to 500 points did not materially reduce `DATA?` latency and instead cropped the displayed time span;
+- one-shot compound text-query timing did not establish a measurable batching gain. The observed difference was within ordinary run-to-run variability;
+- chaining multiple channel `DATA?` queries into one SCPI program message was not usable on the real DHO804: four block headers were returned but only the first block contained the expected 999-byte waveform;
+- synthesizing horizontal X metadata locally was too risky. Horizontal changes now invalidate the preamble and pay one real `PREamble?` after the gesture instead;
+- allowing `:TIMebase:MAIN:OFFSet` writes to interleave with live waveform reads caused zero-byte and truncated waveform responses;
+- resuming with `DATA?` before refreshing an invalidated preamble caused a 1744.384 ms post-pan read that returned zero bytes;
+- reducing browser/network work was not a useful direction for this bottleneck: 999 bytes over the LAN is negligible compared with the DHO804's tens-of-milliseconds SCPI processing time;
+- USB was not pursued because this deployment cannot use it. Do not carry it as a hypothetical optimization path;
+- optional benchmark/fallback modes were not useful once hardware behavior was known. Production keeps one deterministic acquisition path and rejected experiments remain documented instead.
+
+## Working method for future SCPI performance changes
+
+Use the same sequence for future work:
+
+1. Capture the current hot path on the real instrument with per-command timing and response-size logging.
+2. Identify removable transactions before changing payload size or browser code.
+3. Change one SCPI boundary at a time and keep the production behavior deterministic.
+4. Validate both steady-state streaming and interactions that mutate the scope while streaming.
+5. Require repeated measurements or representative ranges before claiming a performance gain.
+6. Treat malformed/empty responses as instrument-protocol evidence and fix transaction ordering rather than hiding them with retries or fallbacks.
+7. Record rejected experiments and their hardware evidence so the same idea is not repeatedly rediscovered.
+
+The remaining obvious query-heavy areas are measurement statistics, which still use six native queries per selected measurement, and the fresh hardware-state read before deep RAW capture. Those are separate workstreams; neither should be changed without measuring its actual occupancy and semantics first.
+
 ## Multi-channel compound result
 
 A four-channel capture of the original loop showed strict serial traffic:
