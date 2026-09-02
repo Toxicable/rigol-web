@@ -15,9 +15,10 @@ import {
 import {
   appendDmmTrendSnapshot,
   dmmTrendVisibleRange,
+  dmmTrendYRange,
+  renderableDmmTrendData,
+  type TrendData,
 } from "./dmm-trend.js";
-
-type TrendData = [number[], Array<number | null>];
 
 const valueSnapshot: DmmReadingSnapshot = {
   kind: DmmReadingKind.Value,
@@ -56,19 +57,51 @@ describe("DM858E snapshot trend", () => {
     expect(data[1]).toEqual([12.34, 12.34]);
   });
 
-  it("uses time per division and position to select the visible range", () => {
+  it("keeps the latest snapshot on the right edge from the first sample", () => {
+    expect(dmmTrendVisibleRange(0, DEFAULT_DMM_TREND_HORIZONTAL)).toEqual({
+      min: -10,
+      max: 0,
+    });
+    expect(dmmTrendVisibleRange(3, DEFAULT_DMM_TREND_HORIZONTAL)).toEqual({
+      min: -7,
+      max: 3,
+    });
     expect(dmmTrendVisibleRange(100, DEFAULT_DMM_TREND_HORIZONTAL)).toEqual({
       min: 90,
       max: 100,
+    });
+  });
+
+  it("uses position to pan backward immediately", () => {
+    expect(dmmTrendVisibleRange(3, { scale: 1, position: -5 })).toEqual({
+      min: -12,
+      max: -2,
     });
     expect(dmmTrendVisibleRange(100, { scale: 1, position: -30 })).toEqual({
       min: 60,
       max: 70,
     });
-    expect(dmmTrendVisibleRange(3, DEFAULT_DMM_TREND_HORIZONTAL)).toEqual({
-      min: 0,
-      max: 10,
-    });
+  });
+
+  it("provides valid two-column render data before two real samples exist", () => {
+    expect(renderableDmmTrendData([[], []], { min: -10, max: 0 })).toEqual([
+      [-10, 0],
+      [null, null],
+    ]);
+
+    const onePoint: TrendData = [[0], [12.34]];
+    const renderable = renderableDmmTrendData(onePoint, { min: -10, max: 0 });
+    expect(renderable[0]).toHaveLength(2);
+    expect(renderable[1]).toEqual([null, 12.34]);
+    expect(renderable[0][0]).toBeLessThan(renderable[0][1]!);
+
+    const twoPoints: TrendData = [[0, 1], [12.34, 12.35]];
+    expect(renderableDmmTrendData(twoPoints, { min: -9, max: 1 })).toBe(twoPoints);
+  });
+
+  it("gives uPlot a finite fallback Y range without numeric data", () => {
+    expect(dmmTrendYRange({} as never, Number.NaN, Number.NaN)).toEqual([-1, 1]);
+    expect(dmmTrendYRange({} as never, 10, 10)).toEqual([9.5, 10.5]);
   });
 
   it("clamps horizontal controls to the retained history", () => {
@@ -82,7 +115,7 @@ describe("DM858E snapshot trend", () => {
     });
   });
 
-  it("rejects invalid elapsed timestamps", () => {
+  it("rejects invalid elapsed timestamps and malformed data", () => {
     const data: TrendData = [[], []];
 
     expect(() => appendDmmTrendSnapshot(data, -1, valueSnapshot)).toThrow(
@@ -90,6 +123,9 @@ describe("DM858E snapshot trend", () => {
     );
     expect(() => dmmTrendVisibleRange(-1, DEFAULT_DMM_TREND_HORIZONTAL)).toThrow(
       "non-negative finite",
+    );
+    expect(() => renderableDmmTrendData([[0], []], { min: -10, max: 0 })).toThrow(
+      "lengths must match",
     );
   });
 });
