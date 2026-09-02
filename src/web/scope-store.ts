@@ -70,6 +70,7 @@ export interface ScopeStoreState {
   setMeasurementSource(source: MeasurementSource): void;
   setMeasurementSpecs(specs: MeasurementSpec[]): void;
   setMeasurementValues(values: MeasurementValue[]): void;
+  setLocalMeasurementValues(values: MeasurementValue[]): void;
   setDeepCapturing(requestId: number): void;
   setDeepReady(
     captureId: number,
@@ -210,7 +211,14 @@ export const useScopeStore = create<ScopeStoreState>((set) => ({
   setMeasurementSource: (measurementSource) =>
     set({ measurementSource, measurementValues: [] }),
   setMeasurementSpecs: (measurementSpecs) => set({ measurementSpecs }),
-  setMeasurementValues: (measurementValues) => set({ measurementValues }),
+  setMeasurementValues: (measurementValues) =>
+    set((state) =>
+      state.measurementSource === MeasurementSource.Scope ? { measurementValues } : state,
+    ),
+  setLocalMeasurementValues: (measurementValues) =>
+    set((state) =>
+      state.measurementSource === MeasurementSource.Local ? { measurementValues } : state,
+    ),
   setDeepCapturing: (requestId) =>
     set({ deepCapture: { kind: DeepCaptureKind.Capturing, requestId } }),
   setDeepReady: (captureId, channels) =>
