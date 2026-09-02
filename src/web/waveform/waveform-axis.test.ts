@@ -12,6 +12,11 @@ describe("waveform axis helpers", () => {
     expect(divisionSplits(-5e-6, 5e-6, 10)).toHaveLength(11);
   });
 
+  it("returns no ticks while a plot range is uninitialized", () => {
+    expect(divisionSplits(Number.NaN, Number.NaN, 8)).toEqual([]);
+    expect(divisionSplits(0, 0, 8)).toEqual([]);
+  });
+
   it("selects the horizontal unit from seconds per division", () => {
     expect(timeAxisUnit(2).symbol).toBe("s");
     expect(timeAxisUnit(2e-3).symbol).toBe("ms");
