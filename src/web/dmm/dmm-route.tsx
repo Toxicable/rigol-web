@@ -9,7 +9,8 @@ import {
   dmmControlMatchesState,
 } from "../components/dmm/dmm-controls.js";
 import { DmmReading } from "../components/dmm/dmm-reading.js";
-import { InstrumentHeader } from "../components/instrument-header.js";
+import { DmmToolbar } from "../components/dmm/dmm-toolbar.js";
+import { DmmTrend } from "../components/dmm/dmm-trend.js";
 import type { ScopeWebSocketClient } from "../websocket-client.js";
 import "./dmm.css";
 import { bindDmmRoute } from "./dmm-route-binding.js";
@@ -85,29 +86,25 @@ export function DmmRouteView({
 }: DmmRouteViewProps) {
   return (
     <section className="dmm-route">
-      <InstrumentHeader>
-        <div className="dmm-toolbar-content">
-          <div>
-            <strong>DM858E</strong>
-            {connection.kind === DmmBrowserConnectionKind.Connected ? (
-              <span className="dmm-identity">
-                {connection.info.manufacturer} · {connection.info.serialNumber}
-              </span>
-            ) : null}
-          </div>
-          <span className="status-pill" aria-live="polite">{connectionLabel(connection)}</span>
-        </div>
-      </InstrumentHeader>
+      <DmmToolbar connection={connection} />
 
       {connection.kind === DmmBrowserConnectionKind.Connected ? (
         <>
           <div className="dmm-layout">
-            <DmmReading state={connection.state} snapshot={latestReading} />
-            <DmmControls
-              state={connection.state}
-              pending={pending}
-              onControl={onControl}
-            />
+            <div className="dmm-measurement-column">
+              <DmmReading state={connection.state} snapshot={latestReading} />
+              <DmmTrend
+                measurementFunction={connection.state.function}
+                snapshot={latestReading}
+              />
+            </div>
+            <aside className="control-stack">
+              <DmmControls
+                state={connection.state}
+                pending={pending}
+                onControl={onControl}
+              />
+            </aside>
           </div>
           {controlError !== null ? (
             <div className="dmm-control-error" role="alert">
@@ -125,21 +122,6 @@ export function DmmRouteView({
       )}
     </section>
   );
-}
-
-function connectionLabel(connection: DmmBrowserConnection): string {
-  switch (connection.kind) {
-    case DmmBrowserConnectionKind.Connecting:
-      return "Connecting";
-    case DmmBrowserConnectionKind.AwaitingInstrument:
-      return "Starting DMM";
-    case DmmBrowserConnectionKind.TransportDisconnected:
-      return "Transport offline";
-    case DmmBrowserConnectionKind.InstrumentDisconnected:
-      return "DMM offline";
-    case DmmBrowserConnectionKind.Connected:
-      return "Connected";
-  }
 }
 
 function connectionDetail(connection: DmmBrowserConnection): string {
