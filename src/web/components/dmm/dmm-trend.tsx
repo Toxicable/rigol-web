@@ -30,6 +30,7 @@ interface DmmTrendProps {
 const AXIS_FONT = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const TREND_STROKE = "#7ab8e8";
 const ELAPSED_TIME_UNIT = timeAxisUnit(1);
+export const DMM_TREND_SAMPLE_INTERVAL_MS = 100;
 
 type TrendValue = number | null;
 export type TrendData = [number[], TrendValue[]];
@@ -115,6 +116,15 @@ export function dmmTrendYRange(
   return [initialMin - padding, initialMax + padding];
 }
 
+export function showDmmTrendPoints(
+  _plot: uPlot,
+  _seriesIndex: number,
+  firstVisibleIndex: number,
+  lastVisibleIndex: number,
+): boolean {
+  return lastVisibleIndex - firstVisibleIndex <= 1;
+}
+
 export function DmmTrend({
   measurementFunction,
   snapshot,
@@ -126,6 +136,7 @@ export function DmmTrend({
   const startedAtRef = useRef<number | null>(null);
   const latestElapsedRef = useRef(0);
   const horizontalRef = useRef(normalizeDmmTrendHorizontal(horizontal));
+  const snapshotRef = useRef<DmmReadingSnapshot | null>(snapshot);
   const unit = dmmUnitForFunction(measurementFunction);
 
   useEffect(() => {
@@ -178,7 +189,11 @@ export function DmmTrend({
           label: "Reading",
           stroke: TREND_STROKE,
           width: 1.5,
-          points: { show: false },
+          points: {
+            show: showDmmTrendPoints,
+            size: 5,
+            width: 1.5,
+          },
           spanGaps: false,
         },
       ],
@@ -219,32 +234,43 @@ export function DmmTrend({
       horizontalRef.current,
     );
     plot.setScale("x", visibleRange);
-    plot.redraw();
   }, [horizontal]);
 
   useEffect(() => {
-    if (snapshot === null || snapshot.function !== measurementFunction) {
-      return;
-    }
-    const plot = plotRef.current;
-    if (plot === null) {
-      return;
-    }
+    snapshotRef.current = snapshot;
+  }, [snapshot]);
 
-    const nowSeconds = performance.now() / 1000;
-    const startedAt = startedAtRef.current ?? nowSeconds;
-    startedAtRef.current = startedAt;
-    const elapsedSeconds = nowSeconds - startedAt;
-    latestElapsedRef.current = elapsedSeconds;
+  useEffect(() => {
+    const sample = (): void => {
+      const currentSnapshot = snapshotRef.current;
+      const plot = plotRef.current;
+      if (
+        currentSnapshot === null ||
+        currentSnapshot.function !== measurementFunction ||
+        plot === null
+      ) {
+        return;
+      }
 
-    appendDmmTrendSnapshot(dataRef.current, elapsedSeconds, snapshot);
-    const visibleRange = dmmTrendVisibleRange(elapsedSeconds, horizontalRef.current);
-    plot.setData(
-      renderableDmmTrendData(dataRef.current, visibleRange) as unknown as uPlot.AlignedData,
-    );
-    plot.setScale("x", visibleRange);
-    plot.redraw();
-  }, [measurementFunction, snapshot]);
+      const nowSeconds = performance.now() / 1000;
+      const startedAt = startedAtRef.current ?? nowSeconds;
+      startedAtRef.current = startedAt;
+      const elapsedSeconds = nowSeconds - startedAt;
+      latestElapsedRef.current = elapsedSeconds;
+
+      appendDmmTrendSnapshot(dataRef.current, elapsedSeconds, currentSnapshot);
+      const visibleRange = dmmTrendVisibleRange(elapsedSeconds, horizontalRef.current);
+      plot.setData(
+        renderableDmmTrendData(dataRef.current, visibleRange) as unknown as uPlot.AlignedData,
+        false,
+      );
+      plot.setScale("x", visibleRange);
+    };
+
+    sample();
+    const interval = window.setInterval(sample, DMM_TREND_SAMPLE_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [measurementFunction]);
 
   function formatTrendAxisValue(value: number): string {
     const formatted = formatDmmValue(value, unit);
@@ -261,7 +287,7 @@ export function DmmTrend({
       </div>
       <div className="dmm-trend-plot" ref={hostRef} />
       <p className="muted dmm-trend-note">
-        Browser-received latest-reading snapshots; this is a visual trend, not one point per physical conversion.
+        Browser-sampled latest-reading state; this is a visual trend, not one point per physical conversion.
       </p>
     </section>
   );
