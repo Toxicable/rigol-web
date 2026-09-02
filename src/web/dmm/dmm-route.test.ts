@@ -328,7 +328,7 @@ describe("DM858E route lifecycle", () => {
     expect(markup).not.toContain("Latest reading");
   });
 
-  it("renders the connected reading and browser snapshot trend", () => {
+  it("renders the connected reading, trend and horizontal controls", () => {
     const markup = renderToStaticMarkup(createElement(DmmRouteView, {
       connection: {
         kind: DmmBrowserConnectionKind.Connected,
@@ -352,6 +352,9 @@ describe("DM858E route lifecycle", () => {
     expect(markup).toContain(">12.34<");
     expect(markup).not.toContain("12.3400");
     expect(markup).toContain("Snapshot trend");
-    expect(markup).toContain("visual trend");
+    expect(markup).toContain("Horizontal");
+    expect(markup).toContain("Time/div");
+    expect(markup).toContain("Latest");
+    expect(markup).not.toContain("DATA:LAST?");
   });
 });
