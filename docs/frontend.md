@@ -206,6 +206,8 @@ At interaction end:
 
 Initial continuous controls include channel offset, trigger level and horizontal position.
 
+The acquisition Run/Stop button colour reflects the current scope state, not the next action: active acquisition is green and stopped acquisition is red, while the button label remains the action that will be taken when clicked.
+
 Do not add arbitrary client-side rate limiting without measurement.
 
 ## Direct waveform interactions
@@ -214,9 +216,11 @@ Use HTML/React overlay handles around the uPlot area where practical.
 
 Initial mappings:
 
-- plot-background horizontal drag -> horizontal position
+- waveform-overlay background horizontal drag -> horizontal position
 - per-channel ground marker drag -> channel offset
 - Edge trigger-level marker drag -> trigger level
+
+Background horizontal drag remains available across the waveform interaction overlay. Do not gate drag start to uPlot's internal plot bounding box; the axis layout can change independently and the overlay is the stable interaction surface. Marker buttons stop propagation and retain their dedicated vertical drag behavior.
 
 Keep pixel/domain conversion in tested functions.
 
@@ -227,7 +231,7 @@ newHorizontalPosition =
   startPosition - dx * (10 * horizontalScale) / W;
 ```
 
-Vertical channel/trigger markers are clamped to the visible top/bottom edge when their true reference position is outside the plot. Drag math therefore starts from the marker's **displayed** Y coordinate rather than blindly continuing from the far-offscreen domain value.
+Vertical channel/trigger reference positions are clamped to the visible top/bottom plot edge when their true reference position is outside the plot. The draggable handle itself is inset by half its height so it remains fully visible and grab-able. Drag math starts from the handle's **displayed** Y coordinate rather than blindly continuing from the far-offscreen domain value.
 
 For plot height `H`, channel scale `s`, displayed channel marker coordinate `startMarkerY`, and pointer movement `dy`:
 
