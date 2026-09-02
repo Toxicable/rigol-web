@@ -17,23 +17,46 @@ describe("waveform axis helpers", () => {
     expect(divisionSplits(0, 0, 8)).toEqual([]);
   });
 
-  it("selects the natural unit from horizontal scale", () => {
-    expect(timeAxisUnit(2).symbol).toBe("s");
-    expect(timeAxisUnit(2e-3).symbol).toBe("ms");
-    expect(timeAxisUnit(500e-6).symbol).toBe("µs");
-    expect(timeAxisUnit(20e-9).symbol).toBe("ns");
+  it("rolls engineering units at 1000", () => {
+    expect(timeAxisUnit(999e-6).symbol).toBe("µs");
+    expect(timeAxisUnit(1_000e-6).symbol).toBe("ms");
+    expect(timeAxisUnit(4_000e-6).symbol).toBe("ms");
+    expect(timeAxisUnit(999e-3).symbol).toBe("ms");
+    expect(timeAxisUnit(1_000e-3).symbol).toBe("s");
   });
 
-  it("promotes the display unit when visible labels would be unwieldy", () => {
+  it("promotes visible labels at the engineering boundary", () => {
+    expect(formatTimeAxisValues(
+      [0, 999e-6, 1e-3, 4e-3],
+      timeAxisUnit(500e-6),
+    )).toEqual([
+      "0",
+      "0.999",
+      "1",
+      "4 ms",
+    ]);
+  });
+
+  it("uses three significant digits for arbitrary horizontal offsets", () => {
     const preferredUnit = timeAxisUnit(500e-6);
     expect(formatTimeAxisValues([
       -1.65358e-3,
       -1.15358e-3,
-      -653.58e-6,
+      -653.581e-6,
+      -153.581e-6,
+      346.419e-6,
+      846.419e-6,
+      1.34642e-3,
+      2.84642e-3,
     ], preferredUnit)).toEqual([
       "-1.65",
       "-1.15",
-      "-0.65 ms",
+      "-0.654",
+      "-0.154",
+      "0.346",
+      "0.846",
+      "1.35",
+      "2.85 ms",
     ]);
   });
 
