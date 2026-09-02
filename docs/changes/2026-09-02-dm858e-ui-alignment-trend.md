@@ -22,13 +22,21 @@ The trend keeps a rolling five-minute browser history, but five minutes is a ret
 Horizontal controls mirror the scope-side interaction model:
 
 - `Time/div` controls ten horizontal divisions with stepped values from 100 ms/div through 30 s/div;
-- the default is 1 s/div, so the initial viewport is ten seconds wide;
-- `Position = 0 s` keeps the newest received snapshot on the right edge;
-- negative Position values pan backward through retained history;
+- the default is 1 s/div, so the viewport is ten seconds wide;
+- `Position = 0 s` keeps the newest received snapshot on the right edge from the first sample onward;
+- negative Position values pan backward through retained history immediately, including while less than one viewport of history exists;
 - `Latest` returns Position to zero;
 - changing DMM measurement function resets Position to zero while preserving Time/div.
 
 At 30 s/div the full five-minute retained history fits in the ten-division viewport.
+
+## Streaming renderer behavior
+
+uPlot requires aligned X/Y arrays with matching lengths and at least two X values. The DMM trend therefore supplies renderer-only null padding until two real browser snapshots exist; the retained measurement history itself is not padded with fabricated values.
+
+Each received snapshot uses uPlot's normal `setData()` update path so data changes invalidate and redraw the plot, then the browser-local horizontal viewport is reapplied. The Y scale also has a finite fallback range for the no-numeric-data case so an initial empty, overload, or unavailable state can render safely.
+
+The previous implementation instantiated uPlot with zero-length aligned arrays and used `setData(..., false)`, which could produce a startup `null is not iterable` exception and could leave streaming data visually stale until another scale invalidation occurred.
 
 ## Trend semantics
 
@@ -53,4 +61,4 @@ Incremental cost: **$0**. The browser reuses the `uPlot` package already require
 
 ## Validation
 
-`src/web/components/dmm/dmm-trend.test.ts` covers numeric points, unavailable-reading gaps, rolling-history trimming, time/div and Position viewport math, horizontal-limit clamping, and invalid elapsed timestamps.
+`src/web/components/dmm/dmm-trend.test.ts` covers numeric points, unavailable-reading gaps, rolling-history trimming, immediate latest-edge scrolling, time/div and Position viewport math, pre-two-sample render data, finite empty Y ranges, horizontal-limit clamping, and invalid elapsed timestamps.
