@@ -32,7 +32,11 @@ const TREND_STROKE = "#7ab8e8";
 const ELAPSED_TIME_UNIT = timeAxisUnit(1);
 
 type TrendValue = number | null;
-type TrendData = [number[], TrendValue[]];
+export type TrendData = [number[], TrendValue[]];
+export interface TrendVisibleRange {
+  readonly min: number;
+  readonly max: number;
+}
 
 export function appendDmmTrendSnapshot(
   data: TrendData,
@@ -60,18 +64,55 @@ export function appendDmmTrendSnapshot(
 export function dmmTrendVisibleRange(
   latestSeconds: number,
   horizontal: DmmTrendHorizontal,
-): { min: number; max: number } {
+): TrendVisibleRange {
   if (!Number.isFinite(latestSeconds) || latestSeconds < 0) {
     throw new Error("DMM trend latest time must be a non-negative finite number");
   }
 
   const normalized = normalizeDmmTrendHorizontal(horizontal);
   const width = normalized.scale * DMM_TREND_HORIZONTAL_DIVISIONS;
-  const rightEdge = Math.max(0, latestSeconds + normalized.position);
-  if (rightEdge < width) {
-    return { min: 0, max: width };
-  }
+  const rightEdge = latestSeconds + normalized.position;
   return { min: rightEdge - width, max: rightEdge };
+}
+
+export function renderableDmmTrendData(
+  data: TrendData,
+  visibleRange: TrendVisibleRange,
+): TrendData {
+  if (data[0].length !== data[1].length) {
+    throw new Error("DMM trend X/Y data lengths must match");
+  }
+  if (data[0].length >= 2) {
+    return data;
+  }
+  if (data[0].length === 0) {
+    return [[visibleRange.min, visibleRange.max], [null, null]];
+  }
+
+  const elapsedSeconds = data[0][0]!;
+  const value = data[1][0] ?? null;
+  const padding = Math.max(
+    Math.abs(visibleRange.max - visibleRange.min) / 1000,
+    Number.EPSILON,
+  );
+  return [[elapsedSeconds - padding, elapsedSeconds], [null, value]];
+}
+
+export function dmmTrendYRange(
+  _plot: uPlot,
+  initialMin: number,
+  initialMax: number,
+): [number, number] {
+  if (!Number.isFinite(initialMin) || !Number.isFinite(initialMax)) {
+    return [-1, 1];
+  }
+  if (initialMin === initialMax) {
+    const padding = Math.max(Math.abs(initialMin) * 0.05, 1e-12);
+    return [initialMin - padding, initialMax + padding];
+  }
+
+  const padding = (initialMax - initialMin) * 0.08;
+  return [initialMin - padding, initialMax + padding];
 }
 
 export function DmmTrend({
@@ -97,6 +138,7 @@ export function DmmTrend({
     startedAtRef.current = null;
     latestElapsedRef.current = 0;
 
+    const initialRange = dmmTrendVisibleRange(0, horizontalRef.current);
     const width = Math.max(1, host.clientWidth);
     const height = Math.max(1, host.clientHeight);
     const options = {
@@ -106,7 +148,7 @@ export function DmmTrend({
       legend: { show: false },
       scales: {
         x: { auto: false, time: false },
-        y: { auto: true },
+        y: { auto: true, range: dmmTrendYRange },
       },
       axes: [
         {
@@ -144,10 +186,10 @@ export function DmmTrend({
 
     const plot = new uPlot(
       options,
-      dataRef.current as unknown as uPlot.AlignedData,
+      renderableDmmTrendData(dataRef.current, initialRange) as unknown as uPlot.AlignedData,
       host,
     );
-    plot.setScale("x", dmmTrendVisibleRange(0, horizontalRef.current));
+    plot.setScale("x", initialRange);
     plotRef.current = plot;
 
     const resizeObserver = new ResizeObserver(() => {
@@ -171,10 +213,12 @@ export function DmmTrend({
     if (plot === null) {
       return;
     }
-    plot.setScale(
-      "x",
-      dmmTrendVisibleRange(latestElapsedRef.current, horizontalRef.current),
+
+    const visibleRange = dmmTrendVisibleRange(
+      latestElapsedRef.current,
+      horizontalRef.current,
     );
+    plot.setScale("x", visibleRange);
     plot.redraw();
   }, [horizontal]);
 
@@ -194,11 +238,11 @@ export function DmmTrend({
     latestElapsedRef.current = elapsedSeconds;
 
     appendDmmTrendSnapshot(dataRef.current, elapsedSeconds, snapshot);
-    plot.setData(dataRef.current as unknown as uPlot.AlignedData, false);
-    plot.setScale(
-      "x",
-      dmmTrendVisibleRange(elapsedSeconds, horizontalRef.current),
+    const visibleRange = dmmTrendVisibleRange(elapsedSeconds, horizontalRef.current);
+    plot.setData(
+      renderableDmmTrendData(dataRef.current, visibleRange) as unknown as uPlot.AlignedData,
     );
+    plot.setScale("x", visibleRange);
     plot.redraw();
   }, [measurementFunction, snapshot]);
 
