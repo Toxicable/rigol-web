@@ -50,6 +50,38 @@ describe("InstrumentRegistry", () => {
     expect(scopeRuntime.stop).toHaveBeenCalledOnce();
   });
 
+  it("suspends a running instrument without dropping subscribers and resumes it", async () => {
+    const scopeRuntime = runtime();
+    const instruments = registry(scopeRuntime);
+    const session = {};
+
+    await instruments.subscribe(session, SupportedInstrument.Dho804);
+    await instruments.suspend(SupportedInstrument.Dho804);
+
+    expect(scopeRuntime.stop).toHaveBeenCalledOnce();
+    expect(instruments.isSubscribed(session, SupportedInstrument.Dho804)).toBe(true);
+
+    await instruments.resume(SupportedInstrument.Dho804);
+
+    expect(scopeRuntime.start).toHaveBeenCalledTimes(2);
+    expect(instruments.isSubscribed(session, SupportedInstrument.Dho804)).toBe(true);
+  });
+
+  it("does not start a newly subscribed instrument until suspension is lifted", async () => {
+    const scopeRuntime = runtime();
+    const instruments = registry(scopeRuntime);
+    const session = {};
+
+    await instruments.suspend(SupportedInstrument.Dho804);
+    await instruments.subscribe(session, SupportedInstrument.Dho804);
+
+    expect(scopeRuntime.start).not.toHaveBeenCalled();
+
+    await instruments.resume(SupportedInstrument.Dho804);
+
+    expect(scopeRuntime.start).toHaveBeenCalledOnce();
+  });
+
   it("rolls back a subscriber when activation fails and allows retry", async () => {
     const scopeRuntime = runtime();
     scopeRuntime.start
