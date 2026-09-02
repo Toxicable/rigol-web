@@ -42,6 +42,17 @@ position; the guide is browser-only and does not add any SCPI query traffic.
 The acquisition toolbar uses one Run/Stop button whose action follows the
 current scope run state.
 
+The shared **Copy Screenshot** control captures the currently visible Rigol Web
+viewport and copies it as PNG. Clipboard writes are initiated directly from the
+button click so browsers retain user activation; there is no separate
+application-managed clipboard permission prompt. The page must be HTTPS or
+localhost. Chromium may expose a persistent Clipboard site permission if the
+user has previously blocked the site; Firefox and Safari rely on the user
+activation instead. The DOM-to-image rasterizer uses a data-URL SVG because
+blob-URL SVGs containing `foreignObject` can taint export canvases in WebKit.
+Screenshot failures display the underlying browser error in the header and log
+it to the console.
+
 RIGOL documents the statistic query in the DHO800/DHO900 Programming Guide:
 https://download.rigol.com/en/Manual/Digital%20Oscilloscope/DHO800/DHO800900_ProgrammingGuide_EN.pdf
 
