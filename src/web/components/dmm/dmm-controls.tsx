@@ -81,19 +81,65 @@ function sameRange(left: DmmRange, right: DmmRange): boolean {
   return left.value === right.value;
 }
 
-function ContinuityIcon() {
-  return (
-    <svg
-      className="dmm-function-icon"
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path d="M4 10h4l5-4v12l-5-4H4z" />
-      <path d="M16 9.25c1.35 1.5 1.35 4 0 5.5" />
-      <path d="M19 6.5c2.75 3 2.75 8 0 11" />
-    </svg>
-  );
+function DmmFunctionIcon({ value }: { readonly value: DmmMeasurementFunction }) {
+  switch (value) {
+    case DmmMeasurementFunction.DcVoltage:
+      return <span className="dmm-function-symbol" aria-hidden="true">V⎓</span>;
+    case DmmMeasurementFunction.AcVoltage:
+      return <span className="dmm-function-symbol" aria-hidden="true">V~</span>;
+    case DmmMeasurementFunction.DcCurrent:
+      return <span className="dmm-function-symbol" aria-hidden="true">A⎓</span>;
+    case DmmMeasurementFunction.AcCurrent:
+      return <span className="dmm-function-symbol" aria-hidden="true">A~</span>;
+    case DmmMeasurementFunction.Resistance2Wire:
+      return <span className="dmm-function-symbol" aria-hidden="true">Ω</span>;
+    case DmmMeasurementFunction.Resistance4Wire:
+      return <span className="dmm-function-symbol dmm-function-symbol-wide" aria-hidden="true">4WΩ</span>;
+    case DmmMeasurementFunction.Continuity:
+      return (
+        <svg className="dmm-function-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path className="dmm-function-icon-fill" d="M4 10h4l5-4v12l-5-4H4z" />
+          <path d="M16 9.25c1.35 1.5 1.35 4 0 5.5" />
+          <path d="M19 6.5c2.75 3 2.75 8 0 11" />
+        </svg>
+      );
+    case DmmMeasurementFunction.Diode:
+      return (
+        <svg className="dmm-function-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M3 12h5" />
+          <path className="dmm-function-icon-fill" d="M8 7l7 5-7 5z" />
+          <path d="M15 7v10" />
+          <path d="M15 12h6" />
+        </svg>
+      );
+    case DmmMeasurementFunction.Frequency:
+      return (
+        <svg className="dmm-function-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M2 12c2.5-6 4.5-6 7 0s4.5 6 7 0 4.5-6 6 0" />
+        </svg>
+      );
+    case DmmMeasurementFunction.Period:
+      return (
+        <svg className="dmm-function-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M3 14V9h6v5h6V9h6" />
+          <path d="M9 18h6" />
+          <path d="M9 16.5V19.5M15 16.5V19.5" />
+        </svg>
+      );
+    case DmmMeasurementFunction.Capacitance:
+      return (
+        <svg className="dmm-function-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M3 12h7M10 6v12M14 6v12M14 12h7" />
+        </svg>
+      );
+    case DmmMeasurementFunction.Temperature:
+      return (
+        <svg className="dmm-function-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M10 5a2 2 0 0 1 4 0v8.3a4 4 0 1 1-4 0z" />
+          <path d="M12 8v8" />
+        </svg>
+      );
+  }
 }
 
 export function DmmControls({ state, pending, onControl }: DmmControlsProps) {
@@ -122,7 +168,7 @@ export function DmmControls({ state, pending, onControl }: DmmControlsProps) {
               onClick={() => onControl(functionControlForSelection(option.value))}
             >
               <span className="dmm-function-choice-label">
-                {option.value === DmmMeasurementFunction.Continuity ? <ContinuityIcon /> : null}
+                <DmmFunctionIcon value={option.value} />
                 <span>{option.shortLabel}</span>
               </span>
             </button>
