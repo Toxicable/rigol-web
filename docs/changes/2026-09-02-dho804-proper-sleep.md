@@ -1,57 +1,84 @@
-# DHO804 proper sleep research
+# DHO804 proper sleep and wake control
 
-## Current RigolWeb behaviour
+## Behavior split
 
-`Dho804DisplayControl` currently sends Android `KEYCODE_SLEEP` (`223`) for **Screen Off** and `KEYCODE_WAKEUP` (`224`) for **Screen On** over ADB. These are display-level Android actions, not the DHO804 instrument's `Power > Sleep` mode.
+Rigol Web keeps four separate DHO804 power/display actions:
 
-Keep Screen Off/On with those semantics.
+- **Screen Off**: Android `KEYCODE_SLEEP` (`223`), display-only.
+- **Screen On**: Android `KEYCODE_WAKEUP` (`224`), display-only.
+- **Sleep**: invoke the stock Rigol `Power > Sleep` button remotely.
+- **Wake**: attempt both candidate wake key paths and log the result of each.
 
-## Stock Rigol Sleep behaviour
+Do not collapse Screen Off/On into Sleep/Wake; they have different instrument semantics.
 
-The decompiled DHO800 scope application shows the implementation of its `button_sleep` handler. It:
+## Why native Sleep must use the Rigol UI path
+
+The decompiled DHO800 scope application shows that its `button_sleep` handler:
 
 1. unloads `/rigol/driver/focaltech_ts.ko`;
 2. turns off all front-panel LEDs through Rigol's native CIL `MSG_APP_UTILITY_LED` calls;
 3. broadcasts `com.rigol.watchdog.QuickOpenStatus` with `quickOpenStatus=0`;
 4. executes `su -c "/rigol/shell/quick_boot_test.sh off"`.
 
-Therefore RigolWeb should not treat Android `KEYCODE_SLEEP` as instrument Sleep, and should not clone this internal sequence in the server. The native CIL portion in particular belongs to the installed Rigol application/firmware.
+Rigol Web therefore does not reproduce that private sequence. It invokes the installed Rigol application's own Sleep button so the firmware remains responsible for the complete transition.
 
-## Preferred RigolWeb Sleep action
+## Implemented Sleep sequence
 
-Invoke the stock Rigol UI path remotely:
+`Dho804DisplayControl.sleep()` now:
 
-1. send the Rigol panel-power key over ADB;
-2. locate the stock `com.rigol.scope:id/button_sleep` node with `uiautomator dump`;
-3. tap the centre of that node's bounds.
+1. connects to the configured DHO804 ADB endpoint;
+2. injects Rigol's panel-power key `1073741851`;
+3. waits 300 ms for the stock power popup;
+4. runs `uiautomator dump /sdcard/rigol-web-window.xml`;
+5. reads that hierarchy and finds `com.rigol.scope:id/button_sleep`;
+6. parses the control bounds and taps their centre.
+
+It deliberately fails instead of using a fixed coordinate if the native Sleep resource cannot be found.
 
 The Rigol app maps panel keys by subtracting `0x40000000` from the Android key code. Its power handler is panel key `27`, giving:
 
 `0x40000000 + 27 = 0x4000001B = 1073741851`
 
-Candidate command to open the power popup:
+## Implemented Wake sequence
 
-`adb -s <scope-ip>:<adb-port> shell input keyevent 1073741851`
+`Dho804DisplayControl.wake()` attempts both wake candidates independently, even if the first one fails:
 
-Do not use fixed tap coordinates if resource lookup works. Do not use standard Android `KEYCODE_POWER` (`26`) as the primary candidate; it is not the key namespace used by Rigol's panel-key decoder.
+1. Rigol panel-power key `1073741851`;
+2. Android `KEYCODE_WAKEUP` (`224`).
 
-## Verification gate
+Each attempt is logged as either command success or failure. After both attempts, Rigol Web reconnects if possible and runs `dumpsys power`; if `mWakefulness=<state>` is present, that state is logged.
 
-Before shipping a **Sleep** control as the default action on the real DHO804, verify on the installed firmware that:
+The HTTP wake request fails only when both key-injection attempts fail. A failed `dumpsys power` probe is diagnostic only and is logged without changing an otherwise successful wake result.
 
-- keycode `1073741851` opens the Rigol power popup;
-- `uiautomator dump` exposes `com.rigol.scope:id/button_sleep`;
-- tapping that node enters the same state as local `Power > Sleep`.
+This is intentional because the first real-scope test is meant to establish which wake mechanism, if either, survives the DHO804's proper Sleep state.
 
-This is expected to be low-risk because the final action is the stock Rigol button handler, but the injected panel-key/resource-discovery path is firmware-dependent and has not yet been bench-confirmed.
+## HTTP and UI
 
-## Wake is separate
+The backend exposes:
 
-Do not relabel the existing **Screen On** action as proper Sleep wake.
+- `POST /api/scope/screen-off`
+- `POST /api/scope/screen-on`
+- `POST /api/scope/sleep`
+- `POST /api/scope/wake`
 
-Rigol documents the physical front-panel power key as the wake action. Public reverse-engineered sources do not establish whether ADB/LAN remains alive during proper Sleep. After entering proper Sleep, test TCP/ADB reachability and, if still reachable, test keycode `1073741851` for resume.
+The DHO804 toolbar exposes matching **Screen Off**, **Screen On**, **Sleep**, and **Wake** buttons.
 
-If ADB becomes unreachable, proper Sleep cannot be remotely woken through the existing LAN ADB mechanism. Reliable remote cold-start remains external power switching with `:SYSTem:PSTatus OPEN`, which is a full boot rather than resume.
+## Verification state
+
+Implementation is complete, but the proper Sleep/Wake path still needs a real-scope bench check because ADB availability during Rigol Sleep is firmware behavior that cannot be established from the decompiled application alone.
+
+The next real-scope run should capture these server log lines around one Sleep/Wake cycle:
+
+- `[DHO804 sleep] clicked native Rigol Sleep control at ...`
+- `[DHO804 wake] Rigol panel power key: ...`
+- `[DHO804 wake] Android KEYCODE_WAKEUP: ...`
+- `[DHO804 wake] power-state probe after attempts: ...` or the corresponding probe failure.
+
+If ADB becomes unreachable during proper Sleep, neither LAN ADB wake candidate can work from that state. Reliable remote cold-start then remains external power switching with `:SYSTem:PSTatus OPEN`, which is a full boot rather than resume.
+
+## Cost
+
+No additional hardware or paid service is required. Cost impact: **A$0**.
 
 ## Sources
 
