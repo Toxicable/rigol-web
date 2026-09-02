@@ -18,6 +18,11 @@ import {
 } from "../interaction-math.js";
 import { DeepCaptureKind, useScopeStore } from "../scope-store.js";
 import type { ScopeWebSocketClient } from "../websocket-client.js";
+import {
+  divisionSplits,
+  formatTimeAxisValues,
+  timeAxisUnit,
+} from "./waveform-axis.js";
 import { WaveformDisplayMode, type WaveformController } from "./waveform-controller.js";
 
 interface WaveformPlotProps {
@@ -99,6 +104,8 @@ function channelAxis(channel: ChannelState): uPlot.Axis {
     size: 58,
     space: 20,
     incrs: [channel.scale],
+    splits: (_plot, _axisIndex, scaleMin, scaleMax) =>
+      divisionSplits(scaleMin, scaleMax, 8),
     grid: { show: false },
     ticks: {
       show: true,
@@ -167,9 +174,17 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
   const isDeep =
     deepCapture.kind === DeepCaptureKind.Ready &&
     controller.getDisplayMode() === WaveformDisplayMode.Deep;
-  const axisConfigSignature = scope.channels
-    .map((channel) => `${channel.channel}:${channel.enabled ? 1 : 0}:${channel.scale}:${channel.unit}`)
-    .join("|");
+  const horizontalScale =
+    isDeep && deepCapture.kind === DeepCaptureKind.Ready
+      ? deepCapture.scale
+      : scope.horizontal.scale;
+  const horizontalUnit = timeAxisUnit(horizontalScale);
+  const axisConfigSignature = [
+    horizontalUnit.symbol,
+    ...scope.channels.map(
+      (channel) => `${channel.channel}:${channel.enabled ? 1 : 0}:${channel.scale}:${channel.unit}`,
+    ),
+  ].join("|");
 
   useEffect(() => {
     const host = hostRef.current;
@@ -199,6 +214,10 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
           grid: { show: false },
           ticks: { show: false },
           size: 28,
+          splits: (_plot: uPlot, _axisIndex: number, scaleMin: number, scaleMax: number) =>
+            divisionSplits(scaleMin, scaleMax, 10),
+          values: (_plot: uPlot, ticks: number[]) =>
+            formatTimeAxisValues(ticks, horizontalUnit),
         },
         ...scope.channels.filter((channel) => channel.enabled).map(channelAxis),
       ],
