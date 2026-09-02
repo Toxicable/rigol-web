@@ -11,7 +11,6 @@ export type PowerControlLogger = (message: string) => void;
 export type Delay = (milliseconds: number) => Promise<void>;
 
 const ADB_TIMEOUT_MS = 5_000;
-const ANDROID_KEYCODE_WAKEUP = "224";
 const RIGOL_PANEL_POWER_KEYCODE = "1073741851";
 const RIGOL_SLEEP_TAP_X = "324";
 const RIGOL_SLEEP_TAP_Y = "375";
@@ -75,10 +74,6 @@ function adbTarget(host: string, port: number): string {
   return `${normalizedHost}:${port}`;
 }
 
-function errorDetail(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export class Dho804PowerControl {
   public constructor(
     private readonly host: string,
@@ -119,45 +114,6 @@ export class Dho804PowerControl {
       RIGOL_SLEEP_TAP_Y,
     ]);
     this.log(`[DHO804 sleep] dispatched native Rigol Sleep control at ${RIGOL_SLEEP_TAP_X},${RIGOL_SLEEP_TAP_Y}`);
-  }
-
-  public async wake(): Promise<void> {
-    const attempts = [
-      { label: "Rigol panel power key", keyCode: RIGOL_PANEL_POWER_KEYCODE },
-      { label: "Android KEYCODE_WAKEUP", keyCode: ANDROID_KEYCODE_WAKEUP },
-    ];
-    const failures: string[] = [];
-
-    for (const attempt of attempts) {
-      try {
-        await this.sendKeyEvent(attempt.keyCode);
-        this.log(`[DHO804 wake] ${attempt.label}: command succeeded`);
-      } catch (error) {
-        const detail = errorDetail(error);
-        failures.push(`${attempt.label}: ${detail}`);
-        this.log(`[DHO804 wake] ${attempt.label}: failed: ${detail}`);
-      }
-    }
-
-    try {
-      const target = adbTarget(this.host, this.port);
-      await this.ensureConnected(target);
-      const powerState = await this.adb(["-s", target, "shell", "dumpsys", "power"]);
-      const wakefulness = powerState.stdout.match(/mWakefulness=([^\s]+)/)?.[1] ?? "unknown";
-      this.log(`[DHO804 wake] power-state probe after attempts: ${wakefulness}`);
-    } catch (error) {
-      this.log(`[DHO804 wake] power-state probe failed: ${errorDetail(error)}`);
-    }
-
-    if (failures.length === attempts.length) {
-      throw new Error(`All DHO804 wake attempts failed: ${failures.join("; ")}`);
-    }
-  }
-
-  private async sendKeyEvent(keyCode: string): Promise<void> {
-    const target = adbTarget(this.host, this.port);
-    await this.ensureConnected(target);
-    await this.sendConnectedKeyEvent(target, keyCode);
   }
 
   private async ensureConnected(target: string): Promise<void> {
