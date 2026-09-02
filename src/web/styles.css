@@ -65,6 +65,17 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   background: #171b20;
   border-color: #47515c;
 }
+.screenshot-copy-control {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 0 0 auto;
+}
+.screenshot-copy-error {
+  color: #ff8c8c;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
 .scope-toolbar-content {
   flex: 1;
   min-width: 0;
@@ -144,14 +155,17 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   user-select: none;
   touch-action: none;
 }
-.channel-marker { padding: 0; }
+.channel-marker { left: 2px; padding: 0; }
 .trigger-marker {
+  right: 2px;
   min-width: 46px;
   border-color: var(--channel-accent);
   color: var(--channel-accent);
 }
 .trigger-drag-guide {
   position: absolute;
+  left: 0;
+  right: 0;
   z-index: 3;
   border-top: 1px dashed var(--channel-accent);
   pointer-events: none;
