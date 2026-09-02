@@ -62,11 +62,22 @@ export function MeasurementPanel({ client, controller }: MeasurementPanelProps) 
   }, [client, source]);
 
   useEffect(() => {
-    const scopeMeasurements = source === MeasurementSource.Scope ? specs : [];
-    void client.setMeasurements(scopeMeasurements).catch((error: unknown) => {
+    if (source !== MeasurementSource.Scope) {
+      return;
+    }
+    void client.setMeasurements(specs).catch((error: unknown) => {
       useScopeStore.getState().setError(error instanceof Error ? error.message : String(error));
     });
   }, [client, source, specs]);
+
+  useEffect(() => {
+    if (source !== MeasurementSource.Local) {
+      return;
+    }
+    void client.setMeasurements([]).catch((error: unknown) => {
+      useScopeStore.getState().setError(error instanceof Error ? error.message : String(error));
+    });
+  }, [client, source]);
 
   useEffect(() => {
     localMeasurements.reset();
@@ -75,7 +86,9 @@ export function MeasurementPanel({ client, controller }: MeasurementPanelProps) 
     }
 
     const update = () => {
-      useScopeStore.getState().setMeasurementValues(localMeasurements.update(specs, controller));
+      useScopeStore
+        .getState()
+        .setLocalMeasurementValues(localMeasurements.update(specs, controller));
     };
     update();
     return controller.subscribe(update);
