@@ -52,25 +52,44 @@ Copy `.env.example` to `.env`, then set `RIGOL_SCOPE_HOST` and
 `RIGOL_DMM_HOST` and `RIGOL_DMM_PORT` for the DM858E endpoint.
 
 The DHO804 **Screen Off** and **Screen On** controls are deliberately separate
-from SCPI. The runtime container includes the Debian `adb` client and sends
-Android `KEYCODE_SLEEP` (`223`) or `KEYCODE_WAKEUP` (`224`) to the scope over
-ADB. On the DHO804 these commands have been bench-verified to blank and restore
-the display while the oscilloscope continues operating and Rigol Web continues
-receiving telemetry. They are therefore display controls only and must not be
-presented as instrument sleep or standby controls.
+from instrument sleep. The runtime container includes the Debian `adb` client
+and sends Android `KEYCODE_SLEEP` (`223`) or `KEYCODE_WAKEUP` (`224`) to the
+scope over ADB. On the DHO804 these commands have been bench-verified to blank
+and restore the display while the oscilloscope continues operating and Rigol
+Web continues receiving telemetry. They remain display controls only.
 
-RIGOL documents a separate instrument **Sleep** operation under the scope's own
-Power menu. That operation is not currently implemented remotely by Rigol Web.
-The DHO800 user guide states that instrument Sleep keeps some processes alive,
-uses more power than Shutdown, and resumes more quickly than a full startup:
-https://www.rigol.com/dam/global/downloads/brochures/en/user-manual/oscillosopes/DHO800_UserGuide_EN.pdf
+The separate **Sleep** control invokes the DHO804's own `Power > Sleep` path
+instead of reproducing Rigol's private shutdown sequence. Rigol Web injects the
+scope's panel-power key (`1073741851`), waits for the stock Rigol power popup,
+dumps the Android UI hierarchy, locates
+`com.rigol.scope:id/button_sleep`, and taps the centre of that native control.
+The installed Rigol application then owns the actual sleep transition, including
+its CIL, watchdog and `quick_boot_test.sh` behavior.
+
+The **Wake** control is intentionally diagnostic while proper-sleep wake behavior
+is being established on the real scope. A single click attempts both known
+candidates independently:
+
+1. Rigol panel-power key `1073741851`;
+2. Android `KEYCODE_WAKEUP` (`224`).
+
+The server logs success or failure for each attempt and, if ADB remains
+reachable afterwards, runs `dumpsys power` and logs Android's reported
+`mWakefulness` value. Wake returns an HTTP failure only if both key-injection
+methods fail; a failed power-state probe is logged but does not by itself make
+the wake request fail.
+
+RIGOL documents instrument **Sleep** under the scope's own Power menu. The
+DHO800 user guide states that Sleep keeps some processes alive, uses more power
+than Shutdown, and resumes more quickly than a full startup:
+https://www.rigol.com/dam/global/downloads/brochures/en/user-manual/oscilloscopes/DHO800_UserGuide_EN.pdf
 
 `RIGOL_SCOPE_ADB_PORT` defaults to `55555` and can be changed if the scope
 exposes ADB elsewhere. If ADB is disabled or not reachable, the UI reports the
-failed screen-control request. This adds no paid software or hardware dependency;
-it only uses the open-source ADB client already present in the runtime image.
+failed control request. This adds no paid software or hardware dependency; it
+only uses the open-source ADB client already present in the runtime image.
 
-Android documents the key codes here:
+Android documents the standard display key codes here:
 https://developer.android.com/reference/android/view/KeyEvent#KEYCODE_SLEEP
 https://developer.android.com/reference/android/view/KeyEvent#KEYCODE_WAKEUP
 
@@ -91,5 +110,5 @@ The HTTP and WebSocket service listens on port `3000` in the container. Its
 `/health` endpoint verifies only that the Node process is running; it remains
 healthy while the scope is disconnected.
 
-The scope UI, display controls, statistics and diagnostics changes add no
-hardware, paid service, or runtime dependency. Cost impact: **$0**.
+The scope UI, display/power controls, statistics and diagnostics changes add no
+hardware, paid service, or runtime dependency. Cost impact: **A$0**.
