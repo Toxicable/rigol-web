@@ -91,6 +91,21 @@ describe("local measurements", () => {
     expect(updated?.deviation).toBeCloseTo(0.5, 9);
   });
 
+  it("resets statistics when the represented waveform geometry changes", () => {
+    const accumulator = new LocalMeasurementAccumulator();
+    let current = squareFrame();
+    const source = { getFrame: () => current };
+    const specs = [{ channel: Channel.Ch1, kind: MeasurementKind.Vpp }] as const;
+
+    expect(accumulator.update(specs, source)[0]?.statistics.count).toBe(1);
+    current = { ...squareFrame(2, 6, 1), xIncrement: 2e-6 };
+
+    const updated = accumulator.update(specs, source)[0]?.statistics;
+    expect(updated?.count).toBe(1);
+    expect(updated?.current).toBeCloseTo(5, 9);
+    expect(updated?.average).toBeCloseTo(5, 9);
+  });
+
   it("returns an invalid local result when a waveform has no measurable period", () => {
     const frame = squareFrame();
     frame.values.fill(2);
