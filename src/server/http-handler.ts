@@ -7,7 +7,6 @@ const SPA_ROUTES = new Set(["/", "/dm858e", "/dm858e/"]);
 
 export interface HttpControlActions {
   sleepScope(): Promise<void>;
-  wakeScope(): Promise<void>;
 }
 
 function contentType(path: string): string {
@@ -144,16 +143,6 @@ export function createHttpRequestHandler(
         response,
         controlActions?.sleepScope,
         "Failed to put DHO804 into native Sleep",
-      );
-      return;
-    }
-
-    if (request.url === "/api/scope/wake") {
-      handleScopePowerRoute(
-        request,
-        response,
-        controlActions?.wakeScope,
-        "Failed to wake DHO804",
       );
       return;
     }
