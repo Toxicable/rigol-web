@@ -36,55 +36,21 @@ describe("Dho804DisplayControl", () => {
     ]);
   });
 
-  it("opens the Rigol power popup and clicks its native Sleep button", async () => {
-    const adb = vi.fn<AdbRunner>(async (args) => {
-      if (args[0] === "connect") {
-        return { stdout: `connected to ${TARGET}\n`, stderr: "" };
-      }
-      if (args.includes("cat")) {
-        return {
-          stdout: '<hierarchy><node text="Sleep" resource-id="com.rigol.scope:id/button_sleep" bounds="[80,460][300,540]" /></hierarchy>',
-          stderr: "",
-        };
-      }
-      return { stdout: "", stderr: "" };
-    });
+  it("opens the Rigol power popup and taps the stock Sleep button centre", async () => {
+    const adb = connectedAdb();
     const log = vi.fn();
     const noWait = vi.fn(async () => undefined);
     const control = new Dho804DisplayControl("192.168.1.8", 55_555, adb, log, noWait);
 
     await control.sleep();
 
-    expect(noWait).toHaveBeenCalledWith(300);
+    expect(noWait).toHaveBeenCalledWith(500);
     expect(adb.mock.calls.map(([args]) => args)).toEqual([
       ["connect", TARGET],
       ["-s", TARGET, "shell", "input", "keyevent", "1073741851"],
-      ["-s", TARGET, "shell", "uiautomator", "dump", "/sdcard/rigol-web-window.xml"],
-      ["-s", TARGET, "shell", "cat", "/sdcard/rigol-web-window.xml"],
-      ["-s", TARGET, "shell", "input", "tap", "190", "500"],
+      ["-s", TARGET, "shell", "input", "tap", "324", "373"],
     ]);
-    expect(log).toHaveBeenCalledWith("[DHO804 sleep] clicked native Rigol Sleep control at 190,500");
-  });
-
-  it("does not tap an arbitrary location when the native Sleep control is missing", async () => {
-    const adb = vi.fn<AdbRunner>(async (args) => ({
-      stdout: args[0] === "connect"
-        ? `connected to ${TARGET}\n`
-        : args.includes("cat")
-          ? "<hierarchy></hierarchy>"
-          : "",
-      stderr: "",
-    }));
-    const control = new Dho804DisplayControl(
-      "192.168.1.8",
-      55_555,
-      adb,
-      vi.fn(),
-      async () => undefined,
-    );
-
-    await expect(control.sleep()).rejects.toThrow("was not found in the UI hierarchy");
-    expect(adb.mock.calls.some(([args]) => args.includes("tap"))).toBe(false);
+    expect(log).toHaveBeenCalledWith("[DHO804 sleep] clicked native Rigol Sleep control at 324,373");
   });
 
   it("attempts both wake methods and logs their command results plus power state", async () => {
