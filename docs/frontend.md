@@ -39,6 +39,8 @@ The server reference-counts subscriptions across browser sessions, so one tab le
 
 Production static serving must return `index.html` for the known application routes so direct navigation/refresh works with `BrowserRouter`, while missing asset paths still return normal 404s.
 
+The shared instrument header exposes **Copy Screenshot**. It captures the currently rendered browser viewport, including live uPlot canvases and current form values, rasterizes it locally to PNG and writes that PNG to the image clipboard. This is a viewport capture, not a stitched full-scroll document capture. Image clipboard writes require a secure browser context, so the action works on HTTPS and localhost and reports an error when browser security blocks it. The implementation is browser-local and adds no external service or package dependency.
+
 ## Shared browser transport state
 
 WebSocket transport state is separate from either instrument's device lifecycle.
@@ -220,20 +222,20 @@ Initial mappings:
 - per-channel ground marker drag -> channel offset
 - Edge trigger-level marker drag -> trigger level
 
-Background horizontal drag remains available across the waveform interaction overlay. Do not gate drag start to uPlot's internal plot bounding box; the axis layout can change independently and the overlay is the stable interaction surface. Marker buttons stop propagation and retain their dedicated vertical drag behavior.
+The waveform interaction coordinate system is deliberately the **full waveform shell**, independent of uPlot's internal plot bounding box. Numeric axes and graticule layout may change the inner uPlot bbox, but they must not change established drag sensitivity, marker placement or the pointer-active area. Background horizontal drag is available across the waveform overlay; channel markers remain on the shell's left edge and the trigger marker remains on the shell's right edge.
 
 Keep pixel/domain conversion in tested functions.
 
-For plot width `W`:
+For waveform shell width `W`:
 
 ```ts
 newHorizontalPosition =
   startPosition - dx * (10 * horizontalScale) / W;
 ```
 
-Vertical channel/trigger reference positions are clamped to the visible top/bottom plot edge when their true reference position is outside the plot. The draggable handle itself is inset by half its height so it remains fully visible and grab-able. Drag math starts from the handle's **displayed** Y coordinate rather than blindly continuing from the far-offscreen domain value.
+Vertical channel/trigger marker positions use the full waveform shell height and are clamped to its visible top/bottom edge when their true reference position is outside the shell. Drag math starts from that displayed marker coordinate.
 
-For plot height `H`, channel scale `s`, displayed channel marker coordinate `startMarkerY`, and pointer movement `dy`:
+For waveform shell height `H`, channel scale `s`, displayed channel marker coordinate `startMarkerY`, and pointer movement `dy`:
 
 ```ts
 newChannelOffset =
