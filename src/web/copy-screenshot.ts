@@ -161,24 +161,23 @@ async function renderViewportToPng(): Promise<Blob> {
     "</svg>",
   ].join("");
 
-  const svgUrl = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
-  try {
-    const image = await loadImage(svgUrl);
-    const pixelRatio = Math.max(1, window.devicePixelRatio || 1);
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(width * pixelRatio);
-    canvas.height = Math.round(height * pixelRatio);
+  // Use a data URL rather than a blob URL. WebKit can taint a canvas when an
+  // SVG containing foreignObject is loaded from a blob URL, preventing PNG
+  // export even though all captured content is local to this page.
+  const svgUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  const image = await loadImage(svgUrl);
+  const pixelRatio = Math.max(1, window.devicePixelRatio || 1);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(width * pixelRatio);
+  canvas.height = Math.round(height * pixelRatio);
 
-    const context = canvas.getContext("2d");
-    if (context === null) {
-      throw new Error("Browser canvas rendering is unavailable");
-    }
-    context.scale(pixelRatio, pixelRatio);
-    context.drawImage(image, 0, 0, width, height);
-    return await canvasBlob(canvas);
-  } finally {
-    URL.revokeObjectURL(svgUrl);
+  const context = canvas.getContext("2d");
+  if (context === null) {
+    throw new Error("Browser canvas rendering is unavailable");
   }
+  context.scale(pixelRatio, pixelRatio);
+  context.drawImage(image, 0, 0, width, height);
+  return await canvasBlob(canvas);
 }
 
 export async function copyViewportScreenshot(): Promise<void> {
@@ -188,11 +187,26 @@ export async function copyViewportScreenshot(): Promise<void> {
   if (navigator.clipboard?.write === undefined || typeof ClipboardItem === "undefined") {
     throw new Error("This browser does not support copying PNG images to the clipboard");
   }
+  if (typeof ClipboardItem.supports === "function" && !ClipboardItem.supports("image/png")) {
+    throw new Error("This browser does not support PNG images on the clipboard");
+  }
 
+  // Start the clipboard write synchronously from the click. Supplying the PNG
+  // as a Promise lets rendering finish later without losing transient user
+  // activation in browsers such as Safari.
   const png = renderViewportToPng();
-  await navigator.clipboard.write([
-    new ClipboardItem({
-      "image/png": png,
-    }),
-  ]);
+  try {
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        "image/png": png,
+      }),
+    ]);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "NotAllowedError") {
+      throw new Error(
+        "Clipboard write was blocked by the browser. Use this button on HTTPS/localhost; if Chromium has blocked this site, allow Clipboard in Site settings.",
+      );
+    }
+    throw error;
+  }
 }
