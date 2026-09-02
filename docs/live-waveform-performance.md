@@ -153,6 +153,8 @@ Compound text-query support must not be generalized to multiple binary waveform 
 
 ## rigol-mcp follow-up
 
+These notes are retained in-repo as current implementation/research guidance rather than as a separate tracker item.
+
 A second comparison against `erebusnz/rigol-mcp` after the waveform optimizations found no better live-waveform transport to adopt. Rigol Web's binary NORMAL/BYTE path, one `SOURCE CHx;DATA?` transaction per enabled channel, cached units/preambles, and interaction-aware pause/resume policy remain the preferred production design.
 
 Useful remaining ideas:
