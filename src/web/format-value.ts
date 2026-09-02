@@ -11,17 +11,7 @@ const PREFIXES: readonly [number, string][] = [
   [1e-9, "n"],
   [1e-12, "p"],
 ];
-
-function fixedDecimalPlaces(value: number): number {
-  const absolute = Math.abs(value);
-  if (absolute >= 100) {
-    return 0;
-  }
-  if (absolute >= 10) {
-    return 1;
-  }
-  return 3;
-}
+const STABLE_DECIMAL_PLACES = 3;
 
 function formatSi(value: number, unit: string, stable = false): string {
   if (!Number.isFinite(value)) {
@@ -43,7 +33,7 @@ function formatSi(value: number, unit: string, stable = false): string {
   const [scale, prefix] = selected;
   const scaled = value / scale;
   if (stable) {
-    return `${scaled.toFixed(fixedDecimalPlaces(scaled))} ${prefix}${unit}`.trim();
+    return `${scaled.toFixed(STABLE_DECIMAL_PLACES)} ${prefix}${unit}`.trim();
   }
 
   const digits = Math.abs(scaled) >= 100 ? 3 : Math.abs(scaled) >= 10 ? 3 : 4;
@@ -78,7 +68,7 @@ export function formatStablePercent(value: number): string {
   if (!Number.isFinite(value)) {
     return `${String(value)} %`;
   }
-  return `${value.toFixed(fixedDecimalPlaces(value))} %`;
+  return `${value.toFixed(STABLE_DECIMAL_PLACES)} %`;
 }
 
 export function formatSampleRate(value: number): string {
