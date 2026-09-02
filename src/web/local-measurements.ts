@@ -444,15 +444,44 @@ function frameKey(frame: DecodedWaveformFrame): string {
   return `${frame.kind}:${frame.captureId}:${frame.sequence}:${frame.sourceStartSample}:${frame.sourceEndSample}`;
 }
 
+function frameContextKey(frame: DecodedWaveformFrame): string {
+  return [
+    frame.kind,
+    frame.captureId,
+    frame.sourceStartSample,
+    frame.sourceEndSample,
+    frame.xIncrement,
+    frame.xOrigin,
+    frame.xReference,
+    frame.values.length,
+  ].join(":");
+}
+
 export class LocalMeasurementAccumulator {
   private readonly running = new Map<string, RunningStatistics>();
   private readonly current = new Map<string, MeasurementValue>();
   private readonly frameKeys = new Map<Channel, string>();
+  private readonly frameContexts = new Map<Channel, string>();
 
   public reset(): void {
     this.running.clear();
     this.current.clear();
     this.frameKeys.clear();
+    this.frameContexts.clear();
+  }
+
+  private clearChannel(channel: Channel): void {
+    const prefix = `${channel}:`;
+    for (const key of this.running.keys()) {
+      if (key.startsWith(prefix)) {
+        this.running.delete(key);
+      }
+    }
+    for (const key of this.current.keys()) {
+      if (key.startsWith(prefix)) {
+        this.current.delete(key);
+      }
+    }
   }
 
   public update(
@@ -466,8 +495,19 @@ export class LocalMeasurementAccumulator {
       const frame = waveforms.getFrame(channel);
       if (frame === undefined) {
         this.frameKeys.delete(channel);
+        if (this.frameContexts.delete(channel)) {
+          this.clearChannel(channel);
+        }
         continue;
       }
+
+      const context = frameContextKey(frame);
+      if (this.frameContexts.get(channel) !== context) {
+        this.clearChannel(channel);
+        this.frameContexts.set(channel, context);
+        this.frameKeys.delete(channel);
+      }
+
       const key = frameKey(frame);
       if (this.frameKeys.get(channel) !== key) {
         this.frameKeys.set(channel, key);
