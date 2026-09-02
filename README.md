@@ -40,17 +40,19 @@ enabled channel. Vertical ticks are locked to the scope's exact eight divisions
 between the configured min/max instead of allowing the plotting library to add
 "nice" ticks outside that range; Live and Deep Capture therefore use identical
 vertical endpoints. The horizontal axis is locked to the ten scope divisions.
-Its preferred SI time unit follows the active seconds-per-division scale (`s`,
-`ms`, `µs`, `ns`, or `ps`), but the formatter promotes to a larger unit when
-the visible absolute labels would otherwise become unwieldy. Label precision is
-derived from the division spacing rather than exposing raw floating-point
-precision. For example, a 500 µs/div view spanning a few milliseconds renders
-roughly `-1.65 … 2.85 ms` instead of four-digit microsecond values. The unit is
-shown only on the final horizontal label rather than repeated on every tick.
-While an edge-trigger level marker is being dragged, a channel-coloured dashed
-horizontal guide follows the optimistic trigger position; the guide is
-browser-only and does not add any SCPI query traffic. The acquisition toolbar
-uses one Run/Stop button whose action follows the current scope run state.
+Its SI time unit follows standard engineering rollover: values move from `ps` to
+`ns`, `µs`, `ms`, and `s` when they reach 1000 of the smaller unit, so `4000 µs`
+is rendered as `4 ms`. If the visible range requires a larger unit than the
+configured time/div alone, the axis promotes the whole set of labels to that
+larger unit. Tick values use at most three significant digits with unnecessary
+trailing zeroes removed, which keeps arbitrary horizontal offsets readable; for
+example the previously noisy millisecond-scale case renders approximately
+`-1.65, -1.15, -0.654, ... 2.85 ms`. The unit is shown only on the final
+horizontal label rather than repeated on every tick. While an edge-trigger level
+marker is being dragged, a channel-coloured dashed horizontal guide follows the
+optimistic trigger position; the guide is browser-only and does not add any SCPI
+query traffic. The acquisition toolbar uses one Run/Stop button whose action
+follows the current scope run state.
 
 The shared **Copy Screenshot** control captures the currently visible Rigol Web
 viewport and copies it as PNG. Clipboard writes are initiated directly from the
