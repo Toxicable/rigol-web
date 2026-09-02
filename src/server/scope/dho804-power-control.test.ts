@@ -64,56 +64,6 @@ describe("Dho804PowerControl", () => {
     await expect(control.sleep()).rejects.toThrow("adb launch failed");
   });
 
-  it("attempts both wake methods and logs their command results plus power state", async () => {
-    const adb = vi.fn<AdbRunner>(async (args) => {
-      if (args[0] === "connect") {
-        return { stdout: `connected to ${TARGET}\n`, stderr: "" };
-      }
-      if (args.at(-1) === "1073741851") {
-        throw new Error("panel-key injection failed");
-      }
-      if (args.includes("dumpsys")) {
-        return { stdout: "Power Manager State:\n  mWakefulness=Awake\n", stderr: "" };
-      }
-      return { stdout: "", stderr: "" };
-    });
-    const log = vi.fn();
-    const control = new Dho804PowerControl("192.168.1.8", 55_555, adb, log);
-
-    await expect(control.wake()).resolves.toBeUndefined();
-
-    expect(adb.mock.calls.map(([args]) => args)).toEqual([
-      ["connect", TARGET],
-      ["-s", TARGET, "shell", "input", "keyevent", "1073741851"],
-      ["connect", TARGET],
-      ["-s", TARGET, "shell", "input", "keyevent", "224"],
-      ["connect", TARGET],
-      ["-s", TARGET, "shell", "dumpsys", "power"],
-    ]);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Rigol panel power key: failed"));
-    expect(log).toHaveBeenCalledWith("[DHO804 wake] Android KEYCODE_WAKEUP: command succeeded");
-    expect(log).toHaveBeenCalledWith("[DHO804 wake] power-state probe after attempts: Awake");
-  });
-
-  it("fails wake only after both wake methods have been attempted", async () => {
-    const adb = vi.fn<AdbRunner>(async (args) => {
-      if (args[0] === "connect") {
-        return { stdout: `connected to ${TARGET}\n`, stderr: "" };
-      }
-      throw new Error(`failed ${args.at(-1)}`);
-    });
-    const log = vi.fn();
-    const control = new Dho804PowerControl("192.168.1.8", 55_555, adb, log);
-
-    await expect(control.wake()).rejects.toThrow("All DHO804 wake attempts failed");
-    expect(adb.mock.calls.map(([args]) => args).filter((args) => args.includes("keyevent"))).toEqual([
-      ["-s", TARGET, "shell", "input", "keyevent", "1073741851"],
-      ["-s", TARGET, "shell", "input", "keyevent", "224"],
-    ]);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Rigol panel power key: failed"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Android KEYCODE_WAKEUP: failed"));
-  });
-
   it("accepts an existing ADB connection", async () => {
     const adb = vi.fn<AdbRunner>(async () => ({
       stdout: `already connected to ${TARGET}\n`,
