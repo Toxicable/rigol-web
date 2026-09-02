@@ -80,17 +80,28 @@ Copy `.env.example` to `.env`, then set `RIGOL_SCOPE_HOST` and
 Rigol Web exposes one adaptive DHO804 **Sleep/Wake** control. It does not expose
 separate display-only Screen On/Screen Off actions.
 
-For **Sleep**, Rigol Web invokes the DHO804's own `Power > Sleep` path instead
-of reproducing Rigol's private shutdown sequence. It injects the scope's
-panel-power key (`1073741851`), waits 500 ms for the stock power popup, and taps
-the stock Sleep-button centre at `(324, 375)`. That coordinate is derived from
-the decompiled DHO800 layout and confirmed against a real 1024x600 DHO804
-framebuffer capture. Real-scope testing confirmed that the injected panel power
-key opens the correct Rigol popup. The earlier `uiautomator` discovery path did
-not click the button reliably on the scope and has been removed.
+For **Sleep**, Rigol Web first suspends the DHO804 instrument runtime while
+preserving browser subscribers. That cleanly stops the live waveform service,
+SCPI scheduler and SCPI/TCP transport and prevents reconnect attempts while the
+scope is sleeping. It then invokes the DHO804's own `Power > Sleep` path instead
+of reproducing Rigol's private shutdown sequence: panel-power key `1073741851`
+is injected, the server waits 1500 ms for the stock power popup, re-checks ADB,
+and launches a tap at the stock Sleep-button centre `(324, 375)`.
 
-The installed Rigol application owns the actual sleep transition after the tap,
-including its CIL, watchdog and `quick_boot_test.sh` behavior.
+The final tap is intentionally a one-way dispatch. Real-scope testing confirmed
+the tap enters native Sleep, but the successful transition can tear down the ADB
+connection before the local `adb` process reports a normal exit status. Waiting
+for that exit produced a false HTTP 502 even though the scope slept. Rigol Web
+therefore returns success once the final ADB process has successfully launched;
+ADB reachability is checked immediately beforehand, and a local failure to
+launch `adb` still fails the request. If Sleep fails before dispatch, the SCPI
+runtime is resumed.
+
+That coordinate is derived from the decompiled DHO800 layout and confirmed
+against a real 1024x600 DHO804 framebuffer capture. The earlier `uiautomator`
+discovery path did not click the button reliably on the scope and has been
+removed. The installed Rigol application owns the actual sleep transition after
+the tap, including its CIL, watchdog and `quick_boot_test.sh` behavior.
 
 The adaptive button changes to **Wake** after a successful Sleep request and is
 also forced to Wake whenever the normal scope connection is down. Wake is
@@ -105,7 +116,8 @@ The server logs success or failure for each attempt and, if ADB remains
 reachable afterwards, runs `dumpsys power` and logs Android's reported
 `mWakefulness` value. Wake returns an HTTP failure only if both key-injection
 methods fail; a failed power-state probe is logged but does not by itself make
-the wake request fail.
+the wake request fail. After a successful Wake action, the DHO804 runtime
+suspension is lifted so existing subscribers reconnect automatically.
 
 Power-control errors shown in the toolbar are sanitized. Short `text/plain`
 backend errors are shown verbatim; HTML/proxy error pages and oversized response
