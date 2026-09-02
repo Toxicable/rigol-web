@@ -6,6 +6,7 @@ import { createHttpRequestHandler } from "./http-handler.js";
 import { InstrumentRegistry } from "./instruments/instrument-registry.js";
 import { ScopeRuntime } from "./scope-runtime.js";
 import { Dho804PowerControl } from "./scope/dho804-power-control.js";
+import { waitForOfflineThenOnline } from "./scope/tcp-reachability-monitor.js";
 import {
   ServerDmmConnectionKind,
   ServerScopeConnectionKind,
@@ -93,11 +94,46 @@ const instruments = new InstrumentRegistry({
   },
 });
 
+let scopePhysicalWakeMonitor: AbortController | null = null;
+
+function startScopePhysicalWakeMonitor(): void {
+  scopePhysicalWakeMonitor?.abort();
+  const controller = new AbortController();
+  scopePhysicalWakeMonitor = controller;
+
+  void waitForOfflineThenOnline(
+    scopeEndpoint.host,
+    scopeEndpoint.port,
+    controller.signal,
+  ).then(async (woke) => {
+    if (!woke || controller.signal.aborted || scopePhysicalWakeMonitor !== controller) {
+      return;
+    }
+
+    scopePhysicalWakeMonitor = null;
+    console.log("[DHO804 sleep] SCPI endpoint reachable after physical wake; resuming runtime");
+    try {
+      await instruments.resume(SupportedInstrument.Dho804);
+    } catch (error) {
+      console.error("Failed to resume DHO804 SCPI runtime after physical wake", error);
+    }
+  }).catch((error) => {
+    if (!controller.signal.aborted) {
+      console.error("DHO804 physical-wake monitor failed", error);
+    }
+  });
+}
+
 const server = createServer(createHttpRequestHandler(undefined, {
   sleepScope: async () => {
+    if (scopePhysicalWakeMonitor !== null) {
+      throw new Error("DHO804 is already sleeping");
+    }
+
     await instruments.suspend(SupportedInstrument.Dho804);
     try {
       await scopePower.sleep();
+      startScopePhysicalWakeMonitor();
     } catch (error) {
       try {
         await instruments.resume(SupportedInstrument.Dho804);
@@ -106,10 +142,6 @@ const server = createServer(createHttpRequestHandler(undefined, {
       }
       throw error;
     }
-  },
-  wakeScope: async () => {
-    await scopePower.wake();
-    await instruments.resume(SupportedInstrument.Dho804);
   },
 }));
 
@@ -151,6 +183,8 @@ async function shutdown(signal: string): Promise<void> {
   }
   shuttingDown = true;
   console.log(`Rigol Web shutting down on ${signal}`);
+  scopePhysicalWakeMonitor?.abort();
+  scopePhysicalWakeMonitor = null;
 
   try {
     await instruments.stopAll();
