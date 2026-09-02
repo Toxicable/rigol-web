@@ -3,10 +3,10 @@ import {
   type ScopeState,
 } from "../../shared/scope-types.js";
 import {
-  formatAmplitude,
-  formatHertz,
-  formatPercent,
-  formatSeconds,
+  formatStableAmplitude,
+  formatStableHertz,
+  formatStablePercent,
+  formatStableSeconds,
 } from "../format-value.js";
 import { useScopeStore } from "../scope-store.js";
 
@@ -74,16 +74,16 @@ function formatMeasurement(
   channel: number,
 ): string {
   if (kind === MeasurementKind.Frequency) {
-    return formatHertz(value);
+    return formatStableHertz(value);
   }
   if (isTimeMeasurement(kind)) {
-    return formatSeconds(value);
+    return formatStableSeconds(value);
   }
   if (isPercentMeasurement(kind)) {
-    return formatPercent(value);
+    return formatStablePercent(value);
   }
   const channelState = scope.channels[channel - 1];
-  return channelState === undefined ? String(value) : formatAmplitude(value, channelState.unit);
+  return channelState === undefined ? String(value) : formatStableAmplitude(value, channelState.unit);
 }
 
 export function MeasurementOverlay({ scope }: MeasurementOverlayProps) {
