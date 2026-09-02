@@ -4,7 +4,7 @@ import { Dho804DisplayControl, type AdbRunner } from "./dho804-display-control.j
 
 const TARGET = "192.168.1.8:55555";
 
-function connectedAdb(): ReturnType<typeof vi.fn<AdbRunner>> {
+function connectedAdb() {
   return vi.fn<AdbRunner>(async (args) => ({
     stdout: args[0] === "connect" ? `connected to ${TARGET}\n` : "",
     stderr: "",
