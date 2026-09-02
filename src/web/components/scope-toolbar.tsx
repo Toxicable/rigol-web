@@ -24,6 +24,18 @@ function surfaceError(error: unknown): void {
   );
 }
 
+async function powerAction(action: ScopePowerAction): Promise<void> {
+  try {
+    const response = await fetch(`/api/scope/${action}`, { method: "POST" });
+    if (!response.ok) {
+      const detail = (await response.text()).trim();
+      throw new Error(detail || `${action} request failed with HTTP ${response.status}`);
+    }
+  } catch (error) {
+    surfaceError(error);
+  }
+}
+
 export function ScopeToolbar({ client }: ScopeToolbarProps) {
   const connection = useScopeStore((state) => state.connection);
   const lastError = useScopeStore((state) => state.lastError);
@@ -34,6 +46,9 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
       <InstrumentHeader>
         <div className="scope-toolbar-content">
           <span className="status-pill">{reason}</span>
+          <div className="toolbar-actions">
+            <button type="button" onClick={() => void powerAction("wake")}>Wake</button>
+          </div>
           {lastError !== null ? <span className="error-text">{lastError}</span> : null}
         </div>
       </InstrumentHeader>
@@ -49,18 +64,6 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
   const deepCapture = async () => {
     try {
       await client.deepCapture();
-    } catch (error) {
-      surfaceError(error);
-    }
-  };
-
-  const powerAction = async (action: ScopePowerAction) => {
-    try {
-      const response = await fetch(`/api/scope/${action}`, { method: "POST" });
-      if (!response.ok) {
-        const detail = (await response.text()).trim();
-        throw new Error(detail || `${action} request failed with HTTP ${response.status}`);
-      }
     } catch (error) {
       surfaceError(error);
     }
