@@ -22,7 +22,11 @@ export function InstrumentHeader({ children }: InstrumentHeaderProps) {
       setScreenshotCopied(true);
       window.setTimeout(() => setScreenshotCopied(false), 1500);
     } catch (error) {
-      setScreenshotError(error instanceof Error ? error.message : String(error));
+      console.error("Copy Screenshot failed", error);
+      const detail = error instanceof Error
+        ? `${error.name}: ${error.message}`
+        : String(error);
+      setScreenshotError(detail);
     } finally {
       setCopyingScreenshot(false);
     }
@@ -58,7 +62,13 @@ export function InstrumentHeader({ children }: InstrumentHeaderProps) {
       {children}
       <div className="screenshot-copy-control" data-screenshot-exclude="true">
         {screenshotError !== null ? (
-          <span className="screenshot-copy-error" title={screenshotError}>Screenshot failed</span>
+          <span
+            className="screenshot-copy-error"
+            title={screenshotError}
+            style={{ maxWidth: "34rem", whiteSpace: "normal" }}
+          >
+            {screenshotError}
+          </span>
         ) : null}
         <button
           type="button"
