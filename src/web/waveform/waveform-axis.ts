@@ -12,11 +12,11 @@ const TIME_AXIS_UNITS: readonly TimeAxisUnit[] = [
 ];
 
 export function divisionSplits(min: number, max: number, divisions: number): number[] {
-  if (!Number.isFinite(min) || !Number.isFinite(max) || !(max > min)) {
-    throw new Error("Axis bounds must be finite and increasing");
-  }
   if (!Number.isSafeInteger(divisions) || divisions < 1) {
     throw new Error("Axis division count must be a positive integer");
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max) || !(max > min)) {
+    return [];
   }
 
   const step = (max - min) / divisions;
