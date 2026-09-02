@@ -4,7 +4,7 @@ import { DmmRuntime } from "./dmm/dmm-runtime.js";
 import { createHttpRequestHandler } from "./http-handler.js";
 import { InstrumentRegistry } from "./instruments/instrument-registry.js";
 import { ScopeRuntime } from "./scope-runtime.js";
-import { Dho804DisplayControl } from "./scope/dho804-display-control.js";
+import { Dho804PowerControl } from "./scope/dho804-power-control.js";
 import {
   ServerDmmConnectionKind,
   ServerScopeConnectionKind,
@@ -61,11 +61,11 @@ const dmmEndpoint = {
   host: readInstrumentHost("RIGOL_DMM_HOST"),
   port: readInstrumentPort("RIGOL_DMM_PORT"),
 };
-const scopeDisplay = new Dho804DisplayControl(scopeEndpoint.host, readScopeAdbPort());
+const scopePower = new Dho804PowerControl(scopeEndpoint.host, readScopeAdbPort());
 
 const server = createServer(createHttpRequestHandler(undefined, {
-  sleepScope: () => scopeDisplay.sleep(),
-  wakeScope: () => scopeDisplay.wake(),
+  sleepScope: () => scopePower.sleep(),
+  wakeScope: () => scopePower.wake(),
 }));
 
 const initialScopeConnection: ServerScopeConnection = {
