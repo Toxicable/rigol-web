@@ -14,7 +14,7 @@ const ANDROID_KEYCODE_SLEEP = "223";
 const ANDROID_KEYCODE_WAKEUP = "224";
 const RIGOL_PANEL_POWER_KEYCODE = "1073741851";
 const RIGOL_SLEEP_TAP_X = "324";
-const RIGOL_SLEEP_TAP_Y = "373";
+const RIGOL_SLEEP_TAP_Y = "375";
 const POWER_POPUP_SETTLE_MS = 500;
 
 function runAdb(args: readonly string[]): Promise<AdbCommandResult> {
@@ -80,9 +80,8 @@ export class Dho804DisplayControl {
 
     // The stock DHO800 power popup is 560x270 dp centred on the fixed
     // 1024x600 instrument UI. Its 110x35 dp Sleep button is centred in the
-    // left third, placing the button centre at approximately (324, 373).
-    // Bench testing confirmed the panel-power key opens this exact popup;
-    // uiautomator hierarchy dumping on the scope did not expose/click it.
+    // left third, placing the button centre at approximately (324, 375).
+    // A real DHO804 framebuffer capture confirmed the popup geometry.
     await this.adb([
       "-s",
       target,
