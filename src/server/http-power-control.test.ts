@@ -25,7 +25,6 @@ async function withServer(
 function controls(overrides: Partial<HttpControlActions> = {}): HttpControlActions {
   return {
     sleepScope: async () => undefined,
-    wakeScope: async () => undefined,
     ...overrides,
   };
 }
@@ -33,39 +32,31 @@ function controls(overrides: Partial<HttpControlActions> = {}): HttpControlActio
 describe("scope power HTTP control", () => {
   it("runs the injected DHO804 native Sleep action", async () => {
     const sleepScope = vi.fn(async () => undefined);
-    const wakeScope = vi.fn(async () => undefined);
 
-    await withServer(controls({ sleepScope, wakeScope }), async (baseUrl) => {
+    await withServer(controls({ sleepScope }), async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/scope/sleep`, { method: "POST" });
       expect(response.status).toBe(204);
     });
 
     expect(sleepScope).toHaveBeenCalledTimes(1);
-    expect(wakeScope).not.toHaveBeenCalled();
   });
 
-  it("runs the injected DHO804 wake action", async () => {
-    const sleepScope = vi.fn(async () => undefined);
-    const wakeScope = vi.fn(async () => undefined);
-
-    await withServer(controls({ sleepScope, wakeScope }), async (baseUrl) => {
+  it("does not expose the removed LAN wake endpoint", async () => {
+    await withServer(controls(), async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/scope/wake`, { method: "POST" });
-      expect(response.status).toBe(204);
+      expect(response.status).toBe(404);
     });
-
-    expect(wakeScope).toHaveBeenCalledTimes(1);
-    expect(sleepScope).not.toHaveBeenCalled();
   });
 
-  it("surfaces ADB power failures to the browser", async () => {
+  it("surfaces ADB sleep failures to the browser", async () => {
     await withServer(
       controls({
-        wakeScope: async () => {
+        sleepScope: async () => {
           throw new Error("ADB unavailable");
         },
       }),
       async (baseUrl) => {
-        const response = await fetch(`${baseUrl}/api/scope/wake`, { method: "POST" });
+        const response = await fetch(`${baseUrl}/api/scope/sleep`, { method: "POST" });
         expect(response.status).toBe(502);
         expect(await response.text()).toContain("ADB unavailable");
       },
