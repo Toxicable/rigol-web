@@ -99,7 +99,10 @@ export function MeasurementOverlay({ scope }: MeasurementOverlayProps) {
       {specs.map((spec, index) => {
         const value = values[index];
         const statistics =
-          value !== undefined && value.channel === spec.channel && value.kind === spec.kind
+          value !== undefined &&
+          value.channel === spec.channel &&
+          value.kind === spec.kind &&
+          value.statistics.count > 0
             ? value.statistics
             : null;
         const formatted = (raw: number) =>
