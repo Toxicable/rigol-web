@@ -13,10 +13,12 @@ import {
   normalizeDmmTrendHorizontal,
 } from "./dmm-horizontal-controls.js";
 import {
+  DMM_TREND_SAMPLE_INTERVAL_MS,
   appendDmmTrendSnapshot,
   dmmTrendVisibleRange,
   dmmTrendYRange,
   renderableDmmTrendData,
+  showDmmTrendPoints,
   type TrendData,
 } from "./dmm-trend.js";
 
@@ -29,6 +31,19 @@ const valueSnapshot: DmmReadingSnapshot = {
 };
 
 describe("DM858E snapshot trend", () => {
+  it("samples the latest browser state at 10 Hz", () => {
+    expect(DMM_TREND_SAMPLE_INTERVAL_MS).toBe(100);
+  });
+
+  it("records repeated stable values as distinct trend samples", () => {
+    const data: TrendData = [[], []];
+
+    appendDmmTrendSnapshot(data, 0, valueSnapshot);
+    appendDmmTrendSnapshot(data, 0.1, valueSnapshot);
+
+    expect(data).toEqual([[0, 0.1], [12.34, 12.34]]);
+  });
+
   it("records numeric snapshots and gaps for unavailable readings", () => {
     const data: TrendData = [[], []];
 
@@ -97,6 +112,12 @@ describe("DM858E snapshot trend", () => {
 
     const twoPoints: TrendData = [[0, 1], [12.34, 12.35]];
     expect(renderableDmmTrendData(twoPoints, { min: -9, max: 1 })).toBe(twoPoints);
+  });
+
+  it("shows point markers while there are too few visible points for a line", () => {
+    expect(showDmmTrendPoints({} as never, 1, 0, 0)).toBe(true);
+    expect(showDmmTrendPoints({} as never, 1, 0, 1)).toBe(true);
+    expect(showDmmTrendPoints({} as never, 1, 0, 2)).toBe(false);
   });
 
   it("gives uPlot a finite fallback Y range without numeric data", () => {
