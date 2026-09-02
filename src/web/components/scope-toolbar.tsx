@@ -12,6 +12,8 @@ const RUN_STATE_LABELS: Record<ScopeRunState, string> = {
   [ScopeRunState.Stopped]: "Stopped",
 };
 
+const MAX_API_ERROR_DETAIL_LENGTH = 240;
+
 type ScopePowerAction = "screen-off" | "screen-on" | "sleep" | "wake";
 
 interface ScopeToolbarProps {
@@ -24,12 +26,25 @@ function surfaceError(error: unknown): void {
   );
 }
 
+async function powerActionError(action: ScopePowerAction, response: Response): Promise<Error> {
+  const fallback = `${action} request failed with HTTP ${response.status}`;
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (!contentType.startsWith("text/plain")) {
+    return new Error(fallback);
+  }
+
+  const detail = (await response.text()).trim();
+  if (detail.length === 0 || detail.length > MAX_API_ERROR_DETAIL_LENGTH) {
+    return new Error(fallback);
+  }
+  return new Error(detail);
+}
+
 async function powerAction(action: ScopePowerAction): Promise<void> {
   try {
     const response = await fetch(`/api/scope/${action}`, { method: "POST" });
     if (!response.ok) {
-      const detail = (await response.text()).trim();
-      throw new Error(detail || `${action} request failed with HTTP ${response.status}`);
+      throw await powerActionError(action, response);
     }
   } catch (error) {
     surfaceError(error);
