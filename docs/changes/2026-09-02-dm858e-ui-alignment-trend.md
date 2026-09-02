@@ -10,9 +10,25 @@ The DM858E route now follows the same frontend shape as the DHO804 route more cl
 - a dedicated `DmmToolbar` wraps the shared `InstrumentHeader`, matching the scope-side toolbar boundary;
 - the main layout uses the same fixed 360 px control column and shared `control-stack` pattern as the scope;
 - the measurement side is a dedicated column containing the primary DMM reading and a trend plot;
+- browser-local Horizontal controls sit in the same control rail as the DMM function/range controls;
 - raw SCPI remains absent from both primary instrument screens.
 
-The DMM also now renders a rolling five-minute trend with the existing `uPlot` dependency. No new package, server endpoint, instrument command, hardware, or BOM item is required.
+The DMM trend uses the existing `uPlot` dependency. No new package, server endpoint, instrument command, hardware, or BOM item is required.
+
+## Trend horizontal controls
+
+The trend keeps a rolling five-minute browser history, but five minutes is a retention ceiling rather than a fixed viewport.
+
+Horizontal controls mirror the scope-side interaction model:
+
+- `Time/div` controls ten horizontal divisions with 1-2-5-style steps from 100 ms/div through 30 s/div;
+- the default is 1 s/div, so the initial viewport is ten seconds wide;
+- `Position = 0 s` keeps the newest received snapshot on the right edge;
+- negative Position values pan backward through retained history;
+- `Latest` returns Position to zero;
+- changing DMM measurement function resets Position to zero while preserving Time/div.
+
+At 30 s/div the full five-minute retained history fits in the ten-division viewport.
 
 ## Trend semantics
 
@@ -25,7 +41,7 @@ Consequences:
 - repeated identical snapshot values are still plotted when they are delivered;
 - changed values do not imply that every physical conversion between snapshots is represented;
 - overload and unavailable snapshots produce gaps rather than fabricated numeric values;
-- the plot resets when the selected measurement function changes or the route is remounted;
+- the plot history resets when the selected measurement function changes or the route is remounted;
 - only the most recent five minutes are retained in browser memory;
 - no min/max/average/standard-deviation or conversion-count statistics are derived from this snapshot history.
 
@@ -37,4 +53,4 @@ Incremental cost: **$0**. The browser reuses the `uPlot` package already require
 
 ## Validation
 
-`src/web/components/dmm/dmm-trend.test.ts` covers numeric points, unavailable-reading gaps, rolling-window trimming, and invalid elapsed timestamps.
+`src/web/components/dmm/dmm-trend.test.ts` covers numeric points, unavailable-reading gaps, rolling-history trimming, time/div and Position viewport math, horizontal-limit clamping, and invalid elapsed timestamps.
