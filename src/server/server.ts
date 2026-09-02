@@ -66,6 +66,8 @@ const scopeDisplay = new Dho804DisplayControl(scopeEndpoint.host, readScopeAdbPo
 const server = createServer(createHttpRequestHandler(undefined, {
   screenOffScope: () => scopeDisplay.screenOff(),
   screenOnScope: () => scopeDisplay.screenOn(),
+  sleepScope: () => scopeDisplay.sleep(),
+  wakeScope: () => scopeDisplay.wake(),
 }));
 
 const initialScopeConnection: ServerScopeConnection = {
