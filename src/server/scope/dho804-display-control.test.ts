@@ -48,9 +48,9 @@ describe("Dho804DisplayControl", () => {
     expect(adb.mock.calls.map(([args]) => args)).toEqual([
       ["connect", TARGET],
       ["-s", TARGET, "shell", "input", "keyevent", "1073741851"],
-      ["-s", TARGET, "shell", "input", "tap", "324", "373"],
+      ["-s", TARGET, "shell", "input", "tap", "324", "375"],
     ]);
-    expect(log).toHaveBeenCalledWith("[DHO804 sleep] clicked native Rigol Sleep control at 324,373");
+    expect(log).toHaveBeenCalledWith("[DHO804 sleep] clicked native Rigol Sleep control at 324,375");
   });
 
   it("attempts both wake methods and logs their command results plus power state", async () => {
