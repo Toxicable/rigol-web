@@ -77,8 +77,9 @@ Copy `.env.example` to `.env`, then set `RIGOL_SCOPE_HOST` and
 `RIGOL_SCOPE_PORT` to the DHO804's verified raw SCPI/TCP endpoint. Configure
 `RIGOL_DMM_HOST` and `RIGOL_DMM_PORT` for the DM858E endpoint.
 
-Rigol Web exposes one adaptive DHO804 **Sleep/Wake** control. It does not expose
-separate display-only Screen On/Screen Off actions.
+Rigol Web exposes a one-way DHO804 **Sleep** control. Remote Wake is not exposed
+because real-scope testing confirmed that native Sleep takes the instrument off
+the network, including both SCPI and LAN ADB.
 
 For **Sleep**, Rigol Web first suspends the DHO804 instrument runtime while
 preserving browser subscribers. That cleanly stops the live waveform service,
@@ -103,21 +104,12 @@ discovery path did not click the button reliably on the scope and has been
 removed. The installed Rigol application owns the actual sleep transition after
 the tap, including its CIL, watchdog and `quick_boot_test.sh` behavior.
 
-The adaptive button changes to **Wake** after a successful Sleep request and is
-also forced to Wake whenever the normal scope connection is down. Wake is
-intentionally diagnostic while proper-sleep wake behavior is being established
-on the real scope. A single Wake request attempts both known candidates
-independently:
-
-1. Rigol panel-power key `1073741851`;
-2. Android `KEYCODE_WAKEUP` (`224`).
-
-The server logs success or failure for each attempt and, if ADB remains
-reachable afterwards, runs `dumpsys power` and logs Android's reported
-`mWakefulness` value. Wake returns an HTTP failure only if both key-injection
-methods fail; a failed power-state probe is logged but does not by itself make
-the wake request fail. After a successful Wake action, the DHO804 runtime
-suspension is lifted so existing subscribers reconnect automatically.
+The scope must be woken physically using its front-panel power key. While the
+SCPI runtime is suspended, Rigol Web performs only a quiet TCP reachability
+probe against the configured SCPI port every 2 seconds. It sends no SCPI
+commands and requires the endpoint to have been observed offline before later
+reachability is treated as a physical wake. Once the SCPI port comes back, the
+runtime is resumed and existing browser subscribers reconnect automatically.
 
 Power-control errors shown in the toolbar are sanitized. Short `text/plain`
 backend errors are shown verbatim; HTML/proxy error pages and oversized response
@@ -130,9 +122,10 @@ than Shutdown, and resumes more quickly than a full startup:
 https://www.rigol.com/dam/global/downloads/brochures/en/user-manual/oscilloscopes/DHO800_UserGuide_EN.pdf
 
 `RIGOL_SCOPE_ADB_PORT` defaults to `55555` and can be changed if the scope
-exposes ADB elsewhere. If ADB is disabled or not reachable, the UI reports the
-failed power-control request. This adds no paid software or hardware dependency;
-it only uses the open-source ADB client already present in the runtime image.
+exposes ADB elsewhere. If ADB is disabled or not reachable while the scope is
+awake, the UI reports the failed Sleep request. This adds no paid software or
+hardware dependency; it only uses the open-source ADB client already present in
+the runtime image.
 
 SCPI/TCP diagnostics are always enabled. The server logs instrument
 subscribe/unsubscribe transitions, runtime start/stop causes, query timing, TCP
@@ -151,5 +144,5 @@ The HTTP and WebSocket service listens on port `3000` in the container. Its
 `/health` endpoint verifies only that the Node process is running; it remains
 healthy while the scope is disconnected.
 
-The scope UI, power controls, statistics and diagnostics changes add no
-hardware, paid service, or runtime dependency. Cost impact: **A$0**.
+The scope UI, Sleep control, statistics and diagnostics changes add no hardware,
+paid service, or runtime dependency. Cost impact: **A$0**.
