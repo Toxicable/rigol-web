@@ -81,6 +81,21 @@ function sameRange(left: DmmRange, right: DmmRange): boolean {
   return left.value === right.value;
 }
 
+function ContinuityIcon() {
+  return (
+    <svg
+      className="dmm-function-icon"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M4 10h4l5-4v12l-5-4H4z" />
+      <path d="M16 9.25c1.35 1.5 1.35 4 0 5.5" />
+      <path d="M19 6.5c2.75 3 2.75 8 0 11" />
+    </svg>
+  );
+}
+
 export function DmmControls({ state, pending, onControl }: DmmControlsProps) {
   const ranges = dmmFixedRanges(state.function);
   const rangeUnit = dmmRangeUnit(state.function);
@@ -106,7 +121,10 @@ export function DmmControls({ state, pending, onControl }: DmmControlsProps) {
               title={option.label}
               onClick={() => onControl(functionControlForSelection(option.value))}
             >
-              {option.shortLabel}
+              <span className="dmm-function-choice-label">
+                {option.value === DmmMeasurementFunction.Continuity ? <ContinuityIcon /> : null}
+                <span>{option.shortLabel}</span>
+              </span>
             </button>
           );
         })}
