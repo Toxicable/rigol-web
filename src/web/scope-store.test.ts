@@ -6,11 +6,13 @@ import {
   ChannelCoupling,
   ChannelUnit,
   EdgeSlope,
+  MeasurementKind,
   ScopeRunState,
   TimebaseMode,
   TriggerCoupling,
   TriggerSweep,
   TriggerType,
+  type MeasurementValue,
   type ScopeInfo,
   type ScopeState,
 } from "../shared/scope-types.js";
@@ -18,6 +20,7 @@ import { ControlKind } from "../shared/websocket-protocol.js";
 import {
   BrowserConnectionKind,
   DeepCaptureKind,
+  MeasurementSource,
   useScopeStore,
 } from "./scope-store.js";
 
@@ -62,10 +65,26 @@ const DEEP_CHANNEL = {
   xReference: 0,
 } as const;
 
+function measurement(current: number): MeasurementValue {
+  return {
+    channel: Channel.Ch1,
+    kind: MeasurementKind.Vpp,
+    statistics: {
+      current,
+      minimum: current,
+      maximum: current,
+      average: current,
+      deviation: 0,
+      count: 1,
+    },
+  };
+}
+
 describe("scope store", () => {
   beforeEach(() => {
     useScopeStore.setState({
       connection: { kind: BrowserConnectionKind.Connecting },
+      measurementSource: MeasurementSource.Scope,
       measurementSpecs: [],
       measurementValues: [],
       deepCapture: { kind: DeepCaptureKind.None },
@@ -119,6 +138,22 @@ describe("scope store", () => {
     if (connection.scope.trigger.type === TriggerType.Edge) {
       expect(connection.scope.trigger.level).toBe(1.25);
     }
+  });
+
+  it("isolates scope and local measurement updates", () => {
+    useScopeStore.getState().setMeasurementSource(MeasurementSource.Local);
+    useScopeStore.getState().setMeasurementValues([measurement(1)]);
+    expect(useScopeStore.getState().measurementValues).toEqual([]);
+
+    useScopeStore.getState().setLocalMeasurementValues([measurement(2)]);
+    expect(useScopeStore.getState().measurementValues[0]?.statistics.current).toBe(2);
+
+    useScopeStore.getState().setMeasurementSource(MeasurementSource.Scope);
+    useScopeStore.getState().setLocalMeasurementValues([measurement(3)]);
+    expect(useScopeStore.getState().measurementValues).toEqual([]);
+
+    useScopeStore.getState().setMeasurementValues([measurement(4)]);
+    expect(useScopeStore.getState().measurementValues[0]?.statistics.current).toBe(4);
   });
 
   it("keeps deep horizontal view local to the retained capture", () => {
