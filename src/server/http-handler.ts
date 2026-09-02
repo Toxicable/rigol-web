@@ -8,6 +8,8 @@ const SPA_ROUTES = new Set(["/", "/dm858e", "/dm858e/"]);
 export interface HttpControlActions {
   screenOffScope(): Promise<void>;
   screenOnScope(): Promise<void>;
+  sleepScope(): Promise<void>;
+  wakeScope(): Promise<void>;
 }
 
 function contentType(path: string): string {
@@ -154,6 +156,26 @@ export function createHttpRequestHandler(
         response,
         controlActions?.screenOnScope,
         "Failed to turn DHO804 screen on",
+      );
+      return;
+    }
+
+    if (request.url === "/api/scope/sleep") {
+      handleScopeDisplayRoute(
+        request,
+        response,
+        controlActions?.sleepScope,
+        "Failed to put DHO804 into native Sleep",
+      );
+      return;
+    }
+
+    if (request.url === "/api/scope/wake") {
+      handleScopeDisplayRoute(
+        request,
+        response,
+        controlActions?.wakeScope,
+        "Failed to wake DHO804",
       );
       return;
     }
