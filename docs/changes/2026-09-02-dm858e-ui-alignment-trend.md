@@ -23,7 +23,7 @@ Horizontal controls mirror the scope-side interaction model:
 
 - `Time/div` controls ten horizontal divisions with stepped values from 100 ms/div through 30 s/div;
 - the default is 1 s/div, so the viewport is ten seconds wide;
-- `Position = 0 s` keeps the newest received snapshot on the right edge from the first sample onward;
+- `Position = 0 s` keeps the newest browser trend sample on the right edge from the first sample onward;
 - negative Position values pan backward through retained history immediately, including while less than one viewport of history exists;
 - `Latest` returns Position to zero;
 - changing DMM measurement function resets Position to zero while preserving Time/div.
@@ -32,33 +32,40 @@ At 30 s/div the full five-minute retained history fits in the ten-division viewp
 
 ## Streaming renderer behavior
 
-uPlot requires aligned X/Y arrays with matching lengths and at least two X values. The DMM trend therefore supplies renderer-only null padding until two real browser snapshots exist; the retained measurement history itself is not padded with fabricated values.
+uPlot requires aligned X/Y arrays with matching lengths and at least two X values. The DMM trend therefore supplies renderer-only null padding until two real browser trend samples exist; the retained trend history itself is not padded with fabricated values.
 
-Each received snapshot uses uPlot's normal `setData()` update path so data changes invalidate and redraw the plot, then the browser-local horizontal viewport is reapplied. The Y scale also has a finite fallback range for the no-numeric-data case so an initial empty, overload, or unavailable state can render safely.
+The trend has its own deterministic 100 ms browser sampling clock. Each tick samples the latest DMM display state already held in the browser, appends it using browser monotonic time, then updates uPlot with `setData(..., false)` followed by an explicit X-scale update. The X-scale update is the redraw/invalidation boundary and also causes the auto Y scale to be recalculated for the visible data.
 
-The previous implementation instantiated uPlot with zero-length aligned arrays and used `setData(..., false)`, which could produce a startup `null is not iterable` exception and could leave streaming data visually stale until another scale invalidation occurred.
+This is intentionally independent of WebSocket message frequency. The DMM runtime may suppress identical display snapshots because they are redundant for the primary reading, but a stable value still needs to form a flat line that advances through time in the trend. Sampling the latest browser state locally preserves that behavior without adding SCPI requests or WebSocket traffic.
+
+The Y scale has a finite fallback range for the no-numeric-data case so an initial empty, overload, or unavailable state can render safely. Sparse data also enables point markers while there are too few visible numeric samples to form a useful line, so a lone valid reading is not invisible.
+
+The earlier implementations exposed two separate problems:
+
+- zero-length aligned arrays could produce a startup `null is not iterable` exception;
+- driving trend time directly from deduplicated DMM snapshot messages meant a stable reading could leave the graph with only one invisible sample and no visible time progression.
 
 ## Trend semantics
 
-The plot is deliberately a **browser-received latest-snapshot trend**.
+The plot is deliberately a **browser-sampled latest-display-state trend**.
 
-`DATA:LAST?` remains a latest-reading snapshot and is not treated as a uniquely identified physical-conversion stream. Each snapshot delivered to the browser is timestamped with browser monotonic time and appended to the plot. At the current default 100 ms DMM poll interval this is nominally about 10 plot updates/s, subject to SCPI work and transport timing.
+`DATA:LAST?` remains latest display state and is not treated as a uniquely identified physical-conversion stream. At 100 ms intervals the browser records whatever latest DMM reading state it currently holds. This gives a continuous visual trend for stable readings without pretending that each plotted point is a distinct physical conversion.
 
 Consequences:
 
-- repeated identical snapshot values are still plotted when they are delivered;
-- changed values do not imply that every physical conversion between snapshots is represented;
-- overload and unavailable snapshots produce gaps rather than fabricated numeric values;
+- an unchanged latest reading is repeated across browser trend samples, producing a flat line over time;
+- changed values do not imply that every physical conversion between browser samples is represented;
+- overload and unavailable states produce gaps rather than fabricated numeric values;
 - the plot history resets when the selected measurement function changes or the route is remounted;
 - only the most recent five minutes are retained in browser memory;
-- no min/max/average/standard-deviation or conversion-count statistics are derived from this snapshot history.
+- no min/max/average/standard-deviation or conversion-count statistics are derived from this trend history.
 
-This narrows the earlier `docs/dm858e-ui-plan.md` restriction: a **visual snapshot trend is allowed now**, while conversion-counted logging and statistical analysis still require a verified one-event-per-measurement sample stream.
+This narrows the earlier `docs/dm858e-ui-plan.md` restriction: a **visual browser-sampled trend is allowed now**, while conversion-counted logging and statistical analysis still require a verified one-event-per-measurement sample stream.
 
 ## Cost
 
-Incremental cost: **$0**. The browser reuses the `uPlot` package already required by the scope waveform renderer and stores only a small in-memory rolling history.
+Incremental cost: **$0**. The browser reuses the `uPlot` package already required by the scope waveform renderer, adds no SCPI or WebSocket traffic, and stores only a small in-memory rolling history. At 100 ms sampling, five minutes is approximately 3,000 points.
 
 ## Validation
 
-`src/web/components/dmm/dmm-trend.test.ts` covers numeric points, unavailable-reading gaps, rolling-history trimming, immediate latest-edge scrolling, time/div and Position viewport math, pre-two-sample render data, finite empty Y ranges, horizontal-limit clamping, and invalid elapsed timestamps.
+`src/web/components/dmm/dmm-trend.test.ts` covers the 100 ms sample cadence constant, repeated stable values, numeric points, unavailable-reading gaps, rolling-history trimming, immediate latest-edge scrolling, time/div and Position viewport math, pre-two-sample render data, sparse-point visibility, finite empty Y ranges, horizontal-limit clamping, and invalid elapsed timestamps.
