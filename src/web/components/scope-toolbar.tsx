@@ -12,6 +12,8 @@ const RUN_STATE_LABELS: Record<ScopeRunState, string> = {
   [ScopeRunState.Stopped]: "Stopped",
 };
 
+type ScopePowerAction = "screen-off" | "screen-on" | "sleep" | "wake";
+
 interface ScopeToolbarProps {
   client: ScopeWebSocketClient;
 }
@@ -52,7 +54,7 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
     }
   };
 
-  const screenAction = async (action: "screen-off" | "screen-on") => {
+  const powerAction = async (action: ScopePowerAction) => {
     try {
       const response = await fetch(`/api/scope/${action}`, { method: "POST" });
       if (!response.ok) {
@@ -84,8 +86,10 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
           >
             Deep Capture
           </button>
-          <button type="button" onClick={() => void screenAction("screen-off")}>Screen Off</button>
-          <button type="button" onClick={() => void screenAction("screen-on")}>Screen On</button>
+          <button type="button" onClick={() => void powerAction("screen-off")}>Screen Off</button>
+          <button type="button" onClick={() => void powerAction("screen-on")}>Screen On</button>
+          <button type="button" onClick={() => void powerAction("sleep")}>Sleep</button>
+          <button type="button" onClick={() => void powerAction("wake")}>Wake</button>
         </div>
         {lastError !== null ? <span className="error-text">{lastError}</span> : null}
       </div>
