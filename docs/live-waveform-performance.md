@@ -151,6 +151,33 @@ A community DHO driver also uses compound text queries:
 
 Compound text-query support must not be generalized to multiple binary waveform queries; the real DHO804 result above is authoritative for this deployment.
 
+## rigol-mcp follow-up
+
+A second comparison against `erebusnz/rigol-mcp` after the waveform optimizations found no better live-waveform transport to adopt. Rigol Web's binary NORMAL/BYTE path, one `SOURCE CHx;DATA?` transaction per enabled channel, cached units/preambles, and interaction-aware pause/resume policy remain the preferred production design.
+
+Useful remaining ideas:
+
+- **Invalid measurement sentinel:** `rigol-mcp` treats values around `9.9E37` as Rigol's invalid/overflow sentinel, commonly caused by disabled or not-yet-acquired sources. Rigol Web currently parses finite statistic values directly, so this sentinel must not be allowed to appear as a real measurement. Add an explicit invalid measurement representation and define UI behavior for measurements targeting disabled channels.
+- **Measurement batching benchmark:** measurements remain the clearest recurring SCPI hotspot at six text queries per selected measurement. Since compound text queries are known to work on the real DHO804, benchmark one semicolon-separated statistic query per measurement for CURR/MIN/MAX/AVG/DEV/CNT. Adopt only if repeated hardware timings show a material gain without harming interaction latency.
+- **Just-enabled channel warm-up:** `rigol-mcp` observed temporary empty waveform data and stale/zero X metadata until the first sweep after enabling a channel. Reproduce this specifically on the DHO804. If present, model it as an expected warm-up state rather than a generic transport retry/fallback.
+- **Native scope screenshot:** DHO uses `:DISPlay:DATA? PNG`. Keep this separate from the browser-page screenshot; it is useful as an authoritative A/B diagnostic between the physical scope display and Rigol Web rendering.
+- **Low-priority diagnostics/utilities:** DHO `:AUToset`, cursor controls, and a manual SCPI error-queue drain remain useful. Do not automatically query the error queue after writes because the added round trips conflict with the measured latency work.
+
+Ideas explicitly not carried forward:
+
+- do not replace the live binary waveform path with `rigol-mcp`'s ASCII waveform transfer;
+- do not pursue USBTMC for this LAN-only deployment;
+- do not add a generic multi-family scope-driver abstraction while Rigol Web intentionally targets the DHO804.
+
+Upstream references:
+
+- `rigol-mcp` repository: https://github.com/erebusnz/rigol-mcp
+- invalid sentinel/channel warm-up implementation: https://github.com/erebusnz/rigol-mcp/commit/22a8eda3d2952347816bfb2042e037f5fdd3d933
+- DHO screenshot/autoset implementation: https://github.com/erebusnz/rigol-mcp/blob/main/src/rigol_mcp/drivers.py
+- SCPI error-queue handling: https://github.com/erebusnz/rigol-mcp/blob/main/src/rigol_mcp/scope.py
+
+Cost impact of these software changes and investigations: $0. `rigol-mcp` is MIT licensed; retain its copyright/license notice if implementation code is copied rather than independently reimplemented.
+
 ## Transport
 
 Rigol Web is LAN-only for the scope. USB is not available in this deployment and is not a candidate transport.
