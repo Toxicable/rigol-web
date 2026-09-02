@@ -21,7 +21,7 @@ The trend keeps a rolling five-minute browser history, but five minutes is a ret
 
 Horizontal controls mirror the scope-side interaction model:
 
-- `Time/div` controls ten horizontal divisions with 1-2-5-style steps from 100 ms/div through 30 s/div;
+- `Time/div` controls ten horizontal divisions with stepped values from 100 ms/div through 30 s/div;
 - the default is 1 s/div, so the initial viewport is ten seconds wide;
 - `Position = 0 s` keeps the newest received snapshot on the right edge;
 - negative Position values pan backward through retained history;
