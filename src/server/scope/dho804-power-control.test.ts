@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { Dho804PowerControl, type AdbRunner } from "./dho804-power-control.js";
+import {
+  Dho804PowerControl,
+  type AdbDispatcher,
+  type AdbRunner,
+} from "./dho804-power-control.js";
 
 const TARGET = "192.168.1.8:55555";
 
@@ -11,12 +15,17 @@ function connectedAdb() {
   }));
 }
 
+function dispatcher() {
+  return vi.fn<AdbDispatcher>(async () => undefined);
+}
+
 describe("Dho804PowerControl", () => {
-  it("opens the Rigol power popup, waits for it to settle, then taps the stock Sleep button centre", async () => {
+  it("opens the Rigol power popup, waits for it to settle, then dispatches the stock Sleep tap", async () => {
     const adb = connectedAdb();
+    const dispatch = dispatcher();
     const log = vi.fn();
     const noWait = vi.fn(async () => undefined);
-    const control = new Dho804PowerControl("192.168.1.8", 55_555, adb, log, noWait);
+    const control = new Dho804PowerControl("192.168.1.8", 55_555, adb, log, noWait, dispatch);
 
     await control.sleep();
 
@@ -24,9 +33,35 @@ describe("Dho804PowerControl", () => {
     expect(adb.mock.calls.map(([args]) => args)).toEqual([
       ["connect", TARGET],
       ["-s", TARGET, "shell", "input", "keyevent", "1073741851"],
-      ["-s", TARGET, "shell", "input", "tap", "324", "375"],
+      ["connect", TARGET],
     ]);
-    expect(log).toHaveBeenCalledWith("[DHO804 sleep] clicked native Rigol Sleep control at 324,375");
+    expect(dispatch).toHaveBeenCalledWith([
+      "-s",
+      TARGET,
+      "shell",
+      "input",
+      "tap",
+      "324",
+      "375",
+    ]);
+    expect(log).toHaveBeenCalledWith("[DHO804 sleep] dispatched native Rigol Sleep control at 324,375");
+  });
+
+  it("fails sleep if the final ADB dispatch cannot be launched", async () => {
+    const adb = connectedAdb();
+    const dispatch = vi.fn<AdbDispatcher>(async () => {
+      throw new Error("adb launch failed");
+    });
+    const control = new Dho804PowerControl(
+      "192.168.1.8",
+      55_555,
+      adb,
+      vi.fn(),
+      async () => undefined,
+      dispatch,
+    );
+
+    await expect(control.sleep()).rejects.toThrow("adb launch failed");
   });
 
   it("attempts both wake methods and logs their command results plus power state", async () => {
@@ -84,16 +119,19 @@ describe("Dho804PowerControl", () => {
       stdout: `already connected to ${TARGET}\n`,
       stderr: "",
     }));
+    const dispatch = dispatcher();
     const control = new Dho804PowerControl(
       "192.168.1.8",
       55_555,
       adb,
       vi.fn(),
       async () => undefined,
+      dispatch,
     );
 
     await expect(control.sleep()).resolves.toBeUndefined();
     expect(adb).toHaveBeenCalledTimes(3);
+    expect(dispatch).toHaveBeenCalledOnce();
   });
 
   it("does not send a key event if ADB did not connect", async () => {
@@ -101,15 +139,18 @@ describe("Dho804PowerControl", () => {
       stdout: `failed to connect to ${TARGET}\n`,
       stderr: "",
     }));
+    const dispatch = dispatcher();
     const control = new Dho804PowerControl(
       "192.168.1.8",
       55_555,
       adb,
       vi.fn(),
       async () => undefined,
+      dispatch,
     );
 
     await expect(control.sleep()).rejects.toThrow("ADB did not connect");
     expect(adb).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });
