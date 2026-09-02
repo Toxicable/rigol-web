@@ -6,8 +6,6 @@ const DEFAULT_WEB_ROOT = resolve(process.cwd(), "dist/web");
 const SPA_ROUTES = new Set(["/", "/dm858e", "/dm858e/"]);
 
 export interface HttpControlActions {
-  screenOffScope(): Promise<void>;
-  screenOnScope(): Promise<void>;
   sleepScope(): Promise<void>;
   wakeScope(): Promise<void>;
 }
@@ -88,13 +86,13 @@ async function serveBuiltWeb(
   }
 }
 
-async function runScopeDisplayAction(
+async function runScopePowerAction(
   response: ServerResponse,
   action: (() => Promise<void>) | undefined,
   failureMessage: string,
 ): Promise<void> {
   if (action === undefined) {
-    sendText(response, 503, "scope display control unavailable\n");
+    sendText(response, 503, "scope power control unavailable\n");
     return;
   }
 
@@ -109,7 +107,7 @@ async function runScopeDisplayAction(
   }
 }
 
-function handleScopeDisplayRoute(
+function handleScopePowerRoute(
   request: IncomingMessage,
   response: ServerResponse,
   action: (() => Promise<void>) | undefined,
@@ -124,7 +122,7 @@ function handleScopeDisplayRoute(
     return;
   }
 
-  void runScopeDisplayAction(response, action, failureMessage);
+  void runScopePowerAction(response, action, failureMessage);
 }
 
 export function createHttpRequestHandler(
@@ -140,28 +138,8 @@ export function createHttpRequestHandler(
       return;
     }
 
-    if (request.url === "/api/scope/screen-off") {
-      handleScopeDisplayRoute(
-        request,
-        response,
-        controlActions?.screenOffScope,
-        "Failed to turn DHO804 screen off",
-      );
-      return;
-    }
-
-    if (request.url === "/api/scope/screen-on") {
-      handleScopeDisplayRoute(
-        request,
-        response,
-        controlActions?.screenOnScope,
-        "Failed to turn DHO804 screen on",
-      );
-      return;
-    }
-
     if (request.url === "/api/scope/sleep") {
-      handleScopeDisplayRoute(
+      handleScopePowerRoute(
         request,
         response,
         controlActions?.sleepScope,
@@ -171,7 +149,7 @@ export function createHttpRequestHandler(
     }
 
     if (request.url === "/api/scope/wake") {
-      handleScopeDisplayRoute(
+      handleScopePowerRoute(
         request,
         response,
         controlActions?.wakeScope,
