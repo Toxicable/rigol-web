@@ -16,7 +16,7 @@ const RUN_STATE_LABELS: Record<ScopeRunState, string> = {
 
 const MAX_API_ERROR_DETAIL_LENGTH = 240;
 
-type ScopePowerAction = "screen-off" | "screen-on" | "sleep" | "wake";
+type ScopePowerAction = "sleep" | "wake";
 
 interface ScopeToolbarProps {
   client: ScopeWebSocketClient;
@@ -60,7 +60,7 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
   const lastError = useScopeStore((state) => state.lastError);
   const [sleepRequested, setSleepRequested] = useState(false);
   const connected = connection.kind === BrowserConnectionKind.ScopeConnected;
-  const instrumentPowerAction: "sleep" | "wake" = connected && !sleepRequested ? "sleep" : "wake";
+  const instrumentPowerAction: ScopePowerAction = connected && !sleepRequested ? "sleep" : "wake";
 
   const runInstrumentPowerAction = async () => {
     const succeeded = await powerAction(instrumentPowerAction);
@@ -119,8 +119,6 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
           >
             Deep Capture
           </button>
-          <button type="button" onClick={() => void powerAction("screen-off")}>Screen Off</button>
-          <button type="button" onClick={() => void powerAction("screen-on")}>Screen On</button>
           <button type="button" onClick={() => void runInstrumentPowerAction()}>
             {instrumentPowerAction === "sleep" ? "Sleep" : "Wake"}
           </button>
