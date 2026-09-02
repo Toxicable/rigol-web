@@ -16,8 +16,6 @@ const RUN_STATE_LABELS: Record<ScopeRunState, string> = {
 
 const MAX_API_ERROR_DETAIL_LENGTH = 240;
 
-type ScopePowerAction = "sleep" | "wake";
-
 interface ScopeToolbarProps {
   client: ScopeWebSocketClient;
 }
@@ -28,8 +26,8 @@ function surfaceError(error: unknown): void {
   );
 }
 
-async function powerActionError(action: ScopePowerAction, response: Response): Promise<Error> {
-  const fallback = `${action} request failed with HTTP ${response.status}`;
+async function sleepActionError(response: Response): Promise<Error> {
+  const fallback = `sleep request failed with HTTP ${response.status}`;
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (!contentType.startsWith("text/plain")) {
     return new Error(fallback);
@@ -42,11 +40,11 @@ async function powerActionError(action: ScopePowerAction, response: Response): P
   return new Error(detail);
 }
 
-async function powerAction(action: ScopePowerAction): Promise<boolean> {
+async function sleepScope(): Promise<boolean> {
   try {
-    const response = await fetch(`/api/scope/${action}`, { method: "POST" });
+    const response = await fetch("/api/scope/sleep", { method: "POST" });
     if (!response.ok) {
-      throw await powerActionError(action, response);
+      throw await sleepActionError(response);
     }
     return true;
   } catch (error) {
@@ -58,16 +56,19 @@ async function powerAction(action: ScopePowerAction): Promise<boolean> {
 export function ScopeToolbar({ client }: ScopeToolbarProps) {
   const connection = useScopeStore((state) => state.connection);
   const lastError = useScopeStore((state) => state.lastError);
-  const [sleepRequested, setSleepRequested] = useState(false);
+  const [sleepPending, setSleepPending] = useState(false);
   const connected = connection.kind === BrowserConnectionKind.ScopeConnected;
-  const instrumentPowerAction: ScopePowerAction = connected && !sleepRequested ? "sleep" : "wake";
 
-  const runInstrumentPowerAction = async () => {
-    const succeeded = await powerAction(instrumentPowerAction);
-    if (!succeeded) {
+  const runSleep = async () => {
+    if (sleepPending) {
       return;
     }
-    setSleepRequested(instrumentPowerAction === "sleep");
+    setSleepPending(true);
+    try {
+      await sleepScope();
+    } finally {
+      setSleepPending(false);
+    }
   };
 
   if (!connected) {
@@ -76,9 +77,6 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
       <InstrumentHeader>
         <div className="scope-toolbar-content">
           <span className="status-pill">{reason}</span>
-          <div className="toolbar-actions">
-            <button type="button" onClick={() => void runInstrumentPowerAction()}>Wake</button>
-          </div>
           {lastError !== null ? <span className="error-text">{lastError}</span> : null}
         </div>
       </InstrumentHeader>
@@ -119,8 +117,8 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
           >
             Deep Capture
           </button>
-          <button type="button" onClick={() => void runInstrumentPowerAction()}>
-            {instrumentPowerAction === "sleep" ? "Sleep" : "Wake"}
+          <button type="button" disabled={sleepPending} onClick={() => void runSleep()}>
+            Sleep
           </button>
         </div>
         {lastError !== null ? <span className="error-text">{lastError}</span> : null}
