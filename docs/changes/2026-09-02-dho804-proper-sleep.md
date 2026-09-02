@@ -2,14 +2,13 @@
 
 ## Behavior split
 
-Rigol Web keeps four separate DHO804 power/display actions:
+Rigol Web keeps display power separate from instrument sleep:
 
 - **Screen Off**: Android `KEYCODE_SLEEP` (`223`), display-only.
 - **Screen On**: Android `KEYCODE_WAKEUP` (`224`), display-only.
-- **Sleep**: invoke the stock Rigol `Power > Sleep` button remotely.
-- **Wake**: attempt both candidate wake key paths and log the result of each.
+- **Sleep/Wake**: one adaptive instrument-power button. It invokes proper Rigol Sleep while the scope is awake and changes to Wake after a successful Sleep request or whenever the SCPI/WebSocket scope connection is down.
 
-Do not collapse Screen Off/On into Sleep/Wake; they have different instrument semantics.
+Do not collapse Screen Off/On into instrument Sleep/Wake; they have different instrument semantics.
 
 ## Why native Sleep must use the Rigol UI path
 
@@ -39,15 +38,15 @@ The first implementation then tried to discover `com.rigol.scope:id/button_sleep
 1. connects to the configured DHO804 ADB endpoint;
 2. injects Rigol panel-power key `1073741851`;
 3. waits 500 ms for the stock power popup;
-4. taps the centre of the stock Sleep button at `(324, 373)`.
+4. taps the centre of the stock Sleep button at `(324, 375)`.
 
-The coordinate is derived from the actual DHO800 application resources rather than eyeballed:
+The coordinate is derived from the actual DHO800 application resources and confirmed against a real DHO804 1024x600 framebuffer capture:
 
-- instrument UI design: `1024x600`;
+- instrument UI: `1024x600`;
 - `App.PopupWindow.Common.Alert`: `560x270 dp`, centered;
 - power-popup Sleep button: `110x35 dp`, centered in the left 33% column with the stock bottom/divider constraints.
 
-That places the Sleep button centre at approximately `(324, 373)` on the fixed DHO804 UI. The action still clicks Rigol's own button, so the installed firmware executes the complete native Sleep handler.
+Those constraints place the button centre at approximately `x=324.4`, `y=374.5`, rounded to `(324, 375)`. The action still clicks Rigol's own button, so the installed firmware executes the complete native Sleep handler.
 
 `uiautomator` is no longer in the Sleep request path.
 
@@ -64,14 +63,14 @@ The HTTP wake request fails only when both key-injection attempts fail. A failed
 
 ## HTTP and UI
 
-The backend exposes:
+The backend retains explicit endpoints:
 
 - `POST /api/scope/screen-off`
 - `POST /api/scope/screen-on`
 - `POST /api/scope/sleep`
 - `POST /api/scope/wake`
 
-The DHO804 toolbar exposes matching **Screen Off**, **Screen On**, **Sleep**, and **Wake** buttons. **Wake** remains visible when the SCPI/WebSocket scope connection is down so it can still be attempted after proper Sleep.
+The toolbar exposes **Screen Off**, **Screen On**, and one adaptive **Sleep/Wake** button. While normally connected the button reads **Sleep**. After a successful Sleep request it immediately changes to **Wake**, even before any connection-state update. Whenever the scope is disconnected the button is also forced to **Wake**. After a successful wake and scope reconnection it returns to **Sleep**.
 
 Power-control API errors are sanitized before being shown in the header. Only short `text/plain` backend error bodies are displayed; HTML/proxy error pages and oversized responses collapse to a concise HTTP-status error instead of being inserted into the toolbar.
 
@@ -79,18 +78,19 @@ Power-control API errors are sanitized before being shown in the header. Only sh
 
 Verified on the real DHO804 so far:
 
-- panel-power key `1073741851` opens the native Rigol power popup.
-- the `uiautomator` resource-discovery path is not suitable for the real scope and has been removed.
+- panel-power key `1073741851` opens the native Rigol power popup;
+- the `uiautomator` resource-discovery path is not suitable for the real scope and has been removed;
+- the real framebuffer geometry matches the stock 1024x600 popup layout used to calculate the Sleep tap.
 
-Still to verify after this coordinate-path fix:
+Still to verify:
 
-- the `(324, 373)` tap executes the stock Sleep button;
+- the `(324, 375)` tap executes the stock Sleep button;
 - whether ADB remains reachable during proper Sleep;
 - which Wake candidate, if either, resumes the scope.
 
 Useful server log lines around one Sleep/Wake cycle are:
 
-- `[DHO804 sleep] clicked native Rigol Sleep control at 324,373`
+- `[DHO804 sleep] clicked native Rigol Sleep control at 324,375`
 - `[DHO804 wake] Rigol panel power key: ...`
 - `[DHO804 wake] Android KEYCODE_WAKEUP: ...`
 - `[DHO804 wake] power-state probe after attempts: ...` or the corresponding probe failure.
