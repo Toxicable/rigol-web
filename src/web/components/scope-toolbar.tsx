@@ -71,7 +71,7 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
         <div className="toolbar-actions">
           <button
             type="button"
-            className={stopped ? "acquisition-state-button is-running" : "acquisition-state-button is-stopped"}
+            className={stopped ? "acquisition-state-button is-stopped" : "acquisition-state-button is-running"}
             onClick={() => command(stopped ? AcquisitionAction.Run : AcquisitionAction.Stop)}
           >
             {stopped ? "Run" : "Stop"}
