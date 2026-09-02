@@ -33,52 +33,77 @@ export function InstrumentHeader({ children }: InstrumentHeaderProps) {
   };
 
   return (
-    <header className="instrument-shell">
-      <strong>Rigol Web</strong>
-      <nav className="instrument-switcher" aria-label="Instrument">
-        {inRouter ? (
-          <>
-            <NavLink
-              to="/"
-              end
-              className={({ isActive }) => isActive ? "instrument-link active" : "instrument-link"}
+    <>
+      <header className="instrument-shell">
+        <strong>Rigol Web</strong>
+        <nav className="instrument-switcher" aria-label="Instrument">
+          {inRouter ? (
+            <>
+              <NavLink
+                to="/"
+                end
+                className={({ isActive }) => isActive ? "instrument-link active" : "instrument-link"}
+              >
+                DHO804
+              </NavLink>
+              <NavLink
+                to="/dm858e"
+                className={({ isActive }) => isActive ? "instrument-link active" : "instrument-link"}
+              >
+                DM858E
+              </NavLink>
+            </>
+          ) : (
+            <>
+              <a className="instrument-link" href="/">DHO804</a>
+              <a className="instrument-link" href="/dm858e">DM858E</a>
+            </>
+          )}
+        </nav>
+        {children}
+        <div className="screenshot-copy-control" data-screenshot-exclude="true">
+          {screenshotError !== null ? (
+            <span
+              className="screenshot-copy-error"
+              title={screenshotError}
+              style={{ maxWidth: "34rem", whiteSpace: "normal" }}
             >
-              DHO804
-            </NavLink>
-            <NavLink
-              to="/dm858e"
-              className={({ isActive }) => isActive ? "instrument-link active" : "instrument-link"}
-            >
-              DM858E
-            </NavLink>
-          </>
-        ) : (
-          <>
-            <a className="instrument-link" href="/">DHO804</a>
-            <a className="instrument-link" href="/dm858e">DM858E</a>
-          </>
-        )}
-      </nav>
-      {children}
-      <div className="screenshot-copy-control" data-screenshot-exclude="true">
-        {screenshotError !== null ? (
-          <span
-            className="screenshot-copy-error"
-            title={screenshotError}
-            style={{ maxWidth: "34rem", whiteSpace: "normal" }}
+              {screenshotError}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            disabled={copyingScreenshot}
+            onClick={() => void copyScreenshot()}
+            title={screenshotError ?? "Copy the currently rendered Rigol Web viewport to the clipboard as PNG"}
           >
-            {screenshotError}
-          </span>
-        ) : null}
-        <button
-          type="button"
-          disabled={copyingScreenshot}
-          onClick={() => void copyScreenshot()}
-          title={screenshotError ?? "Copy the currently rendered Rigol Web viewport to the clipboard as PNG"}
+            {copyingScreenshot ? "Copying…" : "Copy Screenshot"}
+          </button>
+        </div>
+      </header>
+      {screenshotCopied ? (
+        <div
+          role="status"
+          aria-live="polite"
+          data-screenshot-exclude="true"
+          style={{
+            position: "fixed",
+            right: "1rem",
+            bottom: "1rem",
+            zIndex: 1000,
+            padding: "0.55rem 0.8rem",
+            border: "1px solid #47515c",
+            borderRadius: "6px",
+            background: "#171b20",
+            color: "#e8edf2",
+            boxShadow: "0 4px 18px rgb(0 0 0 / 40%)",
+            fontSize: "0.85rem",
+            pointerEvents: "none",
+          }}
         >
-          {copyingScreenshot ? "Copying…" : screenshotCopied ? "Copied" : "Copy Screenshot"}
-        </button>
-      </div>
-    </header>
+          Screenshot copied
+        </div>
+      ) : null}
+    </>
   );
 }
