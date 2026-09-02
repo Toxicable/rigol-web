@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 
 export interface AdbCommandResult {
   stdout: string;
@@ -6,6 +6,7 @@ export interface AdbCommandResult {
 }
 
 export type AdbRunner = (args: readonly string[]) => Promise<AdbCommandResult>;
+export type AdbDispatcher = (args: readonly string[]) => Promise<void>;
 export type PowerControlLogger = (message: string) => void;
 export type Delay = (milliseconds: number) => Promise<void>;
 
@@ -30,6 +31,30 @@ function runAdb(args: readonly string[]): Promise<AdbCommandResult> {
         resolve({ stdout, stderr });
       },
     );
+  });
+}
+
+function dispatchAdb(args: readonly string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("adb", [...args], { stdio: "ignore" });
+    let settled = false;
+
+    child.once("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(new Error(`adb ${args.join(" ")} failed to start: ${error.message}`));
+    });
+
+    child.once("spawn", () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      child.unref();
+      resolve();
+    });
   });
 }
 
@@ -61,6 +86,7 @@ export class Dho804PowerControl {
     private readonly adb: AdbRunner = runAdb,
     private readonly log: PowerControlLogger = console.log,
     private readonly wait: Delay = delay,
+    private readonly dispatch: AdbDispatcher = dispatchAdb,
   ) {}
 
   public async sleep(): Promise<void> {
@@ -73,11 +99,17 @@ export class Dho804PowerControl {
     // rendering, so leave enough margin before injecting the coordinate tap.
     await this.wait(POWER_POPUP_SETTLE_MS);
 
+    // Re-check ADB immediately before launching the one-way Sleep tap. The
+    // actual tap can make the scope tear down ADB before the adb client process
+    // has returned an exit status, so waiting for that process would turn a
+    // successful Sleep transition into a false HTTP failure.
+    await this.ensureConnected(target);
+
     // The stock DHO800 power popup is 560x270 dp centred on the fixed
     // 1024x600 instrument UI. Its 110x35 dp Sleep button is centred in the
     // left third, placing the button centre at approximately (324, 375).
     // A real DHO804 framebuffer capture confirmed the popup geometry.
-    await this.adb([
+    await this.dispatch([
       "-s",
       target,
       "shell",
@@ -86,7 +118,7 @@ export class Dho804PowerControl {
       RIGOL_SLEEP_TAP_X,
       RIGOL_SLEEP_TAP_Y,
     ]);
-    this.log(`[DHO804 sleep] clicked native Rigol Sleep control at ${RIGOL_SLEEP_TAP_X},${RIGOL_SLEEP_TAP_Y}`);
+    this.log(`[DHO804 sleep] dispatched native Rigol Sleep control at ${RIGOL_SLEEP_TAP_X},${RIGOL_SLEEP_TAP_Y}`);
   }
 
   public async wake(): Promise<void> {
