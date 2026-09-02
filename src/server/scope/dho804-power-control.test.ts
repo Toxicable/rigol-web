@@ -12,7 +12,7 @@ function connectedAdb() {
 }
 
 describe("Dho804PowerControl", () => {
-  it("opens the Rigol power popup and taps the stock Sleep button centre", async () => {
+  it("opens the Rigol power popup, waits for it to settle, then taps the stock Sleep button centre", async () => {
     const adb = connectedAdb();
     const log = vi.fn();
     const noWait = vi.fn(async () => undefined);
@@ -20,7 +20,7 @@ describe("Dho804PowerControl", () => {
 
     await control.sleep();
 
-    expect(noWait).toHaveBeenCalledWith(500);
+    expect(noWait).toHaveBeenCalledWith(1_500);
     expect(adb.mock.calls.map(([args]) => args)).toEqual([
       ["connect", TARGET],
       ["-s", TARGET, "shell", "input", "keyevent", "1073741851"],
