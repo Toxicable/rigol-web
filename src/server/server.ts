@@ -64,8 +64,6 @@ const dmmEndpoint = {
 const scopeDisplay = new Dho804DisplayControl(scopeEndpoint.host, readScopeAdbPort());
 
 const server = createServer(createHttpRequestHandler(undefined, {
-  screenOffScope: () => scopeDisplay.screenOff(),
-  screenOnScope: () => scopeDisplay.screenOn(),
   sleepScope: () => scopeDisplay.sleep(),
   wakeScope: () => scopeDisplay.wake(),
 }));
