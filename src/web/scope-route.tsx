@@ -42,7 +42,7 @@ export function ScopeRoute({ client, controller }: ScopeRouteProps) {
               />
               <MeasurementOverlay scope={connection.scope} />
             </section>
-            <MeasurementPanel client={client} />
+            <MeasurementPanel client={client} controller={controller} />
           </div>
           <aside className="control-stack">
             <ChannelControls channels={connection.scope.channels} client={client} />
