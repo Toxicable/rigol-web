@@ -10,6 +10,12 @@ import {
 } from "../../../shared/dmm-types.js";
 import { formatDmmValue } from "../../dmm/dmm-format.js";
 import {
+  DMM_TREND_HORIZONTAL_DIVISIONS,
+  DMM_TREND_RETENTION_SECONDS,
+  normalizeDmmTrendHorizontal,
+  type DmmTrendHorizontal,
+} from "./dmm-horizontal-controls.js";
+import {
   divisionSplits,
   formatTimeAxisValues,
   timeAxisUnit,
@@ -18,10 +24,9 @@ import {
 interface DmmTrendProps {
   measurementFunction: DmmMeasurementFunction;
   snapshot: DmmReadingSnapshot | null;
+  horizontal: DmmTrendHorizontal;
 }
 
-export const DMM_TREND_WINDOW_SECONDS = 5 * 60;
-const DMM_TREND_MINIMUM_X_SECONDS = 10;
 const AXIS_FONT = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const TREND_STROKE = "#7ab8e8";
 const ELAPSED_TIME_UNIT = timeAxisUnit(1);
@@ -41,7 +46,7 @@ export function appendDmmTrendSnapshot(
   data[0].push(elapsedSeconds);
   data[1].push(snapshot.kind === DmmReadingKind.Value ? snapshot.value : null);
 
-  const cutoff = elapsedSeconds - DMM_TREND_WINDOW_SECONDS;
+  const cutoff = elapsedSeconds - DMM_TREND_RETENTION_SECONDS;
   let removeCount = 0;
   while (removeCount < data[0].length && data[0][removeCount]! < cutoff) {
     removeCount += 1;
@@ -52,11 +57,34 @@ export function appendDmmTrendSnapshot(
   }
 }
 
-export function DmmTrend({ measurementFunction, snapshot }: DmmTrendProps) {
+export function dmmTrendVisibleRange(
+  latestSeconds: number,
+  horizontal: DmmTrendHorizontal,
+): { min: number; max: number } {
+  if (!Number.isFinite(latestSeconds) || latestSeconds < 0) {
+    throw new Error("DMM trend latest time must be a non-negative finite number");
+  }
+
+  const normalized = normalizeDmmTrendHorizontal(horizontal);
+  const width = normalized.scale * DMM_TREND_HORIZONTAL_DIVISIONS;
+  const rightEdge = Math.max(0, latestSeconds + normalized.position);
+  if (rightEdge < width) {
+    return { min: 0, max: width };
+  }
+  return { min: rightEdge - width, max: rightEdge };
+}
+
+export function DmmTrend({
+  measurementFunction,
+  snapshot,
+  horizontal,
+}: DmmTrendProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const plotRef = useRef<uPlot | null>(null);
   const dataRef = useRef<TrendData>([[], []]);
   const startedAtRef = useRef<number | null>(null);
+  const latestElapsedRef = useRef(0);
+  const horizontalRef = useRef(normalizeDmmTrendHorizontal(horizontal));
   const unit = dmmUnitForFunction(measurementFunction);
 
   useEffect(() => {
@@ -67,6 +95,7 @@ export function DmmTrend({ measurementFunction, snapshot }: DmmTrendProps) {
 
     dataRef.current = [[], []];
     startedAtRef.current = null;
+    latestElapsedRef.current = 0;
 
     const width = Math.max(1, host.clientWidth);
     const height = Math.max(1, host.clientHeight);
@@ -86,7 +115,7 @@ export function DmmTrend({ measurementFunction, snapshot }: DmmTrendProps) {
           size: 28,
           space: 42,
           splits: (_plot: uPlot, _axisIndex: number, scaleMin: number, scaleMax: number) =>
-            divisionSplits(scaleMin, scaleMax, 10),
+            divisionSplits(scaleMin, scaleMax, DMM_TREND_HORIZONTAL_DIVISIONS),
           values: (_plot: uPlot, ticks: number[]) =>
             formatTimeAxisValues(ticks, ELAPSED_TIME_UNIT),
           grid: { stroke: "#202832", width: 1 },
@@ -118,7 +147,7 @@ export function DmmTrend({ measurementFunction, snapshot }: DmmTrendProps) {
       dataRef.current as unknown as uPlot.AlignedData,
       host,
     );
-    plot.setScale("x", { min: 0, max: DMM_TREND_MINIMUM_X_SECONDS });
+    plot.setScale("x", dmmTrendVisibleRange(0, horizontalRef.current));
     plotRef.current = plot;
 
     const resizeObserver = new ResizeObserver(() => {
@@ -137,6 +166,19 @@ export function DmmTrend({ measurementFunction, snapshot }: DmmTrendProps) {
   }, [measurementFunction, unit]);
 
   useEffect(() => {
+    horizontalRef.current = normalizeDmmTrendHorizontal(horizontal);
+    const plot = plotRef.current;
+    if (plot === null) {
+      return;
+    }
+    plot.setScale(
+      "x",
+      dmmTrendVisibleRange(latestElapsedRef.current, horizontalRef.current),
+    );
+    plot.redraw();
+  }, [horizontal]);
+
+  useEffect(() => {
     if (snapshot === null || snapshot.function !== measurementFunction) {
       return;
     }
@@ -149,13 +191,14 @@ export function DmmTrend({ measurementFunction, snapshot }: DmmTrendProps) {
     const startedAt = startedAtRef.current ?? nowSeconds;
     startedAtRef.current = startedAt;
     const elapsedSeconds = nowSeconds - startedAt;
+    latestElapsedRef.current = elapsedSeconds;
 
     appendDmmTrendSnapshot(dataRef.current, elapsedSeconds, snapshot);
     plot.setData(dataRef.current as unknown as uPlot.AlignedData, false);
-    plot.setScale("x", {
-      min: Math.max(0, elapsedSeconds - DMM_TREND_WINDOW_SECONDS),
-      max: Math.max(DMM_TREND_MINIMUM_X_SECONDS, elapsedSeconds),
-    });
+    plot.setScale(
+      "x",
+      dmmTrendVisibleRange(elapsedSeconds, horizontalRef.current),
+    );
     plot.redraw();
   }, [measurementFunction, snapshot]);
 
@@ -171,7 +214,6 @@ export function DmmTrend({ measurementFunction, snapshot }: DmmTrendProps) {
           <span className="dmm-eyebrow">Browser history</span>
           <h2>Snapshot trend</h2>
         </div>
-        <span className="status-pill">5 min</span>
       </div>
       <div className="dmm-trend-plot" ref={hostRef} />
       <p className="muted dmm-trend-note">
