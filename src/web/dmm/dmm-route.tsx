@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import type {
   DmmControlChange,
@@ -8,6 +8,10 @@ import {
   DmmControls,
   dmmControlMatchesState,
 } from "../components/dmm/dmm-controls.js";
+import {
+  DEFAULT_DMM_TREND_HORIZONTAL,
+  DmmHorizontalControls,
+} from "../components/dmm/dmm-horizontal-controls.js";
 import { DmmReading } from "../components/dmm/dmm-reading.js";
 import { DmmToolbar } from "../components/dmm/dmm-toolbar.js";
 import { DmmTrend } from "../components/dmm/dmm-trend.js";
@@ -84,6 +88,15 @@ export function DmmRouteView({
   controlError,
   onControl,
 }: DmmRouteViewProps) {
+  const measurementFunction = connection.kind === DmmBrowserConnectionKind.Connected
+    ? connection.state.function
+    : null;
+  const [trendHorizontal, setTrendHorizontal] = useState(DEFAULT_DMM_TREND_HORIZONTAL);
+
+  useEffect(() => {
+    setTrendHorizontal((current) => ({ ...current, position: 0 }));
+  }, [measurementFunction]);
+
   return (
     <section className="dmm-route">
       <DmmToolbar connection={connection} />
@@ -96,6 +109,7 @@ export function DmmRouteView({
               <DmmTrend
                 measurementFunction={connection.state.function}
                 snapshot={latestReading}
+                horizontal={trendHorizontal}
               />
             </div>
             <aside className="control-stack">
@@ -103,6 +117,10 @@ export function DmmRouteView({
                 state={connection.state}
                 pending={pending}
                 onControl={onControl}
+              />
+              <DmmHorizontalControls
+                horizontal={trendHorizontal}
+                onChange={setTrendHorizontal}
               />
             </aside>
           </div>
