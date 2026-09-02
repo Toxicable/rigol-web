@@ -143,7 +143,6 @@ async function renderViewportToPng(): Promise<Blob> {
   const cloneRoot = sourceRoot.cloneNode(true) as HTMLElement;
   syncFormState(sourceRoot, cloneRoot);
   replaceCanvases(sourceRoot, cloneRoot);
-  cloneRoot.querySelectorAll("[data-screenshot-exclude]").forEach((element) => element.remove());
   cloneRoot.style.width = `${width}px`;
   cloneRoot.style.height = `${height}px`;
 
@@ -190,7 +189,7 @@ export async function copyViewportScreenshot(): Promise<void> {
     throw new Error("This browser does not support copying PNG images to the clipboard");
   }
 
-  const png = await renderViewportToPng();
+  const png = renderViewportToPng();
   await navigator.clipboard.write([
     new ClipboardItem({
       "image/png": png,
