@@ -1,21 +1,17 @@
-# DHO804 proper sleep and wake control
+# DHO804 proper sleep control
 
 ## Current behavior
 
-Rigol Web exposes one adaptive instrument **Sleep/Wake** control. The old
-display-only **Screen Off** / **Screen On** controls and their HTTP endpoints
-have been removed.
+Rigol Web exposes a one-way instrument **Sleep** control. Remote Wake has been
+removed because real-scope testing on 2026-09-02 confirmed that native Sleep
+takes the DHO804 off the network. Once asleep, neither the SCPI endpoint nor LAN
+ADB is reachable, so a LAN-only wake request cannot work.
 
-The backend endpoints are now only:
+The backend power endpoint is now only:
 
 - `POST /api/scope/sleep`
-- `POST /api/scope/wake`
 
-While normally connected the toolbar button reads **Sleep**. During Sleep the
-DHO804 SCPI runtime is deliberately stopped before the native power action, so
-the normal scope connection transitions to disconnected before the instrument
-actually sleeps. Subscriber state is preserved. After Wake the SCPI runtime is
-resumed and existing subscribers reconnect automatically.
+`POST /api/scope/wake` no longer exists.
 
 ## Why native Sleep uses the Rigol UI path
 
@@ -47,10 +43,10 @@ so that path has been removed.
 
 ## Implemented Sleep sequence
 
-The HTTP Sleep action now coordinates the SCPI runtime and
+The HTTP Sleep action coordinates the SCPI runtime and
 `Dho804PowerControl.sleep()` as one lifecycle:
 
-1. suspend the DHO804 instrument runtime while preserving subscribers;
+1. suspend the DHO804 instrument runtime while preserving browser subscribers;
 2. wait for the current SCPI session, live waveform stream, scheduler, and
    transport to stop cleanly;
 3. connect to the configured DHO804 ADB endpoint;
@@ -79,21 +75,21 @@ If the native Sleep action fails before it has been dispatched, Rigol Web
 resumes the DHO804 SCPI runtime so an existing browser session is not left
 artificially suspended.
 
-## Implemented Wake sequence
+## Physical wake and automatic SCPI recovery
 
-`Dho804PowerControl.wake()` attempts both wake candidates independently:
+The DHO804 must be woken physically using its front-panel power key. Rigol Web
+does not present a Wake button or attempt ADB wake commands while the instrument
+is offline.
 
-1. Rigol panel-power key `1073741851`;
-2. Android `KEYCODE_WAKEUP` (`224`).
+After a successful Sleep dispatch, the server keeps the SCPI runtime suspended
+and performs only a quiet TCP reachability probe against the configured SCPI
+port every 2 seconds. It sends no SCPI commands. The monitor requires an actual
+offline transition before it will treat later reachability as a physical wake.
+When the SCPI TCP endpoint becomes reachable again, Rigol Web resumes the
+instrument runtime and existing browser subscribers reconnect automatically.
 
-Each attempt is logged as command success or failure. After both attempts,
-Rigol Web reconnects if possible and runs `dumpsys power`; if
-`mWakefulness=<state>` is present, that state is logged.
-
-The HTTP wake request fails only when both key-injection attempts fail. A failed
-power-state probe is diagnostic only. After the wake action succeeds, the
-instrument registry lifts the DHO804 suspension. If browser subscribers still
-exist, the SCPI runtime starts again and reconnects normally.
+This avoids the previous stream/query errors and repeated SCPI reconnect errors
+while the sleeping scope is absent from the network.
 
 ## Verification state
 
@@ -104,28 +100,36 @@ Verified on the real scope:
 - the real framebuffer geometry matches the stock layout used for the Sleep tap;
 - the `(324, 375)` tap executes the stock Sleep action;
 - successful Sleep can coincide with loss of the final command connection, so
-  command-process completion is not a valid Sleep acknowledgement.
+  command-process completion is not a valid Sleep acknowledgement;
+- native Sleep takes the DHO804 offline on the network, making LAN ADB wake
+  unavailable.
 
-Still to verify:
+Still to verify on the real instrument:
 
-- whether ADB remains reachable throughout proper Sleep;
-- which Wake candidate resumes the scope;
-- whether SCPI reconnection after Wake is clean on the real instrument.
+- that physical front-panel wake restores the SCPI endpoint cleanly enough for
+  the new reachability monitor to resume the runtime without manual intervention.
 
 Useful server log lines are:
 
 - `[DHO804 sleep] dispatched native Rigol Sleep control at 324,375`
-- `[DHO804 wake] Rigol panel power key: ...`
-- `[DHO804 wake] Android KEYCODE_WAKEUP: ...`
-- `[DHO804 wake] power-state probe after attempts: ...`
+- `[DHO804 sleep] SCPI endpoint reachable after physical wake; resuming runtime`
 
-If ADB becomes unreachable during proper Sleep, neither LAN ADB wake candidate
-can work from that state. Reliable remote cold-start then remains external power
-switching with `:SYSTem:PSTatus OPEN`, which is a full boot rather than resume.
+## Reliable remote cold-start option
+
+For genuinely remote restart, external power switching remains the reliable
+option. Set:
+
+`:SYSTem:PSTatus OPEN`
+
+Then the DHO804 starts automatically when its DC input is restored. This is a
+full boot rather than Sleep resume. Avoid routinely removing power from the
+running Android-based scope without a clean shutdown.
 
 ## Cost
 
-No additional hardware or paid service is required. Cost impact: **A$0**.
+No additional hardware or paid service is required for the Sleep implementation
+or physical-wake detection. Cost impact: **A$0**. Remote cold-start would require
+whatever external power switch/relay hardware is chosen.
 
 ## Sources
 
