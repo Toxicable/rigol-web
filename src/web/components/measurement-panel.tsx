@@ -4,8 +4,10 @@ import {
   Channel,
   MeasurementKind,
 } from "../../shared/scope-types.js";
-import { useScopeStore } from "../scope-store.js";
+import { LocalMeasurementAccumulator } from "../local-measurements.js";
+import { MeasurementSource, useScopeStore } from "../scope-store.js";
 import type { ScopeWebSocketClient } from "../websocket-client.js";
+import type { WaveformController } from "../waveform/waveform-controller.js";
 
 const KIND_LABELS: Record<MeasurementKind, string> = {
   [MeasurementKind.Vpp]: "Vpp",
@@ -40,24 +42,44 @@ const MEASUREMENT_GROUPS = [
 
 interface MeasurementPanelProps {
   client: ScopeWebSocketClient;
+  controller: WaveformController;
 }
 
-export function MeasurementPanel({ client }: MeasurementPanelProps) {
+export function MeasurementPanel({ client, controller }: MeasurementPanelProps) {
+  const source = useScopeStore((state) => state.measurementSource);
+  const setSource = useScopeStore((state) => state.setMeasurementSource);
   const specs = useScopeStore((state) => state.measurementSpecs);
   const setSpecs = useScopeStore((state) => state.setMeasurementSpecs);
   const [channel, setChannel] = useState(Channel.Ch1);
   const [kind, setKind] = useState(MeasurementKind.Vpp);
-
-  useEffect(
-    () => client.startMeasurementPolling(() => useScopeStore.getState().measurementSpecs),
-    [client],
-  );
+  const [localMeasurements] = useState(() => new LocalMeasurementAccumulator());
 
   useEffect(() => {
-    void client.setMeasurements(specs).catch((error: unknown) => {
+    if (source !== MeasurementSource.Scope) {
+      return;
+    }
+    return client.startMeasurementPolling(() => useScopeStore.getState().measurementSpecs);
+  }, [client, source]);
+
+  useEffect(() => {
+    const scopeMeasurements = source === MeasurementSource.Scope ? specs : [];
+    void client.setMeasurements(scopeMeasurements).catch((error: unknown) => {
       useScopeStore.getState().setError(error instanceof Error ? error.message : String(error));
     });
-  }, [client, specs]);
+  }, [client, source, specs]);
+
+  useEffect(() => {
+    localMeasurements.reset();
+    if (source !== MeasurementSource.Local) {
+      return;
+    }
+
+    const update = () => {
+      useScopeStore.getState().setMeasurementValues(localMeasurements.update(specs, controller));
+    };
+    update();
+    return controller.subscribe(update);
+  }, [controller, localMeasurements, source, specs]);
 
   const add = () => {
     if (specs.some((spec) => spec.channel === channel && spec.kind === kind)) {
@@ -70,6 +92,16 @@ export function MeasurementPanel({ client }: MeasurementPanelProps) {
     <section className="panel">
       <h2>Measurements</h2>
       <div className="measurement-add">
+        <select
+          aria-label="Measurement source"
+          value={source}
+          onChange={(event: ChangeEvent<HTMLSelectElement>) =>
+            setSource(Number(event.target.value) as MeasurementSource)
+          }
+        >
+          <option value={MeasurementSource.Scope}>Source: Scope</option>
+          <option value={MeasurementSource.Local}>Source: Local</option>
+        </select>
         <select value={channel} onChange={(event: ChangeEvent<HTMLSelectElement>) => setChannel(Number(event.target.value) as Channel)}>
           {[Channel.Ch1, Channel.Ch2, Channel.Ch3, Channel.Ch4].map((item) => (
             <option value={item} key={item}>CH{item}</option>
