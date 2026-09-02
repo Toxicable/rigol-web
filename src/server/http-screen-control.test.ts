@@ -22,12 +22,22 @@ async function withServer(
   }
 }
 
+function controls(overrides: Partial<HttpControlActions> = {}): HttpControlActions {
+  return {
+    screenOffScope: async () => undefined,
+    screenOnScope: async () => undefined,
+    sleepScope: async () => undefined,
+    wakeScope: async () => undefined,
+    ...overrides,
+  };
+}
+
 describe("scope display HTTP control", () => {
   it("runs the injected DHO804 screen-off action", async () => {
     const screenOffScope = vi.fn(async () => undefined);
     const screenOnScope = vi.fn(async () => undefined);
 
-    await withServer({ screenOffScope, screenOnScope }, async (baseUrl) => {
+    await withServer(controls({ screenOffScope, screenOnScope }), async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/scope/screen-off`, { method: "POST" });
       expect(response.status).toBe(204);
     });
@@ -40,7 +50,7 @@ describe("scope display HTTP control", () => {
     const screenOffScope = vi.fn(async () => undefined);
     const screenOnScope = vi.fn(async () => undefined);
 
-    await withServer({ screenOffScope, screenOnScope }, async (baseUrl) => {
+    await withServer(controls({ screenOffScope, screenOnScope }), async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/scope/screen-on`, { method: "POST" });
       expect(response.status).toBe(204);
     });
@@ -49,16 +59,41 @@ describe("scope display HTTP control", () => {
     expect(screenOffScope).not.toHaveBeenCalled();
   });
 
+  it("runs the injected DHO804 native Sleep action", async () => {
+    const sleepScope = vi.fn(async () => undefined);
+    const wakeScope = vi.fn(async () => undefined);
+
+    await withServer(controls({ sleepScope, wakeScope }), async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/scope/sleep`, { method: "POST" });
+      expect(response.status).toBe(204);
+    });
+
+    expect(sleepScope).toHaveBeenCalledTimes(1);
+    expect(wakeScope).not.toHaveBeenCalled();
+  });
+
+  it("runs the injected DHO804 wake action", async () => {
+    const sleepScope = vi.fn(async () => undefined);
+    const wakeScope = vi.fn(async () => undefined);
+
+    await withServer(controls({ sleepScope, wakeScope }), async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/scope/wake`, { method: "POST" });
+      expect(response.status).toBe(204);
+    });
+
+    expect(wakeScope).toHaveBeenCalledTimes(1);
+    expect(sleepScope).not.toHaveBeenCalled();
+  });
+
   it("surfaces ADB display failures to the browser", async () => {
     await withServer(
-      {
-        screenOffScope: async () => undefined,
-        screenOnScope: async () => {
+      controls({
+        wakeScope: async () => {
           throw new Error("ADB unavailable");
         },
-      },
+      }),
       async (baseUrl) => {
-        const response = await fetch(`${baseUrl}/api/scope/screen-on`, { method: "POST" });
+        const response = await fetch(`${baseUrl}/api/scope/wake`, { method: "POST" });
         expect(response.status).toBe(502);
         expect(await response.text()).toContain("ADB unavailable");
       },
