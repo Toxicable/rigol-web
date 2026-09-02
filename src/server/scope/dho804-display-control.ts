@@ -10,7 +10,6 @@ export type DisplayControlLogger = (message: string) => void;
 export type Delay = (milliseconds: number) => Promise<void>;
 
 const ADB_TIMEOUT_MS = 5_000;
-const ANDROID_KEYCODE_SLEEP = "223";
 const ANDROID_KEYCODE_WAKEUP = "224";
 const RIGOL_PANEL_POWER_KEYCODE = "1073741851";
 const RIGOL_SLEEP_TAP_X = "324";
@@ -63,14 +62,6 @@ export class Dho804DisplayControl {
     private readonly log: DisplayControlLogger = console.log,
     private readonly wait: Delay = delay,
   ) {}
-
-  public screenOff(): Promise<void> {
-    return this.sendKeyEvent(ANDROID_KEYCODE_SLEEP);
-  }
-
-  public screenOn(): Promise<void> {
-    return this.sendKeyEvent(ANDROID_KEYCODE_WAKEUP);
-  }
 
   public async sleep(): Promise<void> {
     const target = adbTarget(this.host, this.port);
