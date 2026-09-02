@@ -1,5 +1,7 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { NavLink, useInRouterContext } from "react-router-dom";
+
+import { copyViewportScreenshot } from "../copy-screenshot.js";
 
 interface InstrumentHeaderProps {
   children?: ReactNode;
@@ -7,6 +9,24 @@ interface InstrumentHeaderProps {
 
 export function InstrumentHeader({ children }: InstrumentHeaderProps) {
   const inRouter = useInRouterContext();
+  const [copyingScreenshot, setCopyingScreenshot] = useState(false);
+  const [screenshotCopied, setScreenshotCopied] = useState(false);
+  const [screenshotError, setScreenshotError] = useState<string | null>(null);
+
+  const copyScreenshot = async () => {
+    setCopyingScreenshot(true);
+    setScreenshotCopied(false);
+    setScreenshotError(null);
+    try {
+      await copyViewportScreenshot();
+      setScreenshotCopied(true);
+      window.setTimeout(() => setScreenshotCopied(false), 1500);
+    } catch (error) {
+      setScreenshotError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCopyingScreenshot(false);
+    }
+  };
 
   return (
     <header className="instrument-shell">
@@ -36,6 +56,19 @@ export function InstrumentHeader({ children }: InstrumentHeaderProps) {
         )}
       </nav>
       {children}
+      <div className="screenshot-copy-control" data-screenshot-exclude="true">
+        {screenshotError !== null ? (
+          <span className="screenshot-copy-error" title={screenshotError}>Screenshot failed</span>
+        ) : null}
+        <button
+          type="button"
+          disabled={copyingScreenshot}
+          onClick={() => void copyScreenshot()}
+          title={screenshotError ?? "Copy the currently rendered Rigol Web viewport to the clipboard as PNG"}
+        >
+          {copyingScreenshot ? "Copying…" : screenshotCopied ? "Copied" : "Copy Screenshot"}
+        </button>
+      </div>
     </header>
   );
 }
