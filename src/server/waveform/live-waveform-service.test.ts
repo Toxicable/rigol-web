@@ -73,7 +73,7 @@ function frameSequence(frame: Uint8Array): number {
 }
 
 describe("LiveWaveformService", () => {
-  it("reads enabled channels as separate fixed 999-point driver calls", async () => {
+  it("reads enabled channels as separate fixed 1000-point driver calls", async () => {
     const driver = new FakeDriver();
     const frames: Uint8Array[] = [];
     const service = new LiveWaveformService({
@@ -89,7 +89,7 @@ describe("LiveWaveformService", () => {
     service.start();
     await service.waitForIdle();
     expect(driver.calls).toEqual([Channel.Ch1, Channel.Ch3]);
-    expect(driver.pointCounts).toEqual([999, 999]);
+    expect(driver.pointCounts).toEqual([1_000, 1_000]);
     expect(frames).toHaveLength(2);
   });
 

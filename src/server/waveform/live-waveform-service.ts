@@ -14,10 +14,10 @@ export interface LiveWaveformServiceOptions {
   reportError?: (error: unknown) => void;
 }
 
-// The DHO804 firmware returns 999 samples when NORMAL/BYTE mode is asked for
-// 1000 points. Lower NORMAL point counts crop the visible waveform span rather
-// than decimating the whole screen, so live acquisition always uses 999 points.
-const LIVE_POINT_COUNT = 999;
+// The DHO804 returns the full 1000-byte waveform for the NORMAL/BYTE live path.
+// Lower NORMAL point counts crop the visible waveform span rather than
+// decimating the whole screen, so live acquisition uses the maximum count.
+const LIVE_POINT_COUNT = 1_000;
 const RESUME_SETTLE_DELAY_MS = 200;
 
 function nextUint32(value: number): number {

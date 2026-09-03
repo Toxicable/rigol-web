@@ -5,11 +5,11 @@
 The browser is not the live-waveform bottleneck. Real DHO804 captures show substantial scope-side SCPI latency:
 
 - ordinary text queries commonly take about 22-30 ms;
-- warm 999-byte `:WAVeform:DATA?` calls commonly take about 29-41 ms;
+- warm 1000-byte `:WAVeform:DATA?` calls commonly take about 29-41 ms;
 - `:WAVeform:PREamble?` has been observed around 23-27 ms;
 - reducing NORMAL/BYTE data from 999 to 500 points did not materially improve `DATA?` latency and cropped the displayed time span instead of decimating it.
 
-Live acquisition therefore uses a fixed 999-point NORMAL/BYTE path. There is no live point-count option.
+Live acquisition therefore uses a fixed 1000-point NORMAL/BYTE path. There is no live point-count option.
 
 All software changes in this workstream cost $0.
 

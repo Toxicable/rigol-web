@@ -45,7 +45,7 @@ browser waveform layer
 uPlot
 ```
 
-Live acquisition is fixed at NORMAL/BYTE/999 points. The DHO804 returns 999 samples when the requested NORMAL point count is 1000, and lower point counts were measured to crop the visible time span instead of decimating the whole screen. There is no runtime live-point-count option.
+Live acquisition is fixed at NORMAL/BYTE/1000 points. The DHO804 returns 1000 samples for the maximum NORMAL point count, and lower point counts were measured to crop the visible time span instead of decimating the whole screen. There is no runtime live-point-count option.
 
 Live waveform data is disposable. Do not queue a backlog of live acquisitions. The service keeps at most one acquisition loop active plus one `fresh waveform wanted` indication.
 

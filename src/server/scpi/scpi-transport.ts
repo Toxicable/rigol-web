@@ -36,17 +36,9 @@ interface ParsedBinaryBlock {
   end: number;
 }
 
-const SUPPRESSED_DEBUG_EVENTS = new Set([
-  "query:start",
-  "query:data",
-  "query:binary-progress",
-]);
-
-function scpiDebug(event: string, detail: Record<string, unknown>): void {
-  if (SUPPRESSED_DEBUG_EVENTS.has(event)) {
-    return;
-  }
-  console.debug(`[SCPI] ${event} ${JSON.stringify(detail)}`);
+function scpiDebug(_event: string, _detail: Record<string, unknown>): void {
+  // SCPI traffic is intentionally quiet in normal operation. Failures are
+  // still reported by the scheduler/runtime error paths.
 }
 
 export class ScpiTransport {

@@ -245,7 +245,7 @@ export class ScpiScheduler {
           : String(error),
       };
       if (this.stopped) {
-        console.debug("[SCPI] operation cancelled during scheduler stop", detail);
+        // Expected during shutdown; do not emit routine SCPI debug output.
       } else {
         console.error("SCPI operation failed", detail);
       }

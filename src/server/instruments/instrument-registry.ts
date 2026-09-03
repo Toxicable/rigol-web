@@ -41,19 +41,11 @@ function validateEndpoint(name: string, endpoint: InstrumentEndpoint): void {
 }
 
 function debugLifecycle(
-  event: string,
-  instrument: SupportedInstrument,
-  entry: InstrumentEntry,
+  _event: string,
+  _instrument: SupportedInstrument,
+  _entry: InstrumentEntry,
 ): void {
-  console.debug(`[SCPI] instrument ${event}`, {
-    instrument,
-    subscribers: entry.subscribers.size,
-    running: entry.running,
-    suspended: entry.suspended,
-    revision: entry.revision,
-    host: entry.endpoint.host,
-    port: entry.endpoint.port,
-  });
+  // Instrument lifecycle is intentionally quiet in normal operation.
 }
 
 export class InstrumentRegistry {
