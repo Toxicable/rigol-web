@@ -34,16 +34,24 @@ At 30 s/div the full five-minute retained history fits in the ten-division viewp
 
 uPlot requires aligned X/Y arrays with matching lengths and at least two X values. The DMM trend therefore supplies renderer-only null padding until two real browser trend samples exist; the retained trend history itself is not padded with fabricated values.
 
-The trend has its own deterministic 100 ms browser sampling clock. Each tick samples the latest DMM display state already held in the browser, appends it using browser monotonic time, then updates uPlot with `setData(..., false)` followed by an explicit X-scale update. The X-scale update is the redraw/invalidation boundary and also causes the auto Y scale to be recalculated for the visible data.
+The trend has its own deterministic 100 ms browser sampling clock. Each tick samples the latest DMM display state already held in the browser, appends it using browser monotonic time, then updates uPlot with `setData(..., false)` followed by an explicit X-scale update. The X-scale update is the redraw/invalidation boundary. Auto-ranged functions recalculate Y from the visible data there; fixed DMM measurement ranges instead encode their bounds directly in uPlot's static `range: [min, max]` scale option so later streaming X updates cannot replace them. A one-shot `setScale("y", ...)` is not sufficient for a persistent fixed range because subsequent scale invalidation can recalculate Y.
 
 This is intentionally independent of WebSocket message frequency. The DMM runtime may suppress identical display snapshots because they are redundant for the primary reading, but a stable value still needs to form a flat line that advances through time in the trend. Sampling the latest browser state locally preserves that behavior without adding SCPI requests or WebSocket traffic.
 
 The Y scale has a finite fallback range for the no-numeric-data case so an initial empty, overload, or unavailable state can render safely. Sparse data also enables point markers while there are too few visible numeric samples to form a useful line, so a lone valid reading is not invisible.
 
-The earlier implementations exposed two separate problems:
+For fixed ranges, the browser uses the selected instrument range rather than the observed sample extrema:
+
+- DC voltage/current use `-range .. +range`;
+- AC voltage/current, resistance and capacitance use `0 .. range`;
+- Auto range remains data-driven because the browser does not receive the instantaneous effective autorange;
+- frequency/period range controls are input-voltage conditioning ranges and are not reused as Hz/s graph bounds.
+
+The earlier implementations exposed three separate problems:
 
 - zero-length aligned arrays could produce a startup `null is not iterable` exception;
-- driving trend time directly from deduplicated DMM snapshot messages meant a stable reading could leave the graph with only one invisible sample and no visible time progression.
+- driving trend time directly from deduplicated DMM snapshot messages meant a stable reading could leave the graph with only one invisible sample and no visible time progression;
+- fixed-range mode initially set `auto: false` and called `setScale("y", ...)` once, which looked correct until streaming X updates caused uPlot to recalculate Y from visible samples.
 
 ## Trend semantics
 
@@ -68,4 +76,4 @@ Incremental cost: **$0**. The browser reuses the `uPlot` package already require
 
 ## Validation
 
-`src/web/components/dmm/dmm-trend.test.ts` covers the 100 ms sample cadence constant, repeated stable values, numeric points, unavailable-reading gaps, rolling-history trimming, immediate latest-edge scrolling, time/div and Position viewport math, pre-two-sample render data, sparse-point visibility, finite empty Y ranges, horizontal-limit clamping, and invalid elapsed timestamps.
+`src/web/components/dmm/dmm-trend.test.ts` covers the 100 ms sample cadence constant, repeated stable values, numeric points, unavailable-reading gaps, rolling-history trimming, immediate latest-edge scrolling, time/div and Position viewport math, fixed-range mapping, static uPlot fixed-range scale options, pre-two-sample render data, sparse-point visibility, finite empty Y ranges, horizontal-limit clamping, and invalid elapsed timestamps.

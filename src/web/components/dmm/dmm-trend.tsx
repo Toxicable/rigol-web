@@ -146,6 +146,17 @@ export function dmmTrendSelectedYRange(
   }
 }
 
+export function dmmTrendYScaleOptions(selectedYRange: TrendVisibleRange | null) {
+  if (selectedYRange === null) {
+    return { auto: true, range: dmmTrendYRange };
+  }
+
+  return {
+    auto: false,
+    range: [selectedYRange.min, selectedYRange.max] as [number, number],
+  };
+}
+
 export function showDmmTrendPoints(
   _plot: uPlot,
   _seriesIndex: number,
@@ -194,9 +205,7 @@ export function DmmTrend({
       legend: { show: false },
       scales: {
         x: { auto: false, time: false },
-        y: selectedYRange === null
-          ? { auto: true, range: dmmTrendYRange }
-          : { auto: false },
+        y: dmmTrendYScaleOptions(selectedYRange),
       },
       axes: [
         {
@@ -242,9 +251,6 @@ export function DmmTrend({
       host,
     );
     plot.setScale("x", initialRange);
-    if (selectedYRange !== null) {
-      plot.setScale("y", selectedYRange);
-    }
     plotRef.current = plot;
 
     const resizeObserver = new ResizeObserver(() => {
