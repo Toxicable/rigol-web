@@ -8,6 +8,7 @@ import { ControlKind, type ControlChange } from "../../shared/websocket-protocol
 import { channelUnitSymbol, formatAmplitude } from "../format-value.js";
 import { useScopeStore } from "../scope-store.js";
 import type { ScopeWebSocketClient } from "../websocket-client.js";
+import { EditableNumberInput } from "./editable-number.js";
 
 const COUPLING_LABELS: Record<ChannelCoupling, string> = {
   [ChannelCoupling.Ac]: "AC",
@@ -52,40 +53,32 @@ export function ChannelControls({ channels, client }: ChannelControlsProps) {
             </label>
             <label>
               Scale
-              <input
-                type="number"
-                min="0"
-                step="any"
+              <EditableNumberInput
                 value={channel.scale}
-                onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                  const value = event.target.valueAsNumber;
-                  if (Number.isFinite(value) && value > 0) {
-                    setControl({
-                      kind: ControlKind.ChannelScale,
-                      channel: channel.channel,
-                      value,
-                    });
-                  }
-                }}
+                validate={(value) => value > 0}
+                ariaLabel={`CH${channel.channel} scale`}
+                onCommit={(value) =>
+                  setControl({
+                    kind: ControlKind.ChannelScale,
+                    channel: channel.channel,
+                    value,
+                  })
+                }
               />
               <span>{channelUnitSymbol(channel.unit)}/div</span>
             </label>
             <label>
               Offset
-              <input
-                type="number"
-                step="any"
+              <EditableNumberInput
                 value={channel.offset}
-                onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                  const value = event.target.valueAsNumber;
-                  if (Number.isFinite(value)) {
-                    setControl({
-                      kind: ControlKind.ChannelOffset,
-                      channel: channel.channel,
-                      value,
-                    });
-                  }
-                }}
+                ariaLabel={`CH${channel.channel} offset`}
+                onCommit={(value) =>
+                  setControl({
+                    kind: ControlKind.ChannelOffset,
+                    channel: channel.channel,
+                    value,
+                  })
+                }
               />
               <span>{channelUnitSymbol(channel.unit)}</span>
             </label>

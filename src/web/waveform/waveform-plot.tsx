@@ -24,6 +24,10 @@ import {
   timeAxisUnit,
 } from "./waveform-axis.js";
 import { WaveformDisplayMode, type WaveformController } from "./waveform-controller.js";
+import {
+  waveformMarkerPlacement,
+  type WaveformMarkerPlacement,
+} from "./waveform-marker.js";
 
 interface WaveformPlotProps {
   scope: ScopeState;
@@ -42,6 +46,7 @@ interface PlotLayout {
 
 const INTERACTION_UPDATE_INTERVAL_MS = 50;
 const AXIS_FONT = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+const GRID_STROKE = "#202832";
 const CHANNEL_STROKES: Record<Channel, string> = {
   [Channel.Ch1]: "#f4d03f",
   [Channel.Ch2]: "#2ecc71",
@@ -93,7 +98,7 @@ function channelScaleName(channel: Channel): string {
   return `ch${channel}`;
 }
 
-function channelAxis(channel: ChannelState): uPlot.Axis {
+function channelAxis(channel: ChannelState, showGrid: boolean): uPlot.Axis {
   const stroke = CHANNEL_STROKES[channel.channel];
   return {
     scale: channelScaleName(channel.channel),
@@ -106,7 +111,9 @@ function channelAxis(channel: ChannelState): uPlot.Axis {
     incrs: [channel.scale],
     splits: (_plot, _axisIndex, scaleMin, scaleMax) =>
       divisionSplits(scaleMin, scaleMax, 8),
-    grid: { show: false },
+    grid: showGrid
+      ? { show: true, stroke: GRID_STROKE, width: 1 }
+      : { show: false },
     ticks: {
       show: true,
       stroke,
@@ -127,16 +134,28 @@ function readPlotLayout(plot: uPlot, width: number, height: number): PlotLayout 
   };
 }
 
-function channelMarkerY(scope: ScopeState, channel: Channel, height: number): number {
+function channelMarkerPlacement(
+  scope: ScopeState,
+  channel: Channel,
+  layout: PlotLayout,
+): WaveformMarkerPlacement {
   const state = scope.channels[channel - 1];
   if (state === undefined) {
-    return height / 2;
+    return waveformMarkerPlacement(0, -4, 4, layout.plotTop, layout.plotHeight);
   }
-  const yMax = -state.offset + 4 * state.scale;
-  return Math.max(0, Math.min(height, (yMax / (8 * state.scale)) * height));
+  return waveformMarkerPlacement(
+    0,
+    -state.offset - 4 * state.scale,
+    -state.offset + 4 * state.scale,
+    layout.plotTop,
+    layout.plotHeight,
+  );
 }
 
-function triggerMarkerY(scope: ScopeState, height: number): number | null {
+function triggerMarkerPlacement(
+  scope: ScopeState,
+  layout: PlotLayout,
+): WaveformMarkerPlacement | null {
   if (scope.trigger.type !== TriggerType.Edge) {
     return null;
   }
@@ -144,11 +163,24 @@ function triggerMarkerY(scope: ScopeState, height: number): number | null {
   if (source === undefined) {
     return null;
   }
-  const yMax = -source.offset + 4 * source.scale;
-  return Math.max(
-    0,
-    Math.min(height, ((yMax - scope.trigger.level) / (8 * source.scale)) * height),
+  return waveformMarkerPlacement(
+    scope.trigger.level,
+    -source.offset - 4 * source.scale,
+    -source.offset + 4 * source.scale,
+    layout.plotTop,
+    layout.plotHeight,
   );
+}
+
+function markerDirectionGlyph(placement: WaveformMarkerPlacement): string | null {
+  switch (placement.offscreen) {
+    case "above":
+      return "▲";
+    case "below":
+      return "▼";
+    case null:
+      return null;
+  }
 }
 
 export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
@@ -194,6 +226,7 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
 
     const width = Math.max(1, host.clientWidth);
     const height = Math.max(1, host.clientHeight);
+    const enabledChannels = scope.channels.filter((channel) => channel.enabled);
     const options = {
       width,
       height,
@@ -211,7 +244,7 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
         {
           stroke: "#d5e0ea",
           font: "12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-          grid: { show: false },
+          grid: { show: true, stroke: GRID_STROKE, width: 1 },
           ticks: { show: false },
           size: 28,
           splits: (_plot: uPlot, _axisIndex: number, scaleMin: number, scaleMax: number) =>
@@ -219,7 +252,7 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
           values: (_plot: uPlot, ticks: number[]) =>
             formatTimeAxisValues(ticks, horizontalUnit),
         },
-        ...scope.channels.filter((channel) => channel.enabled).map(channelAxis),
+        ...enabledChannels.map((channel, index) => channelAxis(channel, index === 0)),
       ],
       series: [
         {},
@@ -365,15 +398,16 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
     if (channelState === undefined) {
       return;
     }
+    const placement = channelMarkerPlacement(scope, channel, layout);
     dragRef.current = {
       kind: "channel",
       pointerId: event.pointerId,
       channel,
       startY: event.clientY,
       startOffset: channelState.offset,
-      startMarkerY: channelMarkerY(scope, channel, layout.height),
+      startMarkerY: placement.domainY,
       scale: channelState.scale,
-      height: layout.height,
+      height: layout.plotHeight,
     };
   };
 
@@ -383,8 +417,8 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
       return;
     }
     const source = scope.channels[scope.trigger.source - 1];
-    const markerY = triggerMarkerY(scope, layout.height);
-    if (source === undefined || markerY === null) {
+    const placement = triggerMarkerPlacement(scope, layout);
+    if (source === undefined || placement === null) {
       return;
     }
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -393,10 +427,10 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
       pointerId: event.pointerId,
       startY: event.clientY,
       startLevel: scope.trigger.level,
-      startMarkerY: markerY,
+      startMarkerY: placement.domainY,
       sourceOffset: source.offset,
       scale: source.scale,
-      height: layout.height,
+      height: layout.plotHeight,
     };
     setDraggingTrigger(true);
   };
@@ -527,21 +561,11 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
     });
   };
 
-  const triggerY = triggerMarkerY(scope, layout.height);
+  const triggerPlacement = triggerMarkerPlacement(scope, layout);
   const isPannable = isDeep || scope.horizontal.mode === TimebaseMode.Main;
 
   return (
     <div className="waveform-shell">
-      <div
-        className="waveform-grid"
-        style={{
-          left: layout.plotLeft,
-          top: layout.plotTop,
-          width: layout.plotWidth,
-          height: layout.plotHeight,
-        }}
-        aria-hidden="true"
-      />
       <div
         className={`waveform-host ${isPannable ? "is-pannable" : ""}`}
         ref={hostRef}
@@ -558,31 +582,60 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
           if (channelState === undefined || !channelState.enabled) {
             return null;
           }
+          const placement = channelMarkerPlacement(scope, channel, layout);
+          const directionGlyph = markerDirectionGlyph(placement);
+          const directionText = placement.offscreen === "above"
+            ? "; reference is above the visible plot"
+            : placement.offscreen === "below"
+              ? "; reference is below the visible plot"
+              : "";
           return (
             <button
               type="button"
               className={`waveform-marker channel-marker ch${channel}`}
-              style={{ left: 2, top: channelMarkerY(scope, channel, layout.height) }}
+              style={{ left: layout.plotLeft + 2, top: placement.top }}
               onPointerDown={(event: PointerEvent<HTMLButtonElement>) => beginChannelDrag(event, channel)}
               key={channel}
-              title={`Drag CH${channel} offset`}
+              title={`Drag CH${channel} offset${directionText}`}
             >
+              {directionGlyph === null ? null : (
+                <span
+                  aria-hidden="true"
+                  style={{
+                    position: "absolute",
+                    left: "50%",
+                    transform: "translateX(-50%)",
+                    top: placement.offscreen === "above" ? -9 : "auto",
+                    bottom: placement.offscreen === "below" ? -9 : "auto",
+                    fontSize: 8,
+                    lineHeight: 1,
+                    color: "currentColor",
+                  }}
+                >
+                  {directionGlyph}
+                </span>
+              )}
               {channel}
             </button>
           );
         })}
-        {draggingTrigger && scope.trigger.type === TriggerType.Edge && triggerY !== null ? (
+        {draggingTrigger && scope.trigger.type === TriggerType.Edge && triggerPlacement !== null ? (
           <div
             className={`trigger-drag-guide ch${scope.trigger.source}`}
-            style={{ left: 0, right: 0, top: triggerY }}
+            style={{
+              left: layout.plotLeft,
+              width: layout.plotWidth,
+              right: "auto",
+              top: triggerPlacement.top,
+            }}
             aria-hidden="true"
           />
         ) : null}
-        {scope.trigger.type === TriggerType.Edge && triggerY !== null ? (
+        {scope.trigger.type === TriggerType.Edge && triggerPlacement !== null ? (
           <button
             type="button"
             className={`waveform-marker trigger-marker ch${scope.trigger.source}`}
-            style={{ right: 2, top: triggerY }}
+            style={{ right: 2, top: triggerPlacement.top }}
             onPointerDown={beginTriggerDrag}
             title={`Drag CH${scope.trigger.source} trigger level`}
           >
