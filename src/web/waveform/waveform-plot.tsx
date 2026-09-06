@@ -24,6 +24,7 @@ import {
   timeAxisUnit,
 } from "./waveform-axis.js";
 import { WaveformDisplayMode, type WaveformController } from "./waveform-controller.js";
+import { drawScopeGraticule } from "./waveform-graticule.js";
 import {
   waveformMarkerPlacement,
   type WaveformMarkerPlacement,
@@ -46,7 +47,6 @@ interface PlotLayout {
 
 const INTERACTION_UPDATE_INTERVAL_MS = 50;
 const AXIS_FONT = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-const GRID_STROKE = "#202832";
 const CHANNEL_STROKES: Record<Channel, string> = {
   [Channel.Ch1]: "#f4d03f",
   [Channel.Ch2]: "#2ecc71",
@@ -98,7 +98,7 @@ function channelScaleName(channel: Channel): string {
   return `ch${channel}`;
 }
 
-function channelAxis(channel: ChannelState, showGrid: boolean): uPlot.Axis {
+function channelAxis(channel: ChannelState): uPlot.Axis {
   const stroke = CHANNEL_STROKES[channel.channel];
   return {
     scale: channelScaleName(channel.channel),
@@ -111,9 +111,7 @@ function channelAxis(channel: ChannelState, showGrid: boolean): uPlot.Axis {
     incrs: [channel.scale],
     splits: (_plot, _axisIndex, scaleMin, scaleMax) =>
       divisionSplits(scaleMin, scaleMax, 8),
-    grid: showGrid
-      ? { show: true, stroke: GRID_STROKE, width: 1 }
-      : { show: false },
+    grid: { show: false },
     ticks: {
       show: true,
       stroke,
@@ -233,6 +231,9 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
       mode: 2,
       cursor: { show: false },
       legend: { show: false },
+      hooks: {
+        drawClear: [drawScopeGraticule],
+      },
       scales: {
         x: { auto: false, time: false },
         ch1: { auto: false },
@@ -244,7 +245,7 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
         {
           stroke: "#d5e0ea",
           font: "12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-          grid: { show: true, stroke: GRID_STROKE, width: 1 },
+          grid: { show: false },
           ticks: { show: false },
           size: 28,
           splits: (_plot: uPlot, _axisIndex: number, scaleMin: number, scaleMax: number) =>
@@ -252,7 +253,7 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
           values: (_plot: uPlot, ticks: number[]) =>
             formatTimeAxisValues(ticks, horizontalUnit),
         },
-        ...enabledChannels.map((channel, index) => channelAxis(channel, index === 0)),
+        ...enabledChannels.map((channel) => channelAxis(channel)),
       ],
       series: [
         {},
