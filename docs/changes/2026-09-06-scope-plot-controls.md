@@ -4,7 +4,9 @@ Date: 2026-09-06
 
 ## Scope graticule
 
-The DHO804 waveform plot renders the 10 × 8 graticule through uPlot axes rather than a separate CSS layer behind the uPlot host. The horizontal axis provides the ten vertical grid divisions. The first enabled channel axis provides the eight horizontal grid divisions; all channel Y scales still remain independent and fixed to their scope V/div and offset state.
+The DHO804 waveform plot renders a fixed 10 × 8 graticule inside uPlot's own canvas. The first implementation delegated the graticule to uPlot axis `grid` rendering, but the deployed mode-2 waveform view still produced axis labels without visible grid lines. The graticule is therefore drawn explicitly in a `drawClear` hook using `uPlot.bbox`, before waveform series are drawn.
+
+This makes the grid independent of enabled-channel axes, faceted/mode-2 axis behavior, and the old hidden CSS background layer. It always spans the actual plot rectangle with eleven vertical boundaries for ten horizontal divisions and nine horizontal boundaries for eight vertical divisions. Channel Y scales remain independent and fixed to their scope V/div and offset state.
 
 ## Channel and trigger markers
 

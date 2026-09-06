@@ -16,6 +16,7 @@ import {
 import {
   DMM_TREND_SAMPLE_INTERVAL_MS,
   appendDmmTrendSnapshot,
+  applyDmmTrendScales,
   dmmTrendSelectedYRange,
   dmmTrendVisibleRange,
   dmmTrendYRange,
@@ -144,6 +145,30 @@ describe("DM858E snapshot trend", () => {
     const automatic = dmmTrendYScaleOptions(null);
     expect(automatic.auto).toBe(true);
     expect(automatic.range).toBe(dmmTrendYRange);
+  });
+
+  it("reasserts fixed Y bounds whenever the X viewport is applied", () => {
+    const calls: Array<[string, { min: number; max: number }]> = [];
+    const plot = {
+      setScale(scaleKey: string, limits: { min: number; max: number }) {
+        calls.push([scaleKey, limits]);
+      },
+    };
+
+    applyDmmTrendScales(
+      plot as never,
+      { min: 90, max: 100 },
+      { min: -0.01, max: 0.01 },
+    );
+
+    expect(calls).toEqual([
+      ["x", { min: 90, max: 100 }],
+      ["y", { min: -0.01, max: 0.01 }],
+    ]);
+
+    calls.length = 0;
+    applyDmmTrendScales(plot as never, { min: 90, max: 100 }, null);
+    expect(calls).toEqual([["x", { min: 90, max: 100 }]]);
   });
 
   it("provides valid two-column render data before two real samples exist", () => {
