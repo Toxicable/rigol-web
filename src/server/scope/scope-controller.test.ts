@@ -83,6 +83,7 @@ function measurementValue(spec: MeasurementSpec, current: number): MeasurementVa
 class FakeDriver implements ScopeControllerDriver {
   public state = createState();
   public readonly calls: string[] = [];
+  public horizontalModeAfterScale: TimebaseMode | null = null;
 
   public async readScopeState(priority: ScopeDriverPriority): Promise<ScopeState> {
     this.calls.push(`readScopeState:${priority}`);
@@ -143,7 +144,12 @@ class FakeDriver implements ScopeControllerDriver {
     this.calls.push(`setHorizontalScale:${scale}:${priority}`);
     this.state = {
       ...this.state,
-      horizontal: { ...this.state.horizontal, scale, position: 0.5 },
+      horizontal: {
+        ...this.state.horizontal,
+        mode: this.horizontalModeAfterScale ?? this.state.horizontal.mode,
+        scale,
+        position: 0.5,
+      },
       acquisition: { ...this.state.acquisition, sampleRate: 50_000_000 },
     };
   }
@@ -268,7 +274,7 @@ describe("ScopeController", () => {
     expect(store.getState().channels[0].offset).toBe(0);
   });
 
-  it("commits final interactive values at Immediate priority without readback", async () => {
+  it("commits horizontal scale then reconciles authoritative horizontal state", async () => {
     const { controller, driver, store } = createController();
 
     await controller.commitInteraction({
@@ -276,10 +282,29 @@ describe("ScopeController", () => {
       value: 2e-3,
     });
 
-    expect(driver.calls).toEqual(["setHorizontalScale:0.002:0"]);
+    expect(driver.calls).toEqual([
+      "setHorizontalScale:0.002:0",
+      "readHorizontalState:0",
+    ]);
     expect(store.getState().horizontal.scale).toBe(2e-3);
-    expect(store.getState().horizontal.position).toBe(0);
+    expect(store.getState().horizontal.position).toBe(0.5);
     expect(store.getState().acquisition.sampleRate).toBe(100_000_000);
+  });
+
+  it("captures an automatic Main-to-Roll transition after changing time scale", async () => {
+    const { controller, driver, store } = createController();
+    driver.horizontalModeAfterScale = TimebaseMode.Roll;
+
+    await controller.commitInteraction({
+      kind: ControlKind.HorizontalScale,
+      value: 1,
+    });
+
+    expect(driver.calls).toEqual([
+      "setHorizontalScale:1:0",
+      "readHorizontalState:0",
+    ]);
+    expect(store.getState().horizontal.mode).toBe(TimebaseMode.Roll);
   });
 
   it("keeps the latest optimistic interaction value", async () => {
@@ -373,12 +398,30 @@ describe("ScopeController", () => {
     expect(store.getState().runState).toBe(ScopeRunState.Stopped);
   });
 
-  it("reads back the instrument state after Single", async () => {
+  it("reads horizontal mode before Single and reads back the resulting run state", async () => {
     const { controller, driver, store } = createController();
 
     await controller.performAcquisitionAction(AcquisitionAction.Single);
 
-    expect(driver.calls).toEqual(["single", "readRunState:0"]);
+    expect(driver.calls).toEqual([
+      "readHorizontalState:0",
+      "single",
+      "readRunState:0",
+    ]);
     expect(store.getState().runState).toBe(ScopeRunState.Waiting);
+  });
+
+  it("rejects Single in Roll mode without sending the instrument action", async () => {
+    const state = createState();
+    state.horizontal = { ...state.horizontal, mode: TimebaseMode.Roll };
+    const { controller, driver, store } = createController(state);
+
+    await expect(
+      controller.performAcquisitionAction(AcquisitionAction.Single),
+    ).rejects.toThrow("unavailable in Roll mode");
+
+    expect(driver.calls).toEqual(["readHorizontalState:0"]);
+    expect(store.getState().horizontal.mode).toBe(TimebaseMode.Roll);
+    expect(store.getState().runState).toBe(ScopeRunState.Running);
   });
 });

@@ -3,9 +3,11 @@ import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 
 import {
+  DmmMeasurementFunction,
+  DmmRangeMode,
   DmmReadingKind,
   dmmUnitForFunction,
-  type DmmMeasurementFunction,
+  type DmmRange,
   type DmmReadingSnapshot,
 } from "../../../shared/dmm-types.js";
 import { formatDmmValue } from "../../dmm/dmm-format.js";
@@ -23,6 +25,7 @@ import {
 
 interface DmmTrendProps {
   measurementFunction: DmmMeasurementFunction;
+  range: DmmRange | null;
   snapshot: DmmReadingSnapshot | null;
   horizontal: DmmTrendHorizontal;
 }
@@ -116,6 +119,33 @@ export function dmmTrendYRange(
   return [initialMin - padding, initialMax + padding];
 }
 
+export function dmmTrendSelectedYRange(
+  measurementFunction: DmmMeasurementFunction,
+  range: DmmRange | null,
+): TrendVisibleRange | null {
+  if (range === null || range.mode !== DmmRangeMode.Fixed) {
+    return null;
+  }
+
+  switch (measurementFunction) {
+    case DmmMeasurementFunction.DcVoltage:
+    case DmmMeasurementFunction.DcCurrent:
+      return { min: -range.value, max: range.value };
+    case DmmMeasurementFunction.AcVoltage:
+    case DmmMeasurementFunction.AcCurrent:
+    case DmmMeasurementFunction.Resistance2Wire:
+    case DmmMeasurementFunction.Resistance4Wire:
+    case DmmMeasurementFunction.Capacitance:
+      return { min: 0, max: range.value };
+    case DmmMeasurementFunction.Continuity:
+    case DmmMeasurementFunction.Diode:
+    case DmmMeasurementFunction.Frequency:
+    case DmmMeasurementFunction.Period:
+    case DmmMeasurementFunction.Temperature:
+      return null;
+  }
+}
+
 export function showDmmTrendPoints(
   _plot: uPlot,
   _seriesIndex: number,
@@ -127,6 +157,7 @@ export function showDmmTrendPoints(
 
 export function DmmTrend({
   measurementFunction,
+  range,
   snapshot,
   horizontal,
 }: DmmTrendProps) {
@@ -138,6 +169,10 @@ export function DmmTrend({
   const horizontalRef = useRef(normalizeDmmTrendHorizontal(horizontal));
   const snapshotRef = useRef<DmmReadingSnapshot | null>(snapshot);
   const unit = dmmUnitForFunction(measurementFunction);
+  const selectedYRange = dmmTrendSelectedYRange(measurementFunction, range);
+  const selectedYRangeSignature = selectedYRange === null
+    ? "auto"
+    : `${selectedYRange.min}:${selectedYRange.max}`;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -159,7 +194,9 @@ export function DmmTrend({
       legend: { show: false },
       scales: {
         x: { auto: false, time: false },
-        y: { auto: true, range: dmmTrendYRange },
+        y: selectedYRange === null
+          ? { auto: true, range: dmmTrendYRange }
+          : { auto: false },
       },
       axes: [
         {
@@ -205,6 +242,9 @@ export function DmmTrend({
       host,
     );
     plot.setScale("x", initialRange);
+    if (selectedYRange !== null) {
+      plot.setScale("y", selectedYRange);
+    }
     plotRef.current = plot;
 
     const resizeObserver = new ResizeObserver(() => {
@@ -220,7 +260,7 @@ export function DmmTrend({
       plot.destroy();
       plotRef.current = null;
     };
-  }, [measurementFunction, unit]);
+  }, [measurementFunction, selectedYRangeSignature, unit]);
 
   useEffect(() => {
     horizontalRef.current = normalizeDmmTrendHorizontal(horizontal);

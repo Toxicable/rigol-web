@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { ScopeRunState } from "../../shared/scope-types.js";
+import { ScopeRunState, TimebaseMode } from "../../shared/scope-types.js";
 import { AcquisitionAction } from "../../shared/websocket-protocol.js";
 import { BrowserConnectionKind, useScopeStore } from "../scope-store.js";
 import type { ScopeWebSocketClient } from "../websocket-client.js";
@@ -85,6 +85,7 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
 
   const scope = connection.scope;
   const stopped = scope.runState === ScopeRunState.Stopped;
+  const singleDisabled = scope.horizontal.mode === TimebaseMode.Roll;
   const command = (action: AcquisitionAction) => {
     void client.acquisition(action).catch(surfaceError);
   };
@@ -109,7 +110,14 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
           >
             {stopped ? "Run" : "Stop"}
           </button>
-          <button type="button" onClick={() => command(AcquisitionAction.Single)}>Single</button>
+          <button
+            type="button"
+            disabled={singleDisabled}
+            title={singleDisabled ? "Single acquisition is unavailable in Roll mode" : undefined}
+            onClick={() => command(AcquisitionAction.Single)}
+          >
+            Single
+          </button>
           <button
             type="button"
             disabled={!stopped}

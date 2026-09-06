@@ -11,6 +11,7 @@ import {
   Channel,
   EdgeSlope,
   ScopeRunState,
+  TimebaseMode,
   TriggerType,
 } from "../../shared/scope-types.js";
 import type { NonEmptyArray } from "../../shared/websocket-protocol.js";
@@ -178,6 +179,9 @@ export class ScopeController {
 
     this.applyOptimisticControl(control);
     await this.writeControl(control, PRIORITY_NORMAL);
+    if (control.kind === ControlKind.HorizontalScale) {
+      await this.reconcileHorizontal(revision, PRIORITY_NORMAL);
+    }
   }
 
   public async updateInteraction(control: InteractiveControl): Promise<void> {
@@ -189,9 +193,12 @@ export class ScopeController {
 
   public async commitInteraction(control: InteractiveControl): Promise<void> {
     this.validateControl(control);
-    this.incrementMutationRevision();
+    const revision = this.incrementMutationRevision();
     this.applyOptimisticControl(control);
     await this.writeControl(control, PRIORITY_IMMEDIATE);
+    if (control.kind === ControlKind.HorizontalScale) {
+      await this.reconcileHorizontal(revision, PRIORITY_IMMEDIATE);
+    }
   }
 
   public async performAcquisitionAction(action: AcquisitionAction): Promise<void> {
@@ -204,9 +211,15 @@ export class ScopeController {
       case AcquisitionAction.Stop:
         await this.driver.stop();
         break;
-      case AcquisitionAction.Single:
+      case AcquisitionAction.Single: {
+        const horizontal = await this.driver.readHorizontalState(PRIORITY_IMMEDIATE);
+        this.applyReconciledUpdate(revision, (state) => ({ ...state, horizontal }));
+        if (horizontal.mode === TimebaseMode.Roll) {
+          throw new Error("Single acquisition is unavailable in Roll mode");
+        }
         await this.driver.single();
         break;
+      }
       default:
         throw new Error(`Unsupported acquisition action: ${String(action)}`);
     }
@@ -275,6 +288,15 @@ export class ScopeController {
 
     this.stateStore.update(updater);
     return true;
+  }
+
+  private async reconcileHorizontal(
+    revision: number,
+    priority: ScopeDriverPriority,
+  ): Promise<HorizontalState> {
+    const horizontal = await this.driver.readHorizontalState(priority);
+    this.applyReconciledUpdate(revision, (state) => ({ ...state, horizontal }));
+    return horizontal;
   }
 
   private validateControl(control: ControlChange): void {

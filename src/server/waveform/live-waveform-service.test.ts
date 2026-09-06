@@ -73,7 +73,7 @@ function frameSequence(frame: Uint8Array): number {
 }
 
 describe("LiveWaveformService", () => {
-  it("reads enabled channels as separate fixed 1000-point driver calls", async () => {
+  it("reads enabled channels as separate fixed 999-point driver calls", async () => {
     const driver = new FakeDriver();
     const frames: Uint8Array[] = [];
     const service = new LiveWaveformService({
@@ -89,11 +89,11 @@ describe("LiveWaveformService", () => {
     service.start();
     await service.waitForIdle();
     expect(driver.calls).toEqual([Channel.Ch1, Channel.Ch3]);
-    expect(driver.pointCounts).toEqual([1_000, 1_000]);
+    expect(driver.pointCounts).toEqual([999, 999]);
     expect(frames).toHaveLength(2);
   });
 
-  it("stays idle while stopped or when no channels are enabled", async () => {
+  it("stays idle while stopped, outside Main mode, or when no channels are enabled", async () => {
     const driver = new FakeDriver();
     const stopped = new LiveWaveformService({
       driver,
@@ -104,6 +104,18 @@ describe("LiveWaveformService", () => {
     await stopped.waitForIdle();
     expect(driver.calls).toEqual([]);
     stopped.stop();
+
+    const rollState = createState();
+    rollState.horizontal = { ...rollState.horizontal, mode: TimebaseMode.Roll };
+    const roll = new LiveWaveformService({
+      driver,
+      getScopeState: () => rollState,
+      publishFrame: () => undefined,
+    });
+    roll.start();
+    await roll.waitForIdle();
+    expect(driver.calls).toEqual([]);
+    roll.stop();
 
     const noChannels = createState();
     noChannels.channels = noChannels.channels.map((channel) => ({ ...channel, enabled: false })) as ScopeState["channels"];
