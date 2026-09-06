@@ -196,25 +196,22 @@ export class ScopeController {
 
   public async performAcquisitionAction(action: AcquisitionAction): Promise<void> {
     const revision = this.incrementMutationRevision();
-    let runState: ScopeRunState;
 
     switch (action) {
       case AcquisitionAction.Run:
         await this.driver.run();
-        runState = ScopeRunState.Running;
         break;
       case AcquisitionAction.Stop:
         await this.driver.stop();
-        runState = ScopeRunState.Stopped;
         break;
       case AcquisitionAction.Single:
         await this.driver.single();
-        runState = ScopeRunState.Waiting;
         break;
       default:
         throw new Error(`Unsupported acquisition action: ${String(action)}`);
     }
 
+    const runState = await this.driver.readRunState(PRIORITY_IMMEDIATE);
     this.applyReconciledUpdate(revision, (state) => ({ ...state, runState }));
   }
 

@@ -372,4 +372,13 @@ describe("ScopeController", () => {
     expect(controller.getMutationRevision()).toBe(initialRevision + 2);
     expect(store.getState().runState).toBe(ScopeRunState.Stopped);
   });
+
+  it("reads back the instrument state after Single", async () => {
+    const { controller, driver, store } = createController();
+
+    await controller.performAcquisitionAction(AcquisitionAction.Single);
+
+    expect(driver.calls).toEqual(["single", "readRunState:0"]);
+    expect(store.getState().runState).toBe(ScopeRunState.Waiting);
+  });
 });

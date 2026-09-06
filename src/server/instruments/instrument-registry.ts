@@ -1,4 +1,5 @@
 import { SupportedInstrument } from "../../shared/instrument-types.js";
+import { isRigolScpiLoggingEnabled } from "../logging.js";
 
 export interface InstrumentEndpoint {
   host: string;
@@ -41,11 +42,22 @@ function validateEndpoint(name: string, endpoint: InstrumentEndpoint): void {
 }
 
 function debugLifecycle(
-  _event: string,
-  _instrument: SupportedInstrument,
-  _entry: InstrumentEntry,
+  event: string,
+  instrument: SupportedInstrument,
+  entry: InstrumentEntry,
 ): void {
-  // Instrument lifecycle is intentionally quiet in normal operation.
+  if (!isRigolScpiLoggingEnabled()) {
+    return;
+  }
+  console.debug(`[SCPI] instrument ${event}`, {
+    instrument,
+    subscribers: entry.subscribers.size,
+    running: entry.running,
+    suspended: entry.suspended,
+    revision: entry.revision,
+    host: entry.endpoint.host,
+    port: entry.endpoint.port,
+  });
 }
 
 export class InstrumentRegistry {

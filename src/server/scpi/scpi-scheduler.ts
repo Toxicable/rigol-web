@@ -1,4 +1,5 @@
 import type { ScpiTransport } from "./scpi-transport.js";
+import { isRigolScpiLoggingEnabled } from "../logging.js";
 
 export enum ScpiPriority {
   Immediate = 0,
@@ -245,7 +246,9 @@ export class ScpiScheduler {
           : String(error),
       };
       if (this.stopped) {
-        // Expected during shutdown; do not emit routine SCPI debug output.
+        if (isRigolScpiLoggingEnabled()) {
+          console.debug("[SCPI] operation cancelled during scheduler stop", detail);
+        }
       } else {
         console.error("SCPI operation failed", detail);
       }

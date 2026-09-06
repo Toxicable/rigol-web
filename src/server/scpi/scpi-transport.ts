@@ -1,4 +1,5 @@
 import { Socket } from "node:net";
+import { isRigolScpiLoggingEnabled } from "../logging.js";
 
 export enum ScpiResponseKind {
   Text = 1,
@@ -36,9 +37,11 @@ interface ParsedBinaryBlock {
   end: number;
 }
 
-function scpiDebug(_event: string, _detail: Record<string, unknown>): void {
-  // SCPI traffic is intentionally quiet in normal operation. Failures are
-  // still reported by the scheduler/runtime error paths.
+function scpiDebug(event: string, detail: Record<string, unknown>): void {
+  if (!isRigolScpiLoggingEnabled()) {
+    return;
+  }
+  console.debug(`[SCPI] ${event} ${JSON.stringify(detail)}`);
 }
 
 export class ScpiTransport {

@@ -19,6 +19,7 @@ import {
   TriggerType,
   type TriggerState,
 } from "../../shared/scope-types.js";
+import { isRigolScpiLoggingEnabled } from "../logging.js";
 import {
   ScpiProgramMessageKind,
   classifyScpiProgramMessage,
@@ -361,6 +362,7 @@ export class Dho804Driver {
     specs: MeasurementSpec[],
     priority: ScpiPriority,
   ): Promise<MeasurementValue[]> {
+    const startedAt = performance.now();
     const values: MeasurementValue[] = [];
     for (const spec of specs) {
       const item = measurementItem(spec.kind);
@@ -392,6 +394,13 @@ export class Dho804Driver {
         ...spec,
         statistics: { current, minimum, maximum, average, deviation, count },
       });
+    }
+    if (isRigolScpiLoggingEnabled()) {
+      console.info(`[SCPI] measurements:complete ${JSON.stringify({
+        measurements: specs.length,
+        queries: specs.length * 6,
+        elapsedMs: performance.now() - startedAt,
+      })}`);
     }
     return values;
   }
