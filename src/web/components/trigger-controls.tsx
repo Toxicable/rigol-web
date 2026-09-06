@@ -11,6 +11,7 @@ import {
 import { ControlKind, type ControlChange } from "../../shared/websocket-protocol.js";
 import { useScopeStore } from "../scope-store.js";
 import type { ScopeWebSocketClient } from "../websocket-client.js";
+import { EditableNumberInput } from "./editable-number.js";
 
 const TYPE_LABELS: Record<TriggerType, string> = {
   [TriggerType.Edge]: "Edge",
@@ -123,17 +124,10 @@ export function TriggerControls({ scope, client }: TriggerControlsProps) {
         </label>
         <label>
           Level
-          <input
-            type="number"
-            step="any"
+          <EditableNumberInput
             value={scope.trigger.level}
-            onChange={(event: ChangeEvent<HTMLInputElement>) => {
-              const value = event.target.valueAsNumber;
-              if (Number.isFinite(value)) {
-                setControl({ kind: ControlKind.TriggerLevel, value });
-              }
-            }
-            }
+            ariaLabel="Trigger level"
+            onCommit={(value) => setControl({ kind: ControlKind.TriggerLevel, value })}
           />
         </label>
       </div>
