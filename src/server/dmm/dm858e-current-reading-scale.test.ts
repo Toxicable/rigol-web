@@ -81,7 +81,7 @@ describe("Dm858eDriver current DATA:LAST? scaling", () => {
     )).resolves.toEqual({
       kind: DmmReadingKind.Value,
       function: DmmMeasurementFunction.DcCurrent,
-      value: 50e-6,
+      value: 50 * 1e-6,
       resolution: 1e-9,
       unit: DmmUnit.Amps,
     });
