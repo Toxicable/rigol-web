@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DmmMeasurementFunction,
+  DmmRangeMode,
   DmmReadingKind,
   DmmReadingUnavailableReason,
   DmmUnit,
@@ -15,6 +16,7 @@ import {
 import {
   DMM_TREND_SAMPLE_INTERVAL_MS,
   appendDmmTrendSnapshot,
+  dmmTrendSelectedYRange,
   dmmTrendVisibleRange,
   dmmTrendYRange,
   renderableDmmTrendData,
@@ -96,6 +98,40 @@ describe("DM858E snapshot trend", () => {
       min: 60,
       max: 70,
     });
+  });
+
+  it("uses fixed bipolar ranges for DC voltage and current", () => {
+    expect(dmmTrendSelectedYRange(
+      DmmMeasurementFunction.DcCurrent,
+      { mode: DmmRangeMode.Fixed, value: 0.01 },
+    )).toEqual({ min: -0.01, max: 0.01 });
+    expect(dmmTrendSelectedYRange(
+      DmmMeasurementFunction.DcVoltage,
+      { mode: DmmRangeMode.Fixed, value: 10 },
+    )).toEqual({ min: -10, max: 10 });
+  });
+
+  it("uses zero-to-full-scale bounds for nonnegative fixed ranges", () => {
+    expect(dmmTrendSelectedYRange(
+      DmmMeasurementFunction.AcCurrent,
+      { mode: DmmRangeMode.Fixed, value: 0.1 },
+    )).toEqual({ min: 0, max: 0.1 });
+    expect(dmmTrendSelectedYRange(
+      DmmMeasurementFunction.Resistance2Wire,
+      { mode: DmmRangeMode.Fixed, value: 1_000 },
+    )).toEqual({ min: 0, max: 1_000 });
+  });
+
+  it("keeps autoscale for auto range and non-output range controls", () => {
+    expect(dmmTrendSelectedYRange(
+      DmmMeasurementFunction.DcCurrent,
+      { mode: DmmRangeMode.Auto },
+    )).toBeNull();
+    expect(dmmTrendSelectedYRange(
+      DmmMeasurementFunction.Frequency,
+      { mode: DmmRangeMode.Fixed, value: 10 },
+    )).toBeNull();
+    expect(dmmTrendSelectedYRange(DmmMeasurementFunction.Temperature, null)).toBeNull();
   });
 
   it("provides valid two-column render data before two real samples exist", () => {
