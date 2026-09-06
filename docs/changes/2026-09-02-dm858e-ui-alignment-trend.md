@@ -34,7 +34,9 @@ At 30 s/div the full five-minute retained history fits in the ten-division viewp
 
 uPlot requires aligned X/Y arrays with matching lengths and at least two X values. The DMM trend therefore supplies renderer-only null padding until two real browser trend samples exist; the retained trend history itself is not padded with fabricated values.
 
-The trend has its own deterministic 100 ms browser sampling clock. Each tick samples the latest DMM display state already held in the browser, appends it using browser monotonic time, then updates uPlot with `setData(..., false)` followed by an explicit X-scale update. The X-scale update is the redraw/invalidation boundary. Auto-ranged functions recalculate Y from the visible data there; fixed DMM measurement ranges instead encode their bounds directly in uPlot's static `range: [min, max]` scale option so later streaming X updates cannot replace them. A one-shot `setScale("y", ...)` is not sufficient for a persistent fixed range because subsequent scale invalidation can recalculate Y.
+The trend has its own deterministic 100 ms browser sampling clock. Each tick samples the latest DMM display state already held in the browser, appends it using browser monotonic time, then updates uPlot with `setData(..., false)` followed by explicit scale updates.
+
+Auto-ranged functions keep their data-driven Y range. Fixed DMM measurement ranges use both uPlot's static `range: [min, max]` option and an explicit `setScale("y", ...)` after every streaming X viewport update. Physical UI testing showed that the static option alone still allowed the live trend to collapse around visible samples after `setData(..., false)` plus `setScale("x", ...)`. Reasserting Y after X matches the live-update workaround described by upstream uPlot issue #274: https://github.com/leeoniya/uPlot/issues/274.
 
 This is intentionally independent of WebSocket message frequency. The DMM runtime may suppress identical display snapshots because they are redundant for the primary reading, but a stable value still needs to form a flat line that advances through time in the trend. Sampling the latest browser state locally preserves that behavior without adding SCPI requests or WebSocket traffic.
 
@@ -47,11 +49,12 @@ For fixed ranges, the browser uses the selected instrument range rather than the
 - Auto range remains data-driven because the browser does not receive the instantaneous effective autorange;
 - frequency/period range controls are input-voltage conditioning ranges and are not reused as Hz/s graph bounds.
 
-The earlier implementations exposed three separate problems:
+The earlier implementations exposed four separate problems:
 
 - zero-length aligned arrays could produce a startup `null is not iterable` exception;
 - driving trend time directly from deduplicated DMM snapshot messages meant a stable reading could leave the graph with only one invisible sample and no visible time progression;
-- fixed-range mode initially set `auto: false` and called `setScale("y", ...)` once, which looked correct until streaming X updates caused uPlot to recalculate Y from visible samples.
+- fixed-range mode initially set `auto: false` and called `setScale("y", ...)` once, which was later invalidated by streaming updates;
+- replacing that with only a static uPlot `range` option still did not survive the real browser streaming sequence, so fixed Y bounds are now explicitly reasserted after every X viewport update.
 
 ## Trend semantics
 
@@ -76,4 +79,4 @@ Incremental cost: **$0**. The browser reuses the `uPlot` package already require
 
 ## Validation
 
-`src/web/components/dmm/dmm-trend.test.ts` covers the 100 ms sample cadence constant, repeated stable values, numeric points, unavailable-reading gaps, rolling-history trimming, immediate latest-edge scrolling, time/div and Position viewport math, fixed-range mapping, static uPlot fixed-range scale options, pre-two-sample render data, sparse-point visibility, finite empty Y ranges, horizontal-limit clamping, and invalid elapsed timestamps.
+`src/web/components/dmm/dmm-trend.test.ts` covers the 100 ms sample cadence constant, repeated stable values, numeric points, unavailable-reading gaps, rolling-history trimming, immediate latest-edge scrolling, time/div and Position viewport math, fixed-range mapping, static uPlot fixed-range scale options, fixed-Y reassertion after X updates, pre-two-sample render data, sparse-point visibility, finite empty Y ranges, horizontal-limit clamping, and invalid elapsed timestamps.
