@@ -19,6 +19,7 @@ import {
   dmmTrendSelectedYRange,
   dmmTrendVisibleRange,
   dmmTrendYRange,
+  dmmTrendYScaleOptions,
   renderableDmmTrendData,
   showDmmTrendPoints,
   type TrendData,
@@ -132,6 +133,17 @@ describe("DM858E snapshot trend", () => {
       { mode: DmmRangeMode.Fixed, value: 10 },
     )).toBeNull();
     expect(dmmTrendSelectedYRange(DmmMeasurementFunction.Temperature, null)).toBeNull();
+  });
+
+  it("encodes fixed bounds as a static uPlot Y range", () => {
+    expect(dmmTrendYScaleOptions({ min: -1, max: 1 })).toEqual({
+      auto: false,
+      range: [-1, 1],
+    });
+
+    const automatic = dmmTrendYScaleOptions(null);
+    expect(automatic.auto).toBe(true);
+    expect(automatic.range).toBe(dmmTrendYRange);
   });
 
   it("provides valid two-column render data before two real samples exist", () => {
