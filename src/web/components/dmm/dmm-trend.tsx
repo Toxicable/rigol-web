@@ -157,6 +157,17 @@ export function dmmTrendYScaleOptions(selectedYRange: TrendVisibleRange | null) 
   };
 }
 
+export function applyDmmTrendScales(
+  plot: Pick<uPlot, "setScale">,
+  visibleRange: TrendVisibleRange,
+  selectedYRange: TrendVisibleRange | null,
+): void {
+  plot.setScale("x", { min: visibleRange.min, max: visibleRange.max });
+  if (selectedYRange !== null) {
+    plot.setScale("y", { min: selectedYRange.min, max: selectedYRange.max });
+  }
+}
+
 export function showDmmTrendPoints(
   _plot: uPlot,
   _seriesIndex: number,
@@ -250,7 +261,7 @@ export function DmmTrend({
       renderableDmmTrendData(dataRef.current, initialRange) as unknown as uPlot.AlignedData,
       host,
     );
-    plot.setScale("x", initialRange);
+    applyDmmTrendScales(plot, initialRange, selectedYRange);
     plotRef.current = plot;
 
     const resizeObserver = new ResizeObserver(() => {
@@ -279,8 +290,8 @@ export function DmmTrend({
       latestElapsedRef.current,
       horizontalRef.current,
     );
-    plot.setScale("x", visibleRange);
-  }, [horizontal]);
+    applyDmmTrendScales(plot, visibleRange, selectedYRange);
+  }, [horizontal, selectedYRangeSignature]);
 
   useEffect(() => {
     snapshotRef.current = snapshot;
@@ -310,13 +321,13 @@ export function DmmTrend({
         renderableDmmTrendData(dataRef.current, visibleRange) as unknown as uPlot.AlignedData,
         false,
       );
-      plot.setScale("x", visibleRange);
+      applyDmmTrendScales(plot, visibleRange, selectedYRange);
     };
 
     sample();
     const interval = window.setInterval(sample, DMM_TREND_SAMPLE_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [measurementFunction]);
+  }, [measurementFunction, selectedYRangeSignature]);
 
   function formatTrendAxisValue(value: number): string {
     const formatted = formatDmmValue(value, unit);
