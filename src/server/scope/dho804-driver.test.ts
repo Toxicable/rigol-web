@@ -431,6 +431,7 @@ describe("Dho804Driver", () => {
       "0,0,1,1,1e-5,-4.8e-3,0,0.5,0,10",
       "0,0,1,1,1e-5,-4.6e-3,0,0.5,0,10",
     );
+    respond(transport, ":TIMebase:MAIN:OFFSet?", "4e-4");
     respond(transport, ":CHANnel1:UNITs?", "VOLT");
 
     const first = await readOneLive(driver, Channel.Ch1, 1);
@@ -460,6 +461,7 @@ describe("Dho804Driver", () => {
       "0,0,1,1,1e-5,-4.8e-3,0,0.5,0,10",
       "0,0,1,1,2e-5,-9.8e-3,0,0.5,0,10",
     );
+    respond(transport, ":TIMebase:MAIN:SCALe?", "2e-3");
     respond(transport, ":CHANnel1:UNITs?", "VOLT");
 
     const first = await readOneLive(driver, Channel.Ch1, 1);
@@ -492,6 +494,7 @@ describe("Dho804Driver", () => {
       "0,0,1,1,1e-5,-5e-3,0,0.5,0,10",
       "0,0,1,1,2e-5,-1e-2,0,0.5,0,10",
     );
+    respond(transport, ":TIMebase:MAIN:SCALe?", "2e-3");
     respond(transport, ":CHANnel1:UNITs?", "VOLT");
 
     await readOneLive(driver, Channel.Ch1, 1);

@@ -158,8 +158,8 @@ export class ScopeRuntime {
     };
   }
 
-  public pauseLiveWaveform(): void {
-    this.session?.live.pause();
+  public async pauseLiveWaveform(): Promise<void> {
+    await this.session?.live.pause();
   }
 
   public resumeLiveWaveform(): void {

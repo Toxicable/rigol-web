@@ -5,11 +5,11 @@
 The browser is not the live-waveform bottleneck. Real DHO804 captures show substantial scope-side SCPI latency:
 
 - ordinary text queries commonly take about 22-30 ms;
-- warm 1000-byte `:WAVeform:DATA?` calls commonly take about 29-41 ms;
+- warm 999-byte `:WAVeform:DATA?` calls commonly take about 29-41 ms;
 - `:WAVeform:PREamble?` has been observed around 23-27 ms;
 - reducing NORMAL/BYTE data from 999 to 500 points did not materially improve `DATA?` latency and cropped the displayed time span instead of decimating it.
 
-Live acquisition therefore uses a fixed 1000-point NORMAL/BYTE path. There is no live point-count option.
+Live acquisition therefore uses a fixed 999-point NORMAL/BYTE path. There is no live point-count option.
 
 All software changes in this workstream cost $0.
 
@@ -88,7 +88,7 @@ NORMAL/BYTE preambles remain cached per channel. Channel units are seeded by the
 
 A real-scope run proved that horizontal writes must not be interleaved with live waveform transfer. During repeated `:TIMebase:MAIN:OFFSet` writes, one `DATA?` returned zero bytes and a later 999-byte block stopped after 985 total bytes, eventually timing out.
 
-Interactive drags therefore pause live waveform acquisition. Commit resumes acquisition after a 200 ms settle delay. Horizontal scale/position writes invalidate cached preambles so the first resumed read obtains fresh X metadata; the drag itself does not issue repeated live `DATA?`/`PREamble?` traffic.
+Interactive drags therefore pause live waveform acquisition. Commit resumes acquisition after the horizontal value has been read back successfully. Horizontal scale/position writes invalidate cached preambles so the first resumed read obtains fresh X metadata; the drag itself does not issue repeated live `DATA?`/`PREamble?` traffic.
 
 A later run exposed a second post-pan failure mode in the single-channel live path. After a horizontal drag, the first resumed CH1 `SOURCE;DATA?` took 1744.384 ms and returned a zero-length block. The immediately following CH1 read took 29.492 ms and returned all 999 bytes, after which `PREamble?` completed in 23.401 ms. The driver had been attempting binary data before refreshing the invalidated preamble.
 

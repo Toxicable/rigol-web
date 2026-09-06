@@ -88,7 +88,7 @@ export type ServerDmmConnection =
 export interface WaveformRequestHandlers {
   requestDeepCapture(requestId: number): Promise<DeepCaptureReadyMessage>;
   requestViewport(request: WaveformViewportRequestMessage): Promise<Uint8Array>;
-  pauseLiveWaveform?: () => void;
+  pauseLiveWaveform?: () => void | Promise<void>;
   resumeLiveWaveform?: () => void;
 }
 
@@ -824,7 +824,7 @@ export class WebSocketGateway {
             message.control.kind === ControlKind.HorizontalScale ||
             message.control.kind === ControlKind.HorizontalPosition;
           if (pausesLive) {
-            this.waveformHandlers.pauseLiveWaveform?.();
+            await this.waveformHandlers.pauseLiveWaveform?.();
           }
           console.info("Scope control requested", {
             kind: message.control.kind,
@@ -846,7 +846,7 @@ export class WebSocketGateway {
         case MessageType.InteractionUpdate: {
           this.requireSubscribed(client, SupportedInstrument.Dho804);
           const { controller } = this.connectedScopeController();
-          this.waveformHandlers.pauseLiveWaveform?.();
+          await this.waveformHandlers.pauseLiveWaveform?.();
           try {
             await controller.updateInteraction(message.control);
           } catch (error) {

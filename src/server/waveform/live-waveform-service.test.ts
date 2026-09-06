@@ -199,6 +199,38 @@ describe("LiveWaveformService", () => {
     expect(frames).toHaveLength(1);
   });
 
+  it("does not report an in-flight read failure after live acquisition is paused", async () => {
+    let rejectRead: ((error: Error) => void) | null = null;
+    const failure = new Error("transient waveform failure");
+    const driver: LiveWaveformDriver = {
+      readLiveWaveform: async () => new Promise<Dho804Waveform>((_resolve, reject) => {
+        rejectRead = reject;
+      }),
+    };
+    const errors: unknown[] = [];
+    const service = new LiveWaveformService({
+      driver,
+      getScopeState: () => {
+        const state = createState();
+        state.channels = state.channels.map((channel) => ({
+          ...channel,
+          enabled: channel.channel === Channel.Ch1,
+        })) as ScopeState["channels"];
+        return state;
+      },
+      publishFrame: () => undefined,
+      reportError: (error) => errors.push(error),
+    });
+
+    service.start();
+    await Promise.resolve();
+    service.pause();
+    rejectRead!(failure);
+    await service.waitForIdle();
+
+    expect(errors).toEqual([]);
+  });
+
   it("does not publish a read that completes after the service is stopped", async () => {
     let resolveRead: ((value: Dho804Waveform) => void) | null = null;
     const driver: LiveWaveformDriver = {

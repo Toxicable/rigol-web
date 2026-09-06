@@ -19,12 +19,10 @@ export interface LiveWaveformServiceOptions {
   reportError?: (error: unknown) => void;
 }
 
-// Real DHO804 NORMAL/BYTE reads return 999 samples for the maximum visible
-// waveform request. Smaller requested counts crop the visible span rather than
-// decimating the whole screen, so live acquisition uses that native maximum.
+// The DHO804 returns 999 bytes for the NORMAL/BYTE live path.
+// Lower NORMAL point counts crop the visible waveform span rather than
+// decimating the whole screen, so live acquisition uses the maximum count.
 const LIVE_POINT_COUNT = 999;
-const RESUME_SETTLE_DELAY_MS = 200;
-
 function nextUint32(value: number): number {
   return (value + 1) >>> 0;
 }
@@ -43,7 +41,6 @@ export class LiveWaveformService {
   private paused = false;
   private freshWanted = false;
   private loopPromise: Promise<void> | null = null;
-  private resumeTimer: ReturnType<typeof setTimeout> | null = null;
 
   public constructor(options: LiveWaveformServiceOptions) {
     this.driver = options.driver;
@@ -60,26 +57,17 @@ export class LiveWaveformService {
   public stop(): void {
     this.liveWanted = false;
     this.freshWanted = false;
-    if (this.resumeTimer !== null) {
-      clearTimeout(this.resumeTimer);
-      this.resumeTimer = null;
-    }
   }
 
-  public pause(): void {
+  public async pause(): Promise<void> {
     this.paused = true;
     this.freshWanted = false;
+    await this.waitForIdle();
   }
 
   public resume(): void {
     this.paused = false;
-    if (this.resumeTimer !== null) {
-      clearTimeout(this.resumeTimer);
-    }
-    this.resumeTimer = setTimeout(() => {
-      this.resumeTimer = null;
-      this.requestFresh();
-    }, RESUME_SETTLE_DELAY_MS);
+    this.requestFresh();
   }
 
   public requestFresh(): void {
@@ -115,8 +103,14 @@ export class LiveWaveformService {
       try {
         shouldContinue = await this.acquireCycle();
       } catch (error) {
-        this.reportError(error);
-        shouldContinue = true;
+        // Horizontal writes can make the scope finish an already-running
+        // waveform request with a transient empty block. The write path has
+        // paused live acquisition, so do not report that in-flight transition
+        // as an application error or immediately retry it.
+        if (!this.paused) {
+          this.reportError(error);
+        }
+        shouldContinue = !this.paused;
       }
 
       if (!shouldContinue) {

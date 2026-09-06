@@ -283,6 +283,7 @@ export class Dho804Driver {
       ScpiOperationKind.Write,
       () => this.liveWaveformPreambles.clear(),
     );
+    await this.readHorizontalScale(priority);
   }
 
   public async readHorizontalPosition(priority: ScpiPriority): Promise<number> {
@@ -301,6 +302,7 @@ export class Dho804Driver {
       ScpiOperationKind.Write,
       () => this.liveWaveformPreambles.clear(),
     );
+    await this.readHorizontalPosition(priority);
   }
 
   public async readTriggerType(priority: ScpiPriority): Promise<TriggerType> {

@@ -44,6 +44,10 @@ function scpiDebug(event: string, detail: Record<string, unknown>): void {
   console.debug(`[SCPI] ${event} ${JSON.stringify(detail)}`);
 }
 
+function scpiError(event: string, detail: Record<string, unknown>): void {
+  console.error(`[SCPI] ${event} ${JSON.stringify(detail)}`);
+}
+
 export class ScpiTransport {
   private socket: Socket | null = null;
   private pending: PendingResponse | null = null;
@@ -136,7 +140,7 @@ export class ScpiTransport {
         this.socket = null;
       }
       socket.destroy();
-      scpiDebug("connect:failed", {
+      scpiError("connect:failed", {
         host,
         port,
         error: error instanceof Error ? error.message : String(error),
@@ -280,7 +284,7 @@ export class ScpiTransport {
       const bytesRead = currentSocket?.bytesRead ?? bytesReadAtStart;
       const receivedBytes = Math.max(0, bytesRead - bytesReadAtStart);
       const bufferedBytes = this.receiveBuffer.length;
-      scpiDebug("query:timeout", {
+      scpiError("query:timeout", {
         command,
         elapsedMs: performance.now() - startedAt,
         receivedBytes,
@@ -554,7 +558,7 @@ export class ScpiTransport {
   private invalidate(error: Error): void {
     const socket = this.socket;
     const pending = this.pending;
-    scpiDebug("invalidate", {
+    scpiError("invalidate", {
       error: error.message,
       pendingCommand: pending?.command ?? null,
       bufferedBytes: this.receiveBuffer.length,
