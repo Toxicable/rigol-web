@@ -10,7 +10,7 @@ The DHO804 waveform plot renders the 10 × 8 graticule through uPlot axes rather
 
 Vertical marker geometry uses uPlot's actual plot rectangle rather than the complete widget height. A channel ground/reference marker therefore lines up with the waveform's eight-division plotting area instead of including the time axis or other chart chrome in its coordinate system.
 
-Channel markers remain fully visible when their true zero/reference point is outside the current Y range. The visible marker is inset by half its height at the top or bottom edge, while drag math retains the true edge-rebased plot coordinate. A small up/down point on the marker indicates whether the reference is above or below the visible plot.
+Channel markers remain fully visible when their true zero/reference point is outside the current Y range. The visible marker is inset by half its height at the top or bottom edge, while drag math retains the true edge-rebased plot coordinate. A small up/down point on the marker indicates whether the channel reference and offset trace frame lie above or below the visible plot. This indicator follows channel scale/offset state; it does not infer direction from transient sample extrema.
 
 The Edge trigger marker uses the same plot-relative vertical geometry, and its drag guide is limited to the actual plot width.
 
