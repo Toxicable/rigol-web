@@ -1,44 +1,20 @@
-# DM858E SCPI backend notes
+# DM858E SCPI Notes
 
-This document records the specification-backed choices used by the first Rigol DM858E backend implementation.
+## Scope
 
-Primary specifications:
+This file records DM858E-specific command behaviour and ownership rules used by Rigol Web. It is not a replacement for the Rigol programming guide; it documents the subset of behaviour that matters to the implementation.
 
-- Rigol, **DM858 Series Programming Guide**: https://download.rigol.com/en/Manual/Digital%20Multimeters/DM858/DM858_ProgrammingGuide_EN.pdf
-- Rigol, **DM858 Series User Guide**: https://download.rigol.com/en/Manual/Digital%20Multimeters/DM858/DM858_UserGuide_EN.pdf
+## Function state
 
-The DM858 and DM858E share the command set, but they do not share every range/capability. The backend validates the DM858E subset rather than accepting the larger DM858 limits.
-
-## Identity
-
-The backend starts a session with `*IDN?` and requires the returned model field to be `DM858E`.
-
-The Programming Guide documents the response as:
+The authoritative function is read with:
 
 ```text
-RIGOL TECHNOLOGIES,<model>,<serial number>,<software version>
+SENSe:FUNCtion?
 ```
 
-## Authoritative state
+Known function tokens used by the backend are:
 
-`CONFigure?` is the starting point for each state snapshot. It reports the current measurement function and, where applicable, range and resolution.
-
-A state validation pass is kept inside one `ScpiScheduler` operation so an Immediate control write cannot be inserted halfway through the snapshot and produce a mixed old/new state.
-
-For range-capable functions, the driver also reads the corresponding `RANGe:AUTO?` and `RANGe?` values so the shared state distinguishes Auto from a fixed range.
-
-Non-applicability is explicit in the shared contract:
-
-- `range` is `null` when the selected function has no range control;
-- `acquisitionRate` is `null` when the selected function does not expose the shared Slow/Medium/Fast control.
-
-The backend does not send placeholder Auto ranges or carry an old rate through a function where those values have no meaning.
-
-For temperature, the driver reads `UNIT:TEMPerature?`. The Programming Guide defines the returned unit as `C`, `F`, or `K`. Browser-facing temperature values would be normalized to Celsius, but a numeric snapshot is published only when the backend also has an authoritative numeric measurement resolution for the same observation. A parameter such as `TEMP FRTD,385` is sensor configuration, not permission to treat `385` as a measurement resolution.
-
-## Measurement function mapping
-
-| Shared function | DM858E function token |
+| Function | Token |
 | --- | --- |
 | DC voltage | `VOLT` / `VOLT:DC` |
 | AC voltage | `VOLT:AC` |
@@ -53,63 +29,65 @@ For temperature, the driver reads `UNIT:TEMPerature?`. The Programming Guide def
 | Capacitance | `CAP` |
 | Temperature | `TEMP` |
 
-Writes use `SENSe:FUNCtion` and the Programming Guide's long-form function names.
+Function writes use `SENSe:FUNCtion "..."` and are performed as immediate operations.
 
-## DM858E range set
+## Range ownership
 
-The backend validates these fixed ranges before sending a command:
+Range is read from the function-specific `SENSe:*:RANGe?` query together with the corresponding `:AUTO?` state.
+
+The authoritative fixed ranges exposed by the UI are defined in `src/shared/dm858e-capabilities.ts`.
+
+The current supported range groups are:
 
 | Function | Fixed ranges |
 | --- | --- |
-| DC voltage | 0.1 V, 1 V, 10 V, 100 V, 1000 V |
-| AC voltage | 0.1 V, 1 V, 10 V, 100 V, 750 V |
+| DC voltage | 100 mV, 1 V, 10 V, 100 V, 1000 V |
+| AC voltage | 100 mV, 1 V, 10 V, 100 V, 750 V |
 | DC current | 100 µA, 1 mA, 10 mA, 100 mA, 1 A, 3 A |
 | AC current | 100 µA, 1 mA, 10 mA, 100 mA, 1 A, 3 A |
-| 2-wire resistance | 100 Ω, 1 kΩ, 10 kΩ, 100 kΩ, 1 MΩ, 10 MΩ, 50 MΩ |
-| 4-wire resistance | 100 Ω, 1 kΩ, 10 kΩ, 100 kΩ, 1 MΩ, 10 MΩ, 50 MΩ |
-| Frequency input voltage | 0.1 V, 1 V, 10 V, 100 V, 750 V |
-| Period input voltage | 0.1 V, 1 V, 10 V, 100 V, 750 V |
-| Capacitance | 1 nF, 10 nF, 100 nF, 1 µF, 10 µF, 100 µF, 1 mF |
+| 2-wire resistance | 100 Ω through 100 MΩ |
+| 4-wire resistance | 100 Ω through 100 kΩ |
+| Frequency input voltage | 100 mV, 1 V, 10 V, 100 V, 750 V |
+| Period input voltage | 100 mV, 1 V, 10 V, 100 V, 750 V |
+| Capacitance | 1 nF through 100 mF |
 
-Important DM858E limits from the guide:
+Frequency and period range are input-conditioning voltage ranges. They are not output Hz/s ranges and must not be reused as graph Y limits or output-resolution metadata.
 
-- the 10 A current range is DM858-only; DM858E stops at 3 A;
-- the 10 mF capacitance range is DM858-only; DM858E stops at 1 mF.
+## Acquisition rate
 
-Continuity, diode and temperature have no first-pass numeric `DmmRange`; their shared `range` state is `null` and range writes are rejected.
+DC voltage/current and resistance use their function-specific `NPLC` controls.
 
-Frequency and period expose a programmable **input-voltage** range. That range is not a Hz/s measurement range and must never be repurposed as a primary-reading resolution source.
+The supported rate mapping is:
 
-## Acquisition-rate mapping
+| UI rate | PLC |
+| --- | ---: |
+| Slow / 5.5 digit | 20 |
+| Medium / 4.5 digit | 5 |
+| Fast / 4.5 digit | 0.4 |
 
-Programming Guide Table 3.14 defines:
+AC voltage/current use the `CONFigure:* <range>,<resolution>` relationship because there is no NPLC command for those functions. The resolution ratio is:
 
-| Shared rate | Resolution | Integration time |
-| --- | --- | --- |
-| Slow | 10 ppm × range | 20 PLC |
-| Medium | 100 ppm × range | 5 PLC |
-| Fast | 1000 ppm × range | 0.4 PLC |
+| UI rate | Resolution/range |
+| --- | ---: |
+| Slow | `1e-5` |
+| Medium | `1e-4` |
+| Fast | `1e-3` |
 
-DC voltage, DC current, 2-wire resistance and 4-wire resistance expose direct `NPLC` commands, so the backend writes and reads the exact 20 / 5 / 0.4 PLC values.
+An AC rate write first re-reads the current physical range in the same immediate scheduler operation. It does not reuse a range captured by an earlier runtime state poll because doing so can overwrite a more recent front-panel or browser range change.
 
-AC voltage/current speed is represented through the `CONFigure` resolution relationship from Table 3.14. Because `CONFigure:* <range>,<resolution>` also writes range, an AC rate-only request must not reuse a range captured by an earlier runtime state read. Inside the same Immediate scheduler operation that will perform `CONFigure:*`, the driver samples physical `RANGe:AUTO?` mode plus effective `RANGe?` repeatedly and requires two adjacent observations to agree on both mode and effective range before constructing the command. Up to three observations are allowed so a single front-panel transition can settle; if no adjacent pair is stable, the rate write fails without sending `CONFigure:*`. The driver then re-checks the measurement function immediately before the command.
+## Latest-reading snapshots
 
-A concrete example is fixed 100 V AC Fast: Table 3.14 gives `100 V × 1e-3 = 0.1 V` configured resolution. A browser must not display a finer quantum simply because the JavaScript numeric value contains more digits.
+The latest display state is read with `DATA:LAST?` rather than by initiating a new measurement. Snapshot polling is therefore a latest-state observation, not a one-event-per-conversion sample stream.
 
-Continuity, diode, frequency, period, capacitance and temperature do not expose the shared three-rate control, so their `acquisitionRate` state is `null` and rate writes are rejected.
+The Programming Guide documents:
 
-## Latest-reading snapshot
-
-The browser display path uses `DATA:LAST?` as a **latest-reading snapshot**, not as a stream of uniquely identified samples.
-
-This boundary is deliberate. The Programming Guide defines:
-
-- `DATA:LAST?` as the last performed measurement data plus measurement function;
-- `DATA:POINts?` as the number of readings currently stored in reading memory;
-- `DATA:REMove?` / `R?` as consuming/removing stored readings;
+- `DATA:LAST?` as returning the last performed measurement data and measurement function;
+- the bare no-data sentinel `9.90000000E+37`;
 - DM858E reading memory as limited to 20,000 readings, after which new readings overwrite the oldest.
 
 Those commands do not provide a coherent sample identity when queried independently. In particular, a point-count change cannot safely be paired with a separately queried `DATA:LAST?`, and raw SCPI can change the reading-memory count without creating a measurement. The backend therefore does **not** use `DATA:POINts?` to infer freshness and does not attach a browser sequence number to `DATA:LAST?`.
+
+A physical DM858E capture on 2026-09-06 returned `2.71868584E-03 A` from `DATA:LAST?` while DC current was active. The numeric value is already expressed in SI amperes; the selected current range does not change the numeric unit of `DATA:LAST?`. Current snapshots therefore preserve the parsed value exactly, just like voltage and resistance, and must not apply range-dependent mA/µA rescaling. Engineering prefixes are a browser display concern only.
 
 `DmmPoller` does not own a retained snapshot or dedupe baseline. It forwards every non-null sampled observation to `DmmRuntime`. `DmmRuntime.currentSnapshot` is the single server-side latest-display owner and performs display dedupe plus subscriber replay. This one-owner rule is important because runtime-generated invalidation must immediately change the same baseline used for later dedupe.
 
@@ -188,54 +166,4 @@ The Questionable Data register has documented overload event bits, but the event
 The initial cadence remains:
 
 - latest-reading snapshot observation: 100 ms;
-- full state/front-panel validation: 500 ms.
-
-This is not a claim of 10 samples/s effective acquisition.
-
-## Function-bound controls
-
-Multiple browser tabs can share one DM858E runtime. Range and acquisition-rate values are function-dependent, so those requests carry the measurement function under which the UI created them.
-
-Every browser mutation is also bound to the active DMM session at the moment it is enqueued. The runtime mutation queue re-checks that exact session before the queued operation is allowed to execute. If the instrument disconnects, the route stops, or a reconnect creates a replacement session while a request is waiting behind another mutation, the stale queued request is rejected before any SCPI reaches the replacement session. This applies to normal controls and raw SCPI alike; queued work is never replayed across reconnect.
-
-Under the runtime mutation queue, a function-dependent request:
-
-1. captures the active DMM session before entering the queue;
-2. verifies that the captured session is still current when it reaches the front of the queue;
-3. reads authoritative current DMM state;
-4. rejects the request if its expected function no longer matches;
-5. verifies the control is applicable to that function;
-6. enters the driver write operation;
-7. re-reads `SENSe:FUNCtion?` inside that same scheduler operation before deriving the write;
-8. rejects instead of writing if the front panel changed function in the meantime;
-9. for AC rate changes, samples physical Auto/fixed mode and effective range until two adjacent observations agree, retrying within a three-observation bound;
-10. rejects the rate write without `CONFigure:*` if the range state does not stabilize;
-11. re-checks `SENSe:FUNCtion?` immediately before `CONFigure:*`;
-12. performs authoritative state readback after a successful write.
-
-This prevents a stale range value from being reinterpreted under another function, prevents a stale AC-rate `CONFigure:*` request from restoring an old AC function, prevents a rate-only change from overwriting a newer same-function front-panel range choice or a mixed Auto/fixed observation created while the front panel is changing, and prevents queued mutations from crossing a DMM reconnect/session boundary.
-
-Function-change requests themselves are not function-bound because selecting a new function is their explicit intent, but they are still session-bound at queue entry.
-
-## Raw SCPI
-
-Raw-SCPI mutations share the runtime mutation queue because they may alter DMM state. Each raw request captures the active session before entering that queue and is rejected if that session has been replaced before execution. After a raw command/query that executes successfully, the runtime performs authoritative state readback.
-
-Program-message validation and command/query classification are generic SCPI infrastructure in `src/server/scpi/scpi-program-message.ts` and are shared by the DHO804 and DM858E drivers. The classifier rejects empty/multiline messages and detects query markers outside SCPI quoted strings.
-
-## Integration verification still required
-
-Physical DM858E integration must verify at minimum:
-
-- LAN SCPI port/connection behavior;
-- exact real-instrument response spelling for every supported state query;
-- exact `DATA:LAST?` function suffixes beyond the guide's `VDC` example;
-- `CONFigure?` effective range/resolution behavior under fixed and Auto range for functions that report resolution;
-- capacitance `RANGe?` behavior under Auto while reading `DATA:LAST?`;
-- whether frequency/period expose any separate authoritative Hz/s resolution source suitable for enabling numeric browser display;
-- whether continuity, diode and temperature expose a separate authoritative numeric resolution source suitable for enabling numeric browser display;
-- a measurement-correlated overload/open-circuit representation for every supported function;
-- a coherent acquisition path if the frontend needs sample count/statistics/trends rather than only latest-value display;
-- sustained acquisition throughput for that future sample path;
-- front-panel changes while the browser is subscribed;
-- temperature/sensor combinations beyond the first shared function selector.
+- authoritative DMM state poll: 1 s.
