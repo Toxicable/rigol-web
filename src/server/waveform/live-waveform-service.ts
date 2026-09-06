@@ -1,4 +1,9 @@
-import { Channel, ScopeRunState, type ScopeState } from "../../shared/scope-types.js";
+import {
+  Channel,
+  ScopeRunState,
+  TimebaseMode,
+  type ScopeState,
+} from "../../shared/scope-types.js";
 import { WaveformKind } from "../../shared/websocket-protocol.js";
 import type { Dho804Waveform } from "../scope/dho804-driver.js";
 import { encodeWaveformFrame } from "./waveform-frame-encoder.js";
@@ -14,10 +19,10 @@ export interface LiveWaveformServiceOptions {
   reportError?: (error: unknown) => void;
 }
 
-// The DHO804 returns the full 1000-byte waveform for the NORMAL/BYTE live path.
-// Lower NORMAL point counts crop the visible waveform span rather than
-// decimating the whole screen, so live acquisition uses the maximum count.
-const LIVE_POINT_COUNT = 1_000;
+// Real DHO804 NORMAL/BYTE reads return 999 samples for the maximum visible
+// waveform request. Smaller requested counts crop the visible span rather than
+// decimating the whole screen, so live acquisition uses that native maximum.
+const LIVE_POINT_COUNT = 999;
 const RESUME_SETTLE_DELAY_MS = 200;
 
 function nextUint32(value: number): number {
@@ -126,7 +131,10 @@ export class LiveWaveformService {
 
   private async acquireCycle(): Promise<boolean> {
     const state = this.getScopeState();
-    if (state.runState === ScopeRunState.Stopped) {
+    if (
+      state.runState === ScopeRunState.Stopped ||
+      state.horizontal.mode !== TimebaseMode.Main
+    ) {
       return false;
     }
 
