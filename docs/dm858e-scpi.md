@@ -100,7 +100,7 @@ Continuity, diode, frequency, period, capacitance and temperature do not expose 
 
 ## Latest-reading snapshot
 
-The browser display path uses `DATA:LAST?` as a **latest-reading snapshot**, not as a stream of uniquely identified samples.
+The browser display path uses a direct `MEASure:<function>?` query for each supported function. It is a latest-reading snapshot, not a stream of uniquely identified samples.
 
 This boundary is deliberate. The Programming Guide defines:
 
@@ -111,7 +111,7 @@ This boundary is deliberate. The Programming Guide defines:
 
 Those commands do not provide a coherent sample identity when queried independently. In particular, a point-count change cannot safely be paired with a separately queried `DATA:LAST?`, and raw SCPI can change the reading-memory count without creating a measurement. The backend therefore does **not** use `DATA:POINts?` to infer freshness and does not attach a browser sequence number to `DATA:LAST?`.
 
-Physical DM858E capture on 2026-09-06 established that current `DATA:LAST?` values are already in SI amperes. With DC current active the instrument returned `2.71868584E-03 A`; selected µA/mA/A range does not change that numeric unit. The backend therefore preserves the parsed current value exactly and leaves engineering-prefix selection to the browser. Range-dependent rescaling of `DATA:LAST?` current values is invalid.
+Physical DM858E capture on 2026-09-06 found that `DATA:LAST?` can return an `ADC`-tagged value that is not a display-unit measurement. The backend does not use that command for browser measurements; direct `MEASure:<function>?` responses are parsed as SI values and engineering-prefix selection remains a presentation concern.
 
 `DmmPoller` does not own a retained snapshot or dedupe baseline. It forwards every non-null sampled observation to `DmmRuntime`. `DmmRuntime.currentSnapshot` is the single server-side latest-display owner and performs display dedupe plus subscriber replay. This one-owner rule is important because runtime-generated invalidation must immediately change the same baseline used for later dedupe.
 
@@ -133,7 +133,7 @@ Each snapshot observation is one scheduler operation. The common ownership check
 2. `CONFigure?` before;
 3. function-specific resolution context before, when required;
 4. `SENSe:FUNCtion?` before;
-5. `DATA:LAST?`;
+5. `MEASure:<function>?`;
 6. `SENSe:FUNCtion?` after;
 7. `CONFigure?` after;
 8. function-specific resolution context after, when required;
@@ -167,7 +167,7 @@ Resolution ownership is explicitly per function in `src/shared/dm858e-capabiliti
 | Frequency, period | unverified; numeric snapshot unavailable |
 | Continuity, diode, temperature | unverified; numeric snapshot unavailable |
 
-For capacitance, Programming Guide §3.10.1 documents `CONFigure?` as range-only (`CAP <range>`), not range+resolution. The User Guide capacitance table expresses the ranges as `1.000 nF`, `10.00 nF`, `100.0 nF`, `1.000 µF`, and so on. Those 3.5-digit range displays establish a least-significant quantum of `1e-3 × effective capacitance range`. The snapshot transaction therefore reads `SENSe:CAPacitance:RANGe?` before and after `DATA:LAST?`; a range transition discards the observation. This also handles capacitance Auto range without guessing in the browser.
+For capacitance, Programming Guide §3.10.1 documents `CONFigure?` as range-only (`CAP <range>`), not range+resolution. The snapshot transaction therefore reads `SENSe:CAPacitance:RANGe?` before and after `MEASure:CAPacitance?`; a range transition discards the observation.
 
 Programming Guide §3.10.6 and §3.10.8 document `CONFigure?` as exactly `FREQ` and `PER` for frequency and period. The guide does not expose a measurement range/resolution field there. The programmable frequency/period voltage range is input conditioning, not Hz/s resolution. The User Guide's 5.5-digit class alone is not promoted into a fabricated numeric quantum. Frequency and period therefore publish `Unavailable/ResolutionUnavailable` until a specification-backed or physically verified resolution source is established.
 
@@ -175,11 +175,11 @@ The same conservative rule remains for continuity, diode and temperature. Sensor
 
 Runtime dedupe includes `resolution` as well as numeric `value`: an equal numeric value observed at a different resolution is a changed display snapshot and must be published.
 
-The Programming Guide gives `VDC` as an explicit `DATA:LAST?` function-token example. The backend does not invent other spellings. Unknown suffixes are treated as opaque and associated with a function only while `SENSe:FUNCtion?` is stable and authoritative; a token later observed under a different function is rejected.
+Direct measurement responses are required to be bare finite numeric values. Function ownership comes from the before/after `SENSe:FUNCtion?` checks.
 
 ### No-data and overload
 
-The Programming Guide documents the **bare** numeric response `9.90000000E+37` when `DATA:LAST?` has no available measurement data. The backend publishes an explicit `Unavailable/NoData` snapshot for that condition so the UI does not leave a previous numeric value looking current.
+The documented **bare** numeric response `9.90000000E+37` is treated as no available measurement data. The backend publishes an explicit `Unavailable/NoData` snapshot for that condition so the UI does not leave a previous numeric value looking current.
 
 The guide does not document a suffixed `DATA:LAST?` sentinel as overload. A sentinel-sized suffixed response is therefore represented as `Unavailable/UnclassifiedSentinel`, not guessed to be overload.
 

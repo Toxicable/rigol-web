@@ -138,8 +138,14 @@ function channelMarkerPlacement(
   layout: PlotLayout,
 ): WaveformMarkerPlacement {
   const state = scope.channels[channel - 1];
-  if (state === undefined) {
-    return waveformMarkerPlacement(0, -4, 4, layout.plotTop, layout.plotHeight);
+  if (
+    !validMarkerLayout(layout) ||
+    state === undefined ||
+    !Number.isFinite(state.scale) ||
+    state.scale <= 0 ||
+    !Number.isFinite(state.offset)
+  ) {
+    return fallbackMarkerPlacement(layout);
   }
   return waveformMarkerPlacement(
     0,
@@ -161,6 +167,18 @@ function triggerMarkerPlacement(
   if (source === undefined) {
     return null;
   }
+  // Scope state can briefly contain an uninitialized scale while the first
+  // instrument state packet is arriving. Do not pass a zero/invalid domain to
+  // the marker geometry helper during that transition.
+  if (
+    !validMarkerLayout(layout) ||
+    !Number.isFinite(source.scale) ||
+    source.scale <= 0 ||
+    !Number.isFinite(source.offset) ||
+    !Number.isFinite(scope.trigger.level)
+  ) {
+    return null;
+  }
   return waveformMarkerPlacement(
     scope.trigger.level,
     -source.offset - 4 * source.scale,
@@ -168,6 +186,18 @@ function triggerMarkerPlacement(
     layout.plotTop,
     layout.plotHeight,
   );
+}
+
+function validMarkerLayout(layout: PlotLayout): boolean {
+  return Number.isFinite(layout.plotTop) && layout.plotHeight > 0;
+}
+
+function fallbackMarkerPlacement(layout: PlotLayout): WaveformMarkerPlacement {
+  return {
+    top: Number.isFinite(layout.plotTop) ? layout.plotTop : 0,
+    domainY: 0,
+    offscreen: null,
+  };
 }
 
 function markerDirectionGlyph(placement: WaveformMarkerPlacement): string | null {

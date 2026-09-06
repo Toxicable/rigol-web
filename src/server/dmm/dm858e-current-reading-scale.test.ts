@@ -51,12 +51,18 @@ async function readCurrent(
   respond(transport, "STATus:OPERation:CONDition?", "0", "0");
   respond(transport, "CONFigure?", configuration, configuration);
   respond(transport, "SENSe:FUNCtion?", functionToken, functionToken);
-  respond(transport, "DATA:LAST?", response);
+  respond(
+    transport,
+    measurementFunction === DmmMeasurementFunction.DcCurrent
+      ? "MEASure:CURRent:DC?"
+      : "MEASure:CURRent:AC?",
+    response.split(" ", 1)[0] ?? response,
+  );
 
   return scriptedDriver(transport).readPrimarySnapshot(measurementFunction);
 }
 
-describe("Dm858eDriver current DATA:LAST? SI units", () => {
+describe("Dm858eDriver direct current measurements", () => {
   it("preserves the real 10 mA-range DC response in amperes", async () => {
     await expect(readCurrent(
       DmmMeasurementFunction.DcCurrent,

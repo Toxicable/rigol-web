@@ -46,6 +46,7 @@ class ScriptedTransport {
 interface ReadingObservation {
   functionToken: string;
   response: string;
+  measurementCommand?: string;
   configuration?: string;
   effectiveRange?: number;
   operationStatus?: number;
@@ -109,6 +110,29 @@ function isCapacitanceToken(functionToken: string): boolean {
   return functionToken.trim().replace(/^"|"$/g, "").toUpperCase() === "CAP";
 }
 
+function measurementCommandForToken(functionToken: string): string {
+  const token = functionToken.trim().replace(/^"|"$/g, "").toUpperCase();
+  const commands: Record<string, string> = {
+    VOLT: "MEASure:VOLTage:DC?",
+    "VOLT:DC": "MEASure:VOLTage:DC?",
+    "VOLT:AC": "MEASure:VOLTage:AC?",
+    CURR: "MEASure:CURRent:DC?",
+    "CURR:DC": "MEASure:CURRent:DC?",
+    "CURR:AC": "MEASure:CURRent:AC?",
+    RES: "MEASure:RESistance?",
+    FRES: "MEASure:FRESistance?",
+    CONT: "MEASure:CONTinuity?",
+    DIOD: "MEASure:DIODe?",
+    FREQ: "MEASure:FREQuency?",
+    PER: "MEASure:PERiod?",
+    CAP: "MEASure:CAPacitance?",
+    TEMP: "MEASure:TEMPerature?",
+  };
+  const command = commands[token];
+  if (command === undefined) throw new Error(`Missing measurement command for ${functionToken}`);
+  return command;
+}
+
 function scriptReadingObservations(
   transport: ScriptedTransport,
   ...observations: ReadingObservation[]
@@ -148,11 +172,13 @@ function scriptReadingObservations(
       observation.functionToken,
     ]),
   );
-  respond(
-    transport,
-    "DATA:LAST?",
-    ...observations.map((observation) => observation.response),
-  );
+  for (const observation of observations) {
+    respond(
+      transport,
+      observation.measurementCommand ?? measurementCommandForToken(observation.functionToken),
+      observation.response.split(" ", 1)[0] ?? observation.response,
+    );
+  }
 }
 
 describe("Dm858eDriver", () => {
@@ -458,6 +484,28 @@ describe("Dm858eDriver", () => {
     expect(transport.commands).not.toContain("DATA:POINts?");
   });
 
+  it("uses the DC current measurement query instead of ADC-tagged DATA:LAST values", async () => {
+    const transport = new ScriptedTransport();
+    scriptReadingObservations(
+      transport,
+      {
+        functionToken: "CURR",
+        response: "6.50709537E-06",
+        measurementCommand: "MEASure:CURRent:DC?",
+      },
+    );
+    const driver = scriptedDriver(transport);
+
+    await expect(driver.readPrimarySnapshot(DmmMeasurementFunction.DcCurrent)).resolves.toEqual({
+      kind: DmmReadingKind.Value,
+      function: DmmMeasurementFunction.DcCurrent,
+      value: 6.50709537e-6,
+      resolution: 1e-5,
+      unit: DmmUnit.Amps,
+    });
+    expect(transport.commands).not.toContain("DATA:LAST?");
+  });
+
   it("carries the actual 100 V Fast AC resolution with the reading", async () => {
     const transport = new ScriptedTransport();
     scriptReadingObservations(
@@ -515,7 +563,7 @@ describe("Dm858eDriver", () => {
       "1.00000000E-05",
     );
     respond(transport, "SENSe:FUNCtion?", "CAP", "CAP");
-    respond(transport, "DATA:LAST?", "1.23456789E-06 OPAQUE_CAP");
+    respond(transport, "MEASure:CAPacitance?", "1.23456789E-06");
 
     await expect(
       scriptedDriver(transport).readPrimarySnapshot(DmmMeasurementFunction.Capacitance),
@@ -566,7 +614,7 @@ describe("Dm858eDriver", () => {
       "VOLT:AC 1.00000000E+02,1.00000000E-01",
     );
     respond(transport, "SENSe:FUNCtion?", "VOLT:AC", "VOLT:AC");
-    respond(transport, "DATA:LAST?", "1.23456780E+01 OPAQUE_ACV");
+    respond(transport, "MEASure:VOLTage:AC?", "1.23456780E+01");
 
     await expect(
       scriptedDriver(transport).readPrimarySnapshot(DmmMeasurementFunction.AcVoltage),
@@ -597,7 +645,7 @@ describe("Dm858eDriver", () => {
     const transport = new ScriptedTransport();
     scriptReadingObservations(
       transport,
-      { functionToken: "RES", response: "1.00000000E+03 OPAQUE_RES" },
+      { functionToken: "RES", measurementCommand: "MEASure:VOLTage:DC?", response: "1.00000000E+03" },
       { functionToken: "RES", response: "1.00000000E+03 OPAQUE_RES" },
     );
     const driver = scriptedDriver(transport);

@@ -94,7 +94,7 @@ class FakeDm858eServer {
   public range = 10;
   public nplc = 20;
   public blockReadings = false;
-  public latestReading = "-1.25000000E-01 VDC";
+  public latestReading = "-1.25000000E-01";
 
   public async start(): Promise<number> {
     return listen(this.server);
@@ -177,7 +177,7 @@ class FakeDm858eServer {
       return;
     }
 
-    if (command === "DATA:LAST?" && this.blockReadings) {
+    if (command.startsWith("MEASure:") && this.blockReadings) {
       return;
     }
 
@@ -208,7 +208,7 @@ class FakeDm858eServer {
     if (command.endsWith(":NPLC?")) {
       return this.nplc.toExponential(8).toUpperCase();
     }
-    if (command === "DATA:LAST?") {
+    if (command.startsWith("MEASure:")) {
       return this.latestReading;
     }
     if (command === "STATus:OPERation:CONDition?") {
@@ -275,9 +275,9 @@ function configureResponse(functionToken: string, range: number, nplc: number): 
 
 function readingResponseFor(functionToken: string): string {
   if (functionToken === "VOLT") {
-    return "-1.25000000E-01 VDC";
+    return "-1.25000000E-01";
   }
-  return `-1.25000000E-01 FAKE_${functionToken.replace(/:/g, "_")}`;
+  return "-1.25000000E-01";
 }
 
 describe("DmmRuntime integration", () => {
@@ -465,7 +465,7 @@ describe("DmmRuntime integration", () => {
     try {
       runtime.start();
       await waitFor(() => connected[0]);
-      await waitFor(() => fake.connections[0]?.commands.includes("DATA:LAST?") ? true : undefined);
+      await waitFor(() => fake.connections[0]?.commands.some((command) => command.startsWith("MEASure:")) ? true : undefined);
       const startedAt = Date.now();
       await runtime.stop();
       expect(Date.now() - startedAt).toBeLessThan(500);

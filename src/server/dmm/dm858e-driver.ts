@@ -46,9 +46,8 @@ interface ReadRangeResult {
   readonly effectiveRange?: number;
 }
 
-interface ParsedLastReading {
+interface ParsedMeasurementReading {
   readonly value: number;
-  readonly functionToken: string;
 }
 
 type TemperatureUnit = "C" | "F" | "K";
@@ -59,7 +58,6 @@ const rangeStabilityObservationLimit = 3;
 
 export class Dm858eDriver {
   private temperatureUnit: TemperatureUnit = "C";
-  private readonly learnedReadingFunctionTokens = new Map<string, DmmMeasurementFunction>();
 
   public constructor(private readonly scheduler: ScpiScheduler) {}
 
@@ -226,7 +224,7 @@ export class Dm858eDriver {
         const functionBefore = parseFunctionToken(
           await transport.queryText("SENSe:FUNCtion?"),
         );
-        const response = (await transport.queryText("DATA:LAST?")).trim();
+        const response = (await transport.queryText(measurementCommandFor(measurementFunction))).trim();
         const functionAfter = parseFunctionToken(
           await transport.queryText("SENSe:FUNCtion?"),
         );
@@ -271,7 +269,7 @@ export class Dm858eDriver {
           };
         }
 
-        const parsed = parseLastReadingResponse(response);
+        const parsed = parseMeasurementResponse(response);
         if (parsed === null) {
           return {
             kind: DmmReadingKind.Unavailable,
@@ -280,10 +278,6 @@ export class Dm858eDriver {
             reason: DmmReadingUnavailableReason.NoData,
           };
         }
-        if (!this.readingFunctionTokenMatches(parsed.functionToken, functionAfter)) {
-          return null;
-        }
-
         if (Math.abs(parsed.value) >= noDataSentinel) {
           return {
             kind: DmmReadingKind.Unavailable,
@@ -341,24 +335,6 @@ export class Dm858eDriver {
       },
     });
     return "";
-  }
-
-  private readingFunctionTokenMatches(
-    token: string,
-    measurementFunction: DmmMeasurementFunction,
-  ): boolean {
-    const normalized = token.trim().toUpperCase();
-
-    if (normalized === "VDC") {
-      return measurementFunction === DmmMeasurementFunction.DcVoltage;
-    }
-
-    const learned = this.learnedReadingFunctionTokens.get(normalized);
-    if (learned === undefined) {
-      this.learnedReadingFunctionTokens.set(normalized, measurementFunction);
-      return true;
-    }
-    return learned === measurementFunction;
   }
 
   private async queryText(
@@ -743,26 +719,20 @@ function parseNonNegativeInteger(value: string, name: string): number {
   return parsed;
 }
 
-function parseLastReadingResponse(value: string): ParsedLastReading | null {
+function parseMeasurementResponse(value: string): ParsedMeasurementReading | null {
   if (isBareNoDataResponse(value)) {
     return null;
   }
 
-  const match = /^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)\s+(.+?)\s*$/.exec(value);
-  if (match === null || match[1] === undefined || match[2] === undefined) {
-    throw new Error(`Invalid DM858E DATA:LAST? response: ${value}`);
-  }
-
-  const parsed = Number(match[1]);
+  const parsed = Number(value.trim());
   if (!Number.isFinite(parsed)) {
-    throw new Error(`Invalid DM858E DATA:LAST? value: ${value}`);
+    throw new Error(`Invalid DM858E measurement value: ${value}`);
   }
+  return { value: parsed };
+}
 
-  const functionToken = match[2].trim();
-  if (functionToken.length === 0) {
-    throw new Error(`Missing DM858E DATA:LAST? measurement function: ${value}`);
-  }
-  return { value: parsed, functionToken };
+function measurementCommandFor(value: DmmMeasurementFunction): string {
+  return `MEASure:${functionSetToken(value)}?`;
 }
 
 function isBareNoDataResponse(value: string): boolean {

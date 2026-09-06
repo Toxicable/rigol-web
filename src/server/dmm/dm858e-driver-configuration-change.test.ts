@@ -74,7 +74,7 @@ describe("Dm858eDriver configuration-change snapshots", () => {
       "VOLT 1.00000000E+01,1.00000000E-04",
     );
     respond(transport, "SENSe:FUNCtion?", "VOLT", "VOLT");
-    respond(transport, "DATA:LAST?", "-5.08000000E-01 VDC");
+    respond(transport, "MEASure:VOLTage:DC?", "-5.08000000E-01");
 
     await expect(driverFor(transport).readPrimarySnapshot(
       DmmMeasurementFunction.DcVoltage,
@@ -96,7 +96,7 @@ describe("Dm858eDriver configuration-change snapshots", () => {
       "VOLT 1.00000000E+01,1.00000000E-04",
     );
     respond(transport, "SENSe:FUNCtion?", "VOLT", "RES");
-    respond(transport, "DATA:LAST?", "-5.08000000E-01 VDC");
+    respond(transport, "MEASure:VOLTage:DC?", "-5.08000000E-01");
 
     await expect(driverFor(transport).readPrimarySnapshot(
       DmmMeasurementFunction.DcVoltage,
@@ -142,10 +142,10 @@ describe("Dm858eDriver configuration-change snapshots", () => {
     );
     respond(
       transport,
-      "DATA:LAST?",
-      "1.25000000E+00 VDC",
-      "1.25000000E+00 VDC",
-      "1.25000000E+00 VDC",
+      "MEASure:VOLTage:DC?",
+      "1.25000000E+00",
+      "1.25000000E+00",
+      "1.25000000E+00",
     );
 
     const stateStore = new DmmStateStore({

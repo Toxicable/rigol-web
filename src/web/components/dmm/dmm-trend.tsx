@@ -4,7 +4,6 @@ import "uplot/dist/uPlot.min.css";
 
 import {
   DmmMeasurementFunction,
-  DmmRangeMode,
   DmmReadingKind,
   dmmUnitForFunction,
   type DmmRange,
@@ -123,7 +122,10 @@ export function dmmTrendSelectedYRange(
   measurementFunction: DmmMeasurementFunction,
   range: DmmRange | null,
 ): TrendVisibleRange | null {
-  if (range === null || range.mode !== DmmRangeMode.Fixed) {
+  // The fixed range value is the authoritative bound. Checking for the
+  // validated value also keeps the graph fixed if the websocket representation
+  // changes how the range mode is encoded.
+  if (range === null || !("value" in range) || !Number.isFinite(range.value)) {
     return null;
   }
 
@@ -136,11 +138,11 @@ export function dmmTrendSelectedYRange(
     case DmmMeasurementFunction.Resistance2Wire:
     case DmmMeasurementFunction.Resistance4Wire:
     case DmmMeasurementFunction.Capacitance:
+    case DmmMeasurementFunction.Frequency:
+    case DmmMeasurementFunction.Period:
       return { min: 0, max: range.value };
     case DmmMeasurementFunction.Continuity:
     case DmmMeasurementFunction.Diode:
-    case DmmMeasurementFunction.Frequency:
-    case DmmMeasurementFunction.Period:
     case DmmMeasurementFunction.Temperature:
       return null;
   }
@@ -153,7 +155,10 @@ export function dmmTrendYScaleOptions(selectedYRange: TrendVisibleRange | null) 
 
   return {
     auto: false,
-    range: [selectedYRange.min, selectedYRange.max] as [number, number],
+    // Keep the bounds authoritative even when uPlot re-ranges after setData.
+    // A literal range can be replaced during an internal data update; this
+    // function makes fixed-range mode independent of the current samples.
+    range: () => [selectedYRange.min, selectedYRange.max] as [number, number],
   };
 }
 

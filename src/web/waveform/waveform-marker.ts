@@ -25,7 +25,14 @@ export function waveformMarkerPlacement(
     !(plotHeight > 0) ||
     !(markerHeight > 0)
   ) {
-    throw new Error("Invalid waveform marker geometry");
+    // Marker state is UI decoration and can briefly be incomplete while the
+    // scope state or plot layout is being initialized. Never let that take
+    // down the waveform/value renderer.
+    return {
+      top: Number.isFinite(plotTop) ? plotTop : 0,
+      domainY: 0,
+      offscreen: null,
+    };
   }
 
   const rawY = ((scaleMax - value) / (scaleMax - scaleMin)) * plotHeight;

@@ -122,6 +122,14 @@ describe("DM858E snapshot trend", () => {
       DmmMeasurementFunction.Resistance2Wire,
       { mode: DmmRangeMode.Fixed, value: 1_000 },
     )).toEqual({ min: 0, max: 1_000 });
+    expect(dmmTrendSelectedYRange(
+      DmmMeasurementFunction.Frequency,
+      { mode: DmmRangeMode.Fixed, value: 100 },
+    )).toEqual({ min: 0, max: 100 });
+    expect(dmmTrendSelectedYRange(
+      DmmMeasurementFunction.Period,
+      { mode: DmmRangeMode.Fixed, value: 10 },
+    )).toEqual({ min: 0, max: 10 });
   });
 
   it("keeps autoscale for auto range and non-output range controls", () => {
@@ -129,18 +137,14 @@ describe("DM858E snapshot trend", () => {
       DmmMeasurementFunction.DcCurrent,
       { mode: DmmRangeMode.Auto },
     )).toBeNull();
-    expect(dmmTrendSelectedYRange(
-      DmmMeasurementFunction.Frequency,
-      { mode: DmmRangeMode.Fixed, value: 10 },
-    )).toBeNull();
     expect(dmmTrendSelectedYRange(DmmMeasurementFunction.Temperature, null)).toBeNull();
   });
 
   it("encodes fixed bounds as a static uPlot Y range", () => {
-    expect(dmmTrendYScaleOptions({ min: -1, max: 1 })).toEqual({
-      auto: false,
-      range: [-1, 1],
-    });
+    const fixed = dmmTrendYScaleOptions({ min: -1, max: 1 });
+    expect(fixed.auto).toBe(false);
+    expect(fixed.range).toEqual(expect.any(Function));
+    expect(fixed.range({} as never, 12, 34, "y")).toEqual([-1, 1]);
 
     const automatic = dmmTrendYScaleOptions(null);
     expect(automatic.auto).toBe(true);

@@ -93,7 +93,7 @@ describe("LiveWaveformService", () => {
     expect(frames).toHaveLength(2);
   });
 
-  it("stays idle while stopped, outside Main mode, or when no channels are enabled", async () => {
+  it("stays idle while stopped, in XY mode, or when no channels are enabled", async () => {
     const driver = new FakeDriver();
     const stopped = new LiveWaveformService({
       driver,
@@ -107,15 +107,28 @@ describe("LiveWaveformService", () => {
 
     const rollState = createState();
     rollState.horizontal = { ...rollState.horizontal, mode: TimebaseMode.Roll };
+    const rollDriver = new FakeDriver();
     const roll = new LiveWaveformService({
-      driver,
+      driver: rollDriver,
       getScopeState: () => rollState,
-      publishFrame: () => undefined,
+      publishFrame: () => roll.stop(),
     });
     roll.start();
     await roll.waitForIdle();
-    expect(driver.calls).toEqual([]);
+    expect(rollDriver.calls).toEqual([Channel.Ch1]);
     roll.stop();
+
+    const xyState = createState();
+    xyState.horizontal = { ...xyState.horizontal, mode: TimebaseMode.Xy };
+    const xy = new LiveWaveformService({
+      driver,
+      getScopeState: () => xyState,
+      publishFrame: () => undefined,
+    });
+    xy.start();
+    await xy.waitForIdle();
+    expect(driver.calls).toEqual([]);
+    xy.stop();
 
     const noChannels = createState();
     noChannels.channels = noChannels.channels.map((channel) => ({ ...channel, enabled: false })) as ScopeState["channels"];

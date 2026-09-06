@@ -127,7 +127,7 @@ export class LiveWaveformService {
     const state = this.getScopeState();
     if (
       state.runState === ScopeRunState.Stopped ||
-      state.horizontal.mode !== TimebaseMode.Main
+      state.horizontal.mode === TimebaseMode.Xy
     ) {
       return false;
     }
