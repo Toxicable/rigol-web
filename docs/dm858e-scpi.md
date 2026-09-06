@@ -111,6 +111,8 @@ This boundary is deliberate. The Programming Guide defines:
 
 Those commands do not provide a coherent sample identity when queried independently. In particular, a point-count change cannot safely be paired with a separately queried `DATA:LAST?`, and raw SCPI can change the reading-memory count without creating a measurement. The backend therefore does **not** use `DATA:POINts?` to infer freshness and does not attach a browser sequence number to `DATA:LAST?`.
 
+Physical DM858E capture on 2026-09-06 established that current `DATA:LAST?` values are already in SI amperes. With DC current active the instrument returned `2.71868584E-03 A`; selected µA/mA/A range does not change that numeric unit. The backend therefore preserves the parsed current value exactly and leaves engineering-prefix selection to the browser. Range-dependent rescaling of `DATA:LAST?` current values is invalid.
+
 `DmmPoller` does not own a retained snapshot or dedupe baseline. It forwards every non-null sampled observation to `DmmRuntime`. `DmmRuntime.currentSnapshot` is the single server-side latest-display owner and performs display dedupe plus subscriber replay. This one-owner rule is important because runtime-generated invalidation must immediately change the same baseline used for later dedupe.
 
 A stable current snapshot can be published immediately, including an existing stopped/single-trigger reading present when the route first subscribes. When another browser session subscribes while that runtime is already active, the runtime republishes `currentSnapshot`, so a second tab or reconnecting browser receives the current stopped/stable display without restarting the instrument session.
