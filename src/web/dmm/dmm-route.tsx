@@ -108,6 +108,7 @@ export function DmmRouteView({
               <DmmReading state={connection.state} snapshot={latestReading} />
               <DmmTrend
                 measurementFunction={connection.state.function}
+                range={connection.state.range}
                 snapshot={latestReading}
                 horizontal={trendHorizontal}
               />
