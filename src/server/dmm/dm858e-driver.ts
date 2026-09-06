@@ -295,7 +295,7 @@ export class Dm858eDriver {
 
         const value = functionAfter === DmmMeasurementFunction.Temperature
           ? temperatureToCelsius(parsed.value, readingTemperatureUnit)
-          : normalizeLastReadingValue(parsed.value, functionAfter, configurationAfter.range);
+          : parsed.value;
         if (resolutionAfter === null) {
           return {
             kind: DmmReadingKind.Unavailable,
@@ -763,26 +763,6 @@ function parseLastReadingResponse(value: string): ParsedLastReading | null {
     throw new Error(`Missing DM858E DATA:LAST? measurement function: ${value}`);
   }
   return { value: parsed, functionToken };
-}
-
-function normalizeLastReadingValue(
-  value: number,
-  measurementFunction: DmmMeasurementFunction,
-  range: number | undefined,
-): number {
-  if (
-    measurementFunction !== DmmMeasurementFunction.DcCurrent &&
-    measurementFunction !== DmmMeasurementFunction.AcCurrent
-  ) {
-    return value;
-  }
-  if (range === undefined) {
-    throw new Error("Missing DM858E current range while normalizing DATA:LAST? reading");
-  }
-
-  const rawExponent = Math.floor(Math.log10(range) / 3) * 3;
-  const displayExponent = Math.min(0, rawExponent);
-  return value * 10 ** displayExponent;
 }
 
 function isBareNoDataResponse(value: string): boolean {
