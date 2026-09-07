@@ -1,18 +1,13 @@
 import { createServer } from "node:http";
 
 import { SupportedInstrument } from "../shared/instrument-types.js";
-import { DmmRuntime } from "./dmm/dmm-runtime.js";
+import { DmmService } from "./dmm/dmm-service.js";
 import { createHttpRequestHandler } from "./http-handler.js";
 import { InstrumentRegistry } from "./instruments/instrument-registry.js";
-import { ScopeRuntime } from "./scope-runtime.js";
+import { ScopeService } from "./scope/scope-service.js";
 import { Dho804PowerControl } from "./scope/dho804-power-control.js";
 import { waitForOfflineThenOnline } from "./scope/tcp-reachability-monitor.js";
-import {
-  ServerDmmConnectionKind,
-  ServerScopeConnectionKind,
-  WebSocketGateway,
-  type ServerScopeConnection,
-} from "./websocket/websocket-gateway.js";
+import { WebSocketGateway } from "./websocket/websocket-gateway.js";
 
 const HTTP_PORT_DEFAULT = 3_000;
 const SCOPE_ADB_PORT_DEFAULT = 55_555;
@@ -65,32 +60,18 @@ const dmmEndpoint = {
 };
 const scopePower = new Dho804PowerControl(scopeEndpoint.host, readScopeAdbPort());
 
-const initialScopeConnection: ServerScopeConnection = {
-  kind: ServerScopeConnectionKind.Disconnected,
-  reason: "Scope runtime inactive",
-};
-
-let gateway!: WebSocketGateway;
-const scopeRuntime = new ScopeRuntime({
-  ...scopeEndpoint,
-  publishConnection: (connection) => gateway.setScopeConnection(connection),
-  publishWaveform: (frame) => gateway.broadcastWaveform(frame),
-});
-const dmmRuntime = new DmmRuntime({
-  ...dmmEndpoint,
-  publishConnection: (connection) => gateway.setDmmConnection(connection),
-  publishState: (state) => gateway.publishDmmState(state),
-  publishSnapshot: (snapshot) => gateway.broadcastDmmSnapshot(snapshot),
-});
+const scopeService = new ScopeService(scopeEndpoint);
+const dmmService = new DmmService(dmmEndpoint);
 
 const instruments = new InstrumentRegistry({
   dho804: {
     endpoint: scopeEndpoint,
-    runtime: scopeRuntime,
+    runtime: scopeService.runtime,
   },
   dm858e: {
     endpoint: dmmEndpoint,
-    runtime: dmmRuntime,
+    runtime: dmmService.runtime,
+    subscriberAdded: () => dmmService.replayCurrentSnapshot(),
   },
 });
 
@@ -145,22 +126,10 @@ const server = createServer(createHttpRequestHandler(undefined, {
   },
 }));
 
-gateway = new WebSocketGateway(server, initialScopeConnection, {
+const gateway = new WebSocketGateway(server, {
   instruments,
-  initialDmmConnection: {
-    kind: ServerDmmConnectionKind.Disconnected,
-    reason: "DMM runtime inactive",
-  },
-  waveformHandlers: {
-    requestDeepCapture: (requestId) => scopeRuntime.requestDeepCapture(requestId),
-    requestViewport: (request) => scopeRuntime.requestViewport(request),
-    pauseLiveWaveform: () => scopeRuntime.pauseLiveWaveform(),
-    resumeLiveWaveform: () => scopeRuntime.resumeLiveWaveform(),
-  },
-  dmmHandlers: {
-    setControl: (control) => dmmRuntime.setControl(control),
-    executeRawScpi: (command) => dmmRuntime.executeRawScpi(command),
-  },
+  scopeService,
+  dmmService,
 });
 
 let shuttingDown = false;

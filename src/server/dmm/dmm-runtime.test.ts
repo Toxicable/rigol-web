@@ -18,14 +18,14 @@ import {
   type DmmState,
 } from "../../shared/dmm-types.js";
 import {
-  ServerDmmConnectionKind,
-  type ServerDmmConnection,
-} from "../websocket/websocket-gateway.js";
+  DmmConnectionKind,
+  type DmmConnection,
+} from "../instruments/instrument-connection.js";
 import { DmmRuntime } from "./dmm-runtime.js";
 
 type ConnectedDmmConnection = Extract<
-  ServerDmmConnection,
-  { kind: ServerDmmConnectionKind.Connected }
+  DmmConnection,
+  { kind: DmmConnectionKind.Connected }
 >;
 
 interface FakeConnection {
@@ -293,7 +293,7 @@ describe("DmmRuntime integration", () => {
       reconnectDelayMs: 20,
       connectTimeoutMs: 500,
       publishConnection: (connection) => {
-        if (connection.kind === ServerDmmConnectionKind.Connected) {
+        if (connection.kind === DmmConnectionKind.Connected) {
           connected.push(connection);
         }
       },
@@ -371,7 +371,7 @@ describe("DmmRuntime integration", () => {
       reconnectDelayMs: 20,
       connectTimeoutMs: 500,
       publishConnection: (connection) => {
-        if (connection.kind === ServerDmmConnectionKind.Connected) {
+        if (connection.kind === DmmConnectionKind.Connected) {
           connected.push(connection);
         }
       },
@@ -414,7 +414,7 @@ describe("DmmRuntime integration", () => {
       reconnectDelayMs: 20,
       connectTimeoutMs: 500,
       publishConnection: (connection) => {
-        if (connection.kind === ServerDmmConnectionKind.Connected) {
+        if (connection.kind === DmmConnectionKind.Connected) {
           connected.push(connection);
         }
       },
@@ -454,7 +454,7 @@ describe("DmmRuntime integration", () => {
       reconnectDelayMs: 20,
       connectTimeoutMs: 500,
       publishConnection: (connection) => {
-        if (connection.kind === ServerDmmConnectionKind.Connected) {
+        if (connection.kind === DmmConnectionKind.Connected) {
           connected.push(connection);
         }
       },
@@ -485,7 +485,7 @@ describe("DmmRuntime integration", () => {
       reconnectDelayMs: 20,
       connectTimeoutMs: 500,
       publishConnection: (connection) => {
-        if (connection.kind === ServerDmmConnectionKind.Connected) {
+        if (connection.kind === DmmConnectionKind.Connected) {
           connected.push(connection);
         }
       },

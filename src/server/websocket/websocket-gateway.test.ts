@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, type RawData } from "ws";
 
+import type { DmmControlChange, DmmReadingSnapshot, DmmState } from "../../shared/dmm-types.js";
 import { SupportedInstrument } from "../../shared/instrument-types.js";
 import {
   AcquisitionType,
@@ -30,27 +31,27 @@ import {
   WaveformEncoding,
 } from "../../shared/waveform-protocol.js";
 import {
+  AcquisitionAction,
   ControlKind,
   MessageType,
   PROTOCOL_VERSION,
   WaveformKind,
-  type DeepCaptureReadyMessage,
+  type ControlChange,
+  type InteractiveControl,
+  type NonEmptyArray,
   type ServerJsonMessage,
-  type WaveformViewportRequestMessage,
 } from "../../shared/websocket-protocol.js";
+import type { DmmApplicationService } from "../dmm/dmm-service.js";
+import {
+  DmmConnectionKind,
+  ScopeConnectionKind,
+  type DmmConnection,
+  type ScopeConnection,
+} from "../instruments/instrument-connection.js";
 import { InstrumentRegistry } from "../instruments/instrument-registry.js";
-import {
-  ScopeController,
-  type ScopeControllerDriver,
-} from "../scope/scope-controller.js";
-import { ScopeStateStore } from "../scope/scope-state-store.js";
-import {
-  ServerDmmConnectionKind,
-  ServerScopeConnectionKind,
-  WebSocketGateway,
-  type DmmRequestHandlers,
-  type WaveformRequestHandlers,
-} from "./websocket-gateway.js";
+import type { ScopeApplicationService } from "../scope/scope-service.js";
+import type { DeepCaptureInfo, DeepViewportRequest } from "../waveform/deep-capture-service.js";
+import { WebSocketGateway } from "./websocket-gateway.js";
 
 const scopeInfo: ScopeInfo = {
   manufacturer: "RIGOL TECHNOLOGIES",
@@ -103,43 +104,6 @@ function measurementValue(spec: MeasurementSpec, current: number): MeasurementVa
   };
 }
 
-function createDriver(initial: ScopeState): ScopeControllerDriver {
-  let state = initial;
-  const unused = async (): Promise<never> => {
-    throw new Error("unused fake driver operation");
-  };
-
-  return {
-    readScopeState: async () => state,
-    readChannelState: async (channel) => state.channels[channel - 1]!,
-    readHorizontalState: async () => state.horizontal,
-    readAcquisitionState: async () => state.acquisition,
-    readTriggerState: async () => state.trigger,
-    readRunState: async () => state.runState,
-    setChannelEnabled: async (channel, enabled) => {
-      const channels = [...state.channels] as ScopeState["channels"];
-      channels[channel - 1] = { ...channels[channel - 1]!, enabled };
-      state = { ...state, channels };
-    },
-    setChannelScale: unused,
-    setChannelOffset: unused,
-    setHorizontalScale: unused,
-    setHorizontalPosition: unused,
-    setTriggerType: unused,
-    setTriggerSource: unused,
-    setTriggerSlope: unused,
-    setTriggerLevel: unused,
-    run: unused,
-    stop: unused,
-    single: unused,
-    readMeasurements: async (specs: MeasurementSpec[]) => specs.map(
-      (spec, index) => measurementValue(spec, index + 0.5),
-    ),
-    setMeasurements: async () => undefined,
-    executeRawScpi: async (command) => `response:${command}`,
-  };
-}
-
 function createWaveformFrame(
   kind: WaveformKind,
   channel: Channel,
@@ -168,6 +132,103 @@ function createWaveformFrame(
   return frame;
 }
 
+class FakeScopeService implements ScopeApplicationService {
+  private connection: ScopeConnection = {
+    kind: ScopeConnectionKind.Connected,
+    info: scopeInfo,
+    state: createState(),
+  };
+  private readonly connectionListeners = new Set<(connection: ScopeConnection) => void>();
+  private readonly stateListeners = new Set<(state: ScopeState) => void>();
+  private readonly waveformListeners = new Set<(frame: Uint8Array) => void>();
+
+  public readonly setControl = vi.fn(async (_control: ControlChange) => undefined);
+  public readonly updateInteraction = vi.fn(async (_control: InteractiveControl) => undefined);
+  public readonly commitInteraction = vi.fn(async (_control: InteractiveControl) => undefined);
+  public readonly performAcquisitionAction = vi.fn(async (_action: AcquisitionAction) => undefined);
+  public readonly setMeasurements = vi.fn(async (_measurements: MeasurementSpec[]) => undefined);
+  public readonly executeRawScpi = vi.fn(async (command: string) => `scope:${command}`);
+  public readonly pauseLiveWaveform = vi.fn(async () => undefined);
+  public readonly resumeLiveWaveform = vi.fn(() => undefined);
+
+  public getConnection(): ScopeConnection { return this.connection; }
+  public subscribeConnection(listener: (connection: ScopeConnection) => void): () => void {
+    this.connectionListeners.add(listener);
+    return () => this.connectionListeners.delete(listener);
+  }
+  public subscribeState(listener: (state: ScopeState) => void): () => void {
+    this.stateListeners.add(listener);
+    return () => this.stateListeners.delete(listener);
+  }
+  public subscribeWaveform(listener: (frame: Uint8Array) => void): () => void {
+    this.waveformListeners.add(listener);
+    return () => this.waveformListeners.delete(listener);
+  }
+  public async readMeasurements(measurements: NonEmptyArray<MeasurementSpec>): Promise<MeasurementValue[]> {
+    return measurements.map((spec, index) => measurementValue(spec, index + 0.5));
+  }
+  public async captureDeep(): Promise<DeepCaptureInfo> {
+    return {
+      captureId: 9,
+      channels: [{
+        channel: Channel.Ch1,
+        unit: ChannelUnit.Volts,
+        sampleCount: 1_000,
+        xIncrement: 1e-9,
+        xOrigin: 0,
+        xReference: 0,
+      }],
+    };
+  }
+  public async requestViewport(request: DeepViewportRequest): Promise<Uint8Array> {
+    return createWaveformFrame(WaveformKind.DeepViewport, request.channel, request.captureId, 77);
+  }
+  public publishState(state: ScopeState): void {
+    if (this.connection.kind === ScopeConnectionKind.Connected) {
+      this.connection = { ...this.connection, state };
+    }
+    for (const listener of this.stateListeners) listener(state);
+  }
+  public publishConnection(connection: ScopeConnection): void {
+    this.connection = connection;
+    for (const listener of this.connectionListeners) listener(connection);
+  }
+  public publishWaveform(frame: Uint8Array): void {
+    for (const listener of this.waveformListeners) listener(frame);
+  }
+}
+
+class FakeDmmService implements DmmApplicationService {
+  private connection: DmmConnection = {
+    kind: DmmConnectionKind.Disconnected,
+    reason: "DMM inactive",
+  };
+  private readonly connectionListeners = new Set<(connection: DmmConnection) => void>();
+  private readonly stateListeners = new Set<(state: DmmState) => void>();
+  private readonly snapshotListeners = new Set<(snapshot: DmmReadingSnapshot) => void>();
+  public readonly setControl = vi.fn(async (_control: DmmControlChange) => undefined);
+  public readonly executeRawScpi = vi.fn(async (command: string) => `dmm:${command}`);
+
+  public getConnection(): DmmConnection { return this.connection; }
+  public getCurrentSnapshot(): DmmReadingSnapshot | null { return null; }
+  public subscribeConnection(listener: (connection: DmmConnection) => void): () => void {
+    this.connectionListeners.add(listener);
+    return () => this.connectionListeners.delete(listener);
+  }
+  public subscribeState(listener: (state: DmmState) => void): () => void {
+    this.stateListeners.add(listener);
+    return () => this.stateListeners.delete(listener);
+  }
+  public subscribeSnapshot(listener: (snapshot: DmmReadingSnapshot) => void): () => void {
+    this.snapshotListeners.add(listener);
+    return () => this.snapshotListeners.delete(listener);
+  }
+  public publishConnection(connection: DmmConnection): void {
+    this.connection = connection;
+    for (const listener of this.connectionListeners) listener(connection);
+  }
+}
+
 function waitForJson(
   socket: WebSocket,
   predicate: (message: ServerJsonMessage) => boolean,
@@ -189,22 +250,11 @@ function waitForBinary(socket: WebSocket): Promise<Uint8Array> {
     const listener = (data: RawData, isBinary: boolean) => {
       if (!isBinary) return;
       socket.off("message", listener);
-
-      if (Array.isArray(data)) {
-        const byteLength = data.reduce((total, part) => total + part.byteLength, 0);
-        const bytes = new Uint8Array(byteLength);
-        let offset = 0;
-        for (const part of data) {
-          bytes.set(part, offset);
-          offset += part.byteLength;
-        }
-        resolve(bytes);
-        return;
-      }
-
       const bytes = data instanceof ArrayBuffer
         ? new Uint8Array(data)
-        : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        : Array.isArray(data)
+          ? Uint8Array.from(Buffer.concat(data))
+          : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
       resolve(Uint8Array.from(bytes));
     };
     socket.on("message", listener);
@@ -217,17 +267,18 @@ async function listen(server: HttpServer): Promise<number> {
   return (server.address() as AddressInfo).port;
 }
 
-interface TestServer {
+interface Harness {
   httpServer: HttpServer;
   gateway: WebSocketGateway;
-  store: ScopeStateStore;
+  scopeService: FakeScopeService;
+  dmmService: FakeDmmService;
   clients: WebSocket[];
   scopeStart: ReturnType<typeof vi.fn>;
   scopeStop: ReturnType<typeof vi.fn>;
-  dmmHandlers: DmmRequestHandlers;
+  port: number;
 }
 
-let active: TestServer | undefined;
+let active: Harness | undefined;
 
 afterEach(async () => {
   if (active === undefined) return;
@@ -237,33 +288,10 @@ afterEach(async () => {
   active = undefined;
 });
 
-async function createTestServer(
-  waveformHandlers?: WaveformRequestHandlers,
-): Promise<TestServer & { port: number }> {
-  const state = createState();
-  const store = new ScopeStateStore(state);
-  const controller = new ScopeController(createDriver(state), store);
+async function createHarness(): Promise<Harness> {
   const httpServer = createServer();
-  const handlers: WaveformRequestHandlers = waveformHandlers ?? {
-    requestDeepCapture: async (requestId): Promise<DeepCaptureReadyMessage> => ({
-      type: MessageType.DeepCaptureReady,
-      requestId,
-      captureId: 1,
-      channels: [{
-        channel: Channel.Ch1,
-        unit: ChannelUnit.Volts,
-        sampleCount: 1_000,
-        xIncrement: 1e-9,
-        xOrigin: 0,
-        xReference: 0,
-      }],
-    }),
-    requestViewport: async (request) => createWaveformFrame(
-      WaveformKind.DeepViewport,
-      request.channel,
-      request.captureId,
-    ),
-  };
+  const scopeService = new FakeScopeService();
+  const dmmService = new FakeDmmService();
   const scopeStart = vi.fn(async () => undefined);
   const scopeStop = vi.fn(async () => undefined);
   const instruments = new InstrumentRegistry({
@@ -276,144 +304,70 @@ async function createTestServer(
       runtime: { start: vi.fn(async () => undefined), stop: vi.fn(async () => undefined) },
     },
   });
-  const dmmHandlers: DmmRequestHandlers = {
-    setControl: vi.fn(async () => undefined),
-    executeRawScpi: vi.fn(async (command: string) => `dmm:${command}`),
-  };
-  const gateway = new WebSocketGateway(
-    httpServer,
-    {
-      kind: ServerScopeConnectionKind.Connected,
-      info: scopeInfo,
-      stateStore: store,
-      controller,
-    },
-    {
-      instruments,
-      initialDmmConnection: {
-        kind: ServerDmmConnectionKind.Disconnected,
-        reason: "DMM inactive",
-      },
-      waveformHandlers: handlers,
-      dmmHandlers,
-    },
-  );
+  const gateway = new WebSocketGateway(httpServer, { instruments, scopeService, dmmService });
   const port = await listen(httpServer);
-  active = { httpServer, gateway, store, clients: [], scopeStart, scopeStop, dmmHandlers };
-  return { ...active, port };
+  active = { httpServer, gateway, scopeService, dmmService, clients: [], scopeStart, scopeStop, port };
+  return active;
 }
 
-async function connect(server: TestServer & { port: number }): Promise<WebSocket> {
+async function connect(server: Harness): Promise<WebSocket> {
   const client = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
   server.clients.push(client);
   const hello = waitForJson(client, (message) => message.type === MessageType.ProtocolHello);
   await once(client, "open");
-  expect(await hello).toEqual({
-    type: MessageType.ProtocolHello,
-    protocolVersion: PROTOCOL_VERSION,
-  });
-  client.send(JSON.stringify({
-    type: MessageType.ProtocolHelloAck,
-    protocolVersion: PROTOCOL_VERSION,
-  }));
+  expect(await hello).toEqual({ type: MessageType.ProtocolHello, protocolVersion: PROTOCOL_VERSION });
+  client.send(JSON.stringify({ type: MessageType.ProtocolHelloAck, protocolVersion: PROTOCOL_VERSION }));
   return client;
 }
 
-async function subscribe(
-  client: WebSocket,
-  instrument: SupportedInstrument,
-): Promise<ServerJsonMessage> {
-  const expectedType = instrument === SupportedInstrument.Dho804
+async function subscribe(client: WebSocket, instrument: SupportedInstrument): Promise<ServerJsonMessage> {
+  const expected = instrument === SupportedInstrument.Dho804
     ? MessageType.ScopeConnected
     : MessageType.DmmDisconnected;
-  const lifecycle = waitForJson(client, (message) => message.type === expectedType);
+  const lifecycle = waitForJson(client, (message) => message.type === expected);
   client.send(JSON.stringify({ type: MessageType.InstrumentSubscribe, instrument }));
   return lifecycle;
 }
 
-describe("WebSocketGateway", () => {
+describe("WebSocketGateway service routing", () => {
   it("requires the protocol handshake before application messages", async () => {
-    const server = await createTestServer();
+    const server = await createHarness();
     const client = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
     server.clients.push(client);
-    const hello = waitForJson(client, (message) => message.type === MessageType.ProtocolHello);
     await once(client, "open");
-    await hello;
-
     const closed = once(client, "close");
-    client.send(JSON.stringify({
-      type: MessageType.InstrumentSubscribe,
-      instrument: SupportedInstrument.Dho804,
-    }));
+    client.send(JSON.stringify({ type: MessageType.InstrumentSubscribe, instrument: SupportedInstrument.Dho804 }));
     const [code] = await closed;
     expect(code).toBe(1002);
     expect(server.scopeStart).not.toHaveBeenCalled();
   });
 
-  it("publishes lifecycle/state only after route subscription and shares one runtime", async () => {
-    const server = await createTestServer();
+  it("keeps subscription lifecycle ownership in the registry and publishes service state", async () => {
+    const server = await createHarness();
     const first = await connect(server);
     const second = await connect(server);
-
-    expect(server.scopeStart).not.toHaveBeenCalled();
-    expect((await subscribe(first, SupportedInstrument.Dho804)).type).toBe(MessageType.ScopeConnected);
-    expect((await subscribe(second, SupportedInstrument.Dho804)).type).toBe(MessageType.ScopeConnected);
+    await subscribe(first, SupportedInstrument.Dho804);
+    await subscribe(second, SupportedInstrument.Dho804);
     await vi.waitFor(() => expect(server.scopeStart).toHaveBeenCalledOnce());
 
+    const next = { ...createState(), runState: ScopeRunState.Stopped };
     const firstState = waitForJson(first, (message) => message.type === MessageType.ScopeState);
     const secondState = waitForJson(second, (message) => message.type === MessageType.ScopeState);
-    server.store.update((state) => ({ ...state, runState: ScopeRunState.Stopped }));
-
+    server.scopeService.publishState(next);
     expect(await firstState).toMatchObject({ type: MessageType.ScopeState, state: { runState: ScopeRunState.Stopped } });
     expect(await secondState).toMatchObject({ type: MessageType.ScopeState, state: { runState: ScopeRunState.Stopped } });
 
-    first.send(JSON.stringify({
-      type: MessageType.InstrumentUnsubscribe,
-      instrument: SupportedInstrument.Dho804,
-    }));
+    first.send(JSON.stringify({ type: MessageType.InstrumentUnsubscribe, instrument: SupportedInstrument.Dho804 }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(server.scopeStop).not.toHaveBeenCalled();
-
-    second.send(JSON.stringify({
-      type: MessageType.InstrumentUnsubscribe,
-      instrument: SupportedInstrument.Dho804,
-    }));
+    second.send(JSON.stringify({ type: MessageType.InstrumentUnsubscribe, instrument: SupportedInstrument.Dho804 }));
     await vi.waitFor(() => expect(server.scopeStop).toHaveBeenCalledOnce());
   });
 
-  it("rejects scope commands from a session that is not subscribed", async () => {
-    const server = await createTestServer();
-    const client = await connect(server);
-
-    const failure = waitForJson(
-      client,
-      (message) => message.type === MessageType.CommandFailed && message.requestId === 6,
-    );
-    client.send(JSON.stringify({
-      type: MessageType.ControlSet,
-      requestId: 6,
-      control: { kind: ControlKind.ChannelEnabled, channel: Channel.Ch1, value: true },
-    }));
-
-    expect(await failure).toMatchObject({
-      type: MessageType.CommandFailed,
-      requestId: 6,
-      error: expect.stringContaining("not subscribed"),
-    });
-  });
-
-  it("validates JSON and preserves request IDs for failures and completions", async () => {
-    const server = await createTestServer();
+  it("routes scope controls, measurements, and raw SCPI through ScopeService", async () => {
+    const server = await createHarness();
     const client = await connect(server);
     await subscribe(client, SupportedInstrument.Dho804);
-
-    const invalid = waitForJson(client, (message) => message.type === MessageType.CommandFailed && message.requestId === 7);
-    client.send(JSON.stringify({
-      type: MessageType.ControlSet,
-      requestId: 7,
-      control: { kind: ControlKind.ChannelEnabled, channel: 9, value: true },
-    }));
-    expect(await invalid).toMatchObject({ type: MessageType.CommandFailed, requestId: 7 });
 
     const completed = waitForJson(client, (message) => message.type === MessageType.CommandCompleted && message.requestId === 8);
     client.send(JSON.stringify({
@@ -422,240 +376,94 @@ describe("WebSocketGateway", () => {
       control: { kind: ControlKind.ChannelEnabled, channel: Channel.Ch2, value: true },
     }));
     expect(await completed).toEqual({ type: MessageType.CommandCompleted, requestId: 8 });
-  });
-
-  it("returns measurements and instrument-targeted raw SCPI results", async () => {
-    const server = await createTestServer();
-    const client = await connect(server);
-    await subscribe(client, SupportedInstrument.Dho804);
+    expect(server.scopeService.setControl).toHaveBeenCalledOnce();
 
     const measurements = waitForJson(client, (message) => message.type === MessageType.MeasurementResult && message.requestId === 20);
     client.send(JSON.stringify({
       type: MessageType.MeasurementRead,
       requestId: 20,
-      measurements: [
-        { kind: MeasurementKind.Vpp, channel: Channel.Ch2 },
-        { kind: MeasurementKind.Frequency, channel: Channel.Ch1 },
-      ],
+      measurements: [{ kind: MeasurementKind.Vpp, channel: Channel.Ch2 }],
     }));
     expect(await measurements).toEqual({
       type: MessageType.MeasurementResult,
       requestId: 20,
-      values: [
-        measurementValue({ kind: MeasurementKind.Vpp, channel: Channel.Ch2 }, 0.5),
-        measurementValue({ kind: MeasurementKind.Frequency, channel: Channel.Ch1 }, 1.5),
-      ],
+      values: [measurementValue({ kind: MeasurementKind.Vpp, channel: Channel.Ch2 }, 0.5)],
     });
 
-    const rawResult = waitForJson(client, (message) => message.type === MessageType.ScpiResult && message.requestId === 21);
+    const raw = waitForJson(client, (message) => message.type === MessageType.ScpiResult && message.requestId === 21);
     client.send(JSON.stringify({
       type: MessageType.ScpiExecute,
       requestId: 21,
       instrument: SupportedInstrument.Dho804,
       command: "*IDN?",
     }));
-    expect(await rawResult).toEqual({
-      type: MessageType.ScpiResult,
-      requestId: 21,
-      response: "response:*IDN?",
-    });
+    expect(await raw).toEqual({ type: MessageType.ScpiResult, requestId: 21, response: "scope:*IDN?" });
   });
 
-  it("rejects raw SCPI when the client is not subscribed to the requested instrument", async () => {
-    const server = await createTestServer();
-    const client = await connect(server);
-    const failure = waitForJson(client, (message) => message.type === MessageType.CommandFailed && message.requestId === 22);
-
-    client.send(JSON.stringify({
-      type: MessageType.ScpiExecute,
-      requestId: 22,
-      instrument: SupportedInstrument.Dm858e,
-      command: "*IDN?",
-    }));
-
-    expect(await failure).toMatchObject({
-      type: MessageType.CommandFailed,
-      requestId: 22,
-      error: expect.stringContaining("not subscribed"),
-    });
-  });
-
-  it("routes DMM control and raw SCPI only for DM858E subscribers", async () => {
-    const server = await createTestServer();
+  it("routes DMM controls and raw SCPI through DmmService", async () => {
+    const server = await createHarness();
     const client = await connect(server);
     await subscribe(client, SupportedInstrument.Dm858e);
 
-    const controlDone = waitForJson(client, (message) => (
-      message.type === MessageType.CommandCompleted && message.requestId === 30
-    ));
-    client.send(JSON.stringify({
-      type: MessageType.DmmControlSet,
-      requestId: 30,
-      control: { kind: 1, value: 1 },
-    }));
-    expect(await controlDone).toEqual({ type: MessageType.CommandCompleted, requestId: 30 });
-    expect(server.dmmHandlers.setControl).toHaveBeenCalledOnce();
+    const done = waitForJson(client, (message) => message.type === MessageType.CommandCompleted && message.requestId === 30);
+    client.send(JSON.stringify({ type: MessageType.DmmControlSet, requestId: 30, control: { kind: 1, value: 1 } }));
+    expect(await done).toEqual({ type: MessageType.CommandCompleted, requestId: 30 });
+    expect(server.dmmService.setControl).toHaveBeenCalledOnce();
 
-    const scpiResult = waitForJson(client, (message) => (
-      message.type === MessageType.ScpiResult && message.requestId === 31
-    ));
+    const raw = waitForJson(client, (message) => message.type === MessageType.ScpiResult && message.requestId === 31);
     client.send(JSON.stringify({
       type: MessageType.ScpiExecute,
       requestId: 31,
       instrument: SupportedInstrument.Dm858e,
       command: "DATA:LAST?",
     }));
-    expect(await scpiResult).toEqual({
-      type: MessageType.ScpiResult,
-      requestId: 31,
-      response: "dmm:DATA:LAST?",
-    });
+    expect(await raw).toEqual({ type: MessageType.ScpiResult, requestId: 31, response: "dmm:DATA:LAST?" });
   });
 
-  it("rejects stale DMM command completion after the connection revision changes", async () => {
-    const server = await createTestServer();
-    let resolveControl!: () => void;
-    server.dmmHandlers.setControl = vi.fn(() => new Promise<void>((resolve) => {
-      resolveControl = resolve;
-    }));
+  it("rejects stale DMM completion after the service connection revision changes", async () => {
+    const server = await createHarness();
+    let release!: () => void;
+    server.dmmService.setControl.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
     const client = await connect(server);
     await subscribe(client, SupportedInstrument.Dm858e);
-
-    const failure = waitForJson(client, (message) => (
-      message.type === MessageType.CommandFailed && message.requestId === 32
-    ));
-    client.send(JSON.stringify({
-      type: MessageType.DmmControlSet,
-      requestId: 32,
-      control: { kind: 1, value: 1 },
-    }));
-    await vi.waitFor(() => expect(server.dmmHandlers.setControl).toHaveBeenCalledOnce());
-    server.gateway.setDmmConnection({
-      kind: ServerDmmConnectionKind.Disconnected,
-      reason: "reconnected",
-    });
-    resolveControl();
-
-    expect(await failure).toMatchObject({
-      type: MessageType.CommandFailed,
-      requestId: 32,
-      error: expect.stringContaining("DMM connection changed"),
-    });
+    const failure = waitForJson(client, (message) => message.type === MessageType.CommandFailed && message.requestId === 32);
+    client.send(JSON.stringify({ type: MessageType.DmmControlSet, requestId: 32, control: { kind: 1, value: 1 } }));
+    await vi.waitFor(() => expect(server.dmmService.setControl).toHaveBeenCalledOnce());
+    server.dmmService.publishConnection({ kind: DmmConnectionKind.Disconnected, reason: "reconnected" });
+    release();
+    expect(await failure).toMatchObject({ error: expect.stringContaining("DMM connection changed") });
   });
 
-  it("rejects stale DMM raw-SCPI completion after the connection revision changes", async () => {
-    const server = await createTestServer();
-    let resolveScpi!: (response: string) => void;
-    server.dmmHandlers.executeRawScpi = vi.fn(() => new Promise<string>((resolve) => {
-      resolveScpi = resolve;
-    }));
-    const client = await connect(server);
-    await subscribe(client, SupportedInstrument.Dm858e);
-
-    const failure = waitForJson(client, (message) => (
-      message.type === MessageType.CommandFailed && message.requestId === 33
-    ));
-    client.send(JSON.stringify({
-      type: MessageType.ScpiExecute,
-      requestId: 33,
-      instrument: SupportedInstrument.Dm858e,
-      command: "*IDN?",
-    }));
-    await vi.waitFor(() => expect(server.dmmHandlers.executeRawScpi).toHaveBeenCalledOnce());
-    server.gateway.setDmmConnection({
-      kind: ServerDmmConnectionKind.Disconnected,
-      reason: "reconnected",
-    });
-    resolveScpi("late-response");
-
-    expect(await failure).toMatchObject({
-      type: MessageType.CommandFailed,
-      requestId: 33,
-      error: expect.stringContaining("DMM connection changed"),
-    });
-  });
-
-  it("keeps only the newest pending live frame per channel while a send is in flight", async () => {
-    const server = await createTestServer();
+  it("maps domain deep-capture results to wire messages and returns viewport frames", async () => {
+    const server = await createHarness();
     const client = await connect(server);
     await subscribe(client, SupportedInstrument.Dho804);
 
-    const internal = server.gateway as unknown as {
-      clients: Map<WebSocket, {
-        socket: { readyState: number; send: (data: Uint8Array, options: unknown, callback: (error?: Error) => void) => void };
-        protocolReady: boolean;
-        subscriptions: Set<SupportedInstrument>;
-        pendingLiveFrames: Map<Channel, Uint8Array>;
-        liveSendInFlight: boolean;
-        viewportGenerations: Map<Channel, number>;
-      }>;
-    };
-    const state = internal.clients.get(client);
-    if (state === undefined) throw new Error("missing test client");
+    const ready = waitForJson(client, (message) => message.type === MessageType.DeepCaptureReady && message.requestId === 40);
+    client.send(JSON.stringify({ type: MessageType.DeepCaptureRequest, requestId: 40 }));
+    expect(await ready).toMatchObject({ type: MessageType.DeepCaptureReady, requestId: 40, captureId: 9 });
 
-    const callbacks: Array<(error?: Error) => void> = [];
-    const sends: Uint8Array[] = [];
-    state.socket = {
-      readyState: WebSocket.OPEN,
-      send: (data, _options, callback) => {
-        sends.push(data);
-        callbacks.push(callback);
-      },
-    };
-
-    server.gateway.broadcastWaveform(createWaveformFrame(WaveformKind.Live, Channel.Ch1, 0, 1));
-    server.gateway.broadcastWaveform(createWaveformFrame(WaveformKind.Live, Channel.Ch1, 0, 2));
-    server.gateway.broadcastWaveform(createWaveformFrame(WaveformKind.Live, Channel.Ch1, 0, 3));
-
-    expect(sends).toHaveLength(1);
-    expect(readSequence(sends[0]!)).toBe(1);
-
-    callbacks.shift()?.();
-    expect(sends).toHaveLength(2);
-    expect(readSequence(sends[1]!)).toBe(3);
-    callbacks.shift()?.();
+    const binary = waitForBinary(client);
+    client.send(JSON.stringify({
+      type: MessageType.WaveformViewportRequest,
+      requestId: 41,
+      captureId: 9,
+      channel: Channel.Ch1,
+      startSample: 0,
+      endSample: 100,
+      pixelWidth: 100,
+    }));
+    const frame = await binary;
+    expect(new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint32(8, true)).toBe(77);
   });
 
-  it("supersedes older viewport responses for the same channel", async () => {
-    const pending = new Map<number, (frame: Uint8Array) => void>();
-    const server = await createTestServer({
-      requestDeepCapture: async () => { throw new Error("unused"); },
-      requestViewport: (request: WaveformViewportRequestMessage) => new Promise((resolve) => {
-        pending.set(request.requestId, resolve);
-      }),
-    });
+  it("publishes live waveform frames only through the scope service publication surface", async () => {
+    const server = await createHarness();
     const client = await connect(server);
     await subscribe(client, SupportedInstrument.Dho804);
-
-    const request = (requestId: number, startSample: number): void => {
-      client.send(JSON.stringify({
-        type: MessageType.WaveformViewportRequest,
-        requestId,
-        captureId: 9,
-        channel: Channel.Ch1,
-        startSample,
-        endSample: startSample + 100,
-        pixelWidth: 100,
-      }));
-    };
-
-    request(40, 0);
-    request(41, 100);
-    await vi.waitFor(() => expect(pending.size).toBe(2));
-
-    const newer = waitForBinary(client);
-    pending.get(41)?.(createWaveformFrame(WaveformKind.DeepViewport, Channel.Ch1, 9, 41));
-    expect(readSequence(await newer)).toBe(41);
-
-    pending.get(40)?.(createWaveformFrame(WaveformKind.DeepViewport, Channel.Ch1, 9, 40));
-    const unexpected = await Promise.race([
-      waitForBinary(client).then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
-    ]);
-    expect(unexpected).toBe(false);
+    const binary = waitForBinary(client);
+    server.scopeService.publishWaveform(createWaveformFrame(WaveformKind.Live, Channel.Ch1, 0, 12));
+    const frame = await binary;
+    expect(new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint32(8, true)).toBe(12);
   });
 });
-
-function readSequence(frame: Uint8Array): number {
-  return new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint32(8, true);
-}

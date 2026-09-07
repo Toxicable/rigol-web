@@ -13,10 +13,7 @@ import {
   DmmMeasurementFunction,
   DmmRangeMode,
   type DmmControlChange,
-  type DmmInfo,
   type DmmRange,
-  type DmmReadingSnapshot,
-  type DmmState,
 } from "../../shared/dmm-types.js";
 import { SupportedInstrument } from "../../shared/instrument-types.js";
 import {
@@ -25,7 +22,6 @@ import {
   MeasurementKind,
   TriggerType,
   type MeasurementSpec,
-  type ScopeInfo,
 } from "../../shared/scope-types.js";
 import {
   WAVEFORM_FRAME_VERSION,
@@ -40,68 +36,27 @@ import {
   WaveformKind,
   type ClientMessage,
   type ControlChange,
-  type DeepCaptureReadyMessage,
   type InteractiveControl,
   type NonEmptyArray,
   type ServerJsonMessage,
   type WaveformViewportRequestMessage,
 } from "../../shared/websocket-protocol.js";
+import type { DmmApplicationService } from "../dmm/dmm-service.js";
+import {
+  DmmConnectionKind,
+  ScopeConnectionKind,
+  type DmmConnection,
+  type ScopeConnection,
+} from "../instruments/instrument-connection.js";
 import { InstrumentRegistry } from "../instruments/instrument-registry.js";
-import { ScopeController } from "../scope/scope-controller.js";
-import { ScopeStateStore } from "../scope/scope-state-store.js";
+import type { ScopeApplicationService } from "../scope/scope-service.js";
 
 const MAX_WAVEFORM_BUFFERED_BYTES = 256 * 1024;
 
-export enum ServerScopeConnectionKind {
-  Disconnected = 1,
-  Connected = 2,
-}
-
-export type ServerScopeConnection =
-  | {
-      kind: ServerScopeConnectionKind.Disconnected;
-      reason: string;
-    }
-  | {
-      kind: ServerScopeConnectionKind.Connected;
-      info: ScopeInfo;
-      stateStore: ScopeStateStore;
-      controller: ScopeController;
-    };
-
-export enum ServerDmmConnectionKind {
-  Disconnected = 1,
-  Connected = 2,
-}
-
-export type ServerDmmConnection =
-  | {
-      kind: ServerDmmConnectionKind.Disconnected;
-      reason: string;
-    }
-  | {
-      kind: ServerDmmConnectionKind.Connected;
-      info: DmmInfo;
-      state: DmmState;
-    };
-
-export interface WaveformRequestHandlers {
-  requestDeepCapture(requestId: number): Promise<DeepCaptureReadyMessage>;
-  requestViewport(request: WaveformViewportRequestMessage): Promise<Uint8Array>;
-  pauseLiveWaveform?: () => void | Promise<void>;
-  resumeLiveWaveform?: () => void;
-}
-
-export interface DmmRequestHandlers {
-  setControl(control: DmmControlChange): Promise<void>;
-  executeRawScpi(command: string): Promise<string>;
-}
-
 export interface WebSocketGatewayOptions {
   instruments: InstrumentRegistry;
-  initialDmmConnection: ServerDmmConnection;
-  waveformHandlers: WaveformRequestHandlers;
-  dmmHandlers: DmmRequestHandlers;
+  scopeService: ScopeApplicationService;
+  dmmService: DmmApplicationService;
 }
 
 interface ClientState {
@@ -590,70 +545,78 @@ export class WebSocketGateway {
   private readonly clients = new Map<WebSocket, ClientState>();
   private nextClientId = 1;
   private readonly instruments: InstrumentRegistry;
-  private readonly waveformHandlers: WaveformRequestHandlers;
-  private readonly dmmHandlers: DmmRequestHandlers;
-  private scopeConnection: ServerScopeConnection;
+  private readonly scopeService: ScopeApplicationService;
+  private readonly dmmService: DmmApplicationService;
+  private scopeConnection: ScopeConnection;
   private scopeConnectionRevision = 0;
-  private dmmConnection: ServerDmmConnection;
+  private dmmConnection: DmmConnection;
   private dmmConnectionRevision = 0;
-  private unsubscribeScopeStateStore: (() => void) | undefined;
+  private readonly unsubscribeServices: Array<() => void>;
 
   public constructor(
     server: HttpServer,
-    initialScopeConnection: ServerScopeConnection,
     options: WebSocketGatewayOptions,
   ) {
-    this.scopeConnection = initialScopeConnection;
-    this.dmmConnection = options.initialDmmConnection;
     this.instruments = options.instruments;
-    this.waveformHandlers = options.waveformHandlers;
-    this.dmmHandlers = options.dmmHandlers;
+    this.scopeService = options.scopeService;
+    this.dmmService = options.dmmService;
+    this.scopeConnection = this.scopeService.getConnection();
+    this.dmmConnection = this.dmmService.getConnection();
+    this.unsubscribeServices = [
+      this.scopeService.subscribeConnection((connection) => {
+        this.scopeConnection = connection;
+        this.scopeConnectionRevision += 1;
+        this.broadcastJsonToInstrument(
+          SupportedInstrument.Dho804,
+          this.scopeLifecycleMessage(connection),
+        );
+      }),
+      this.scopeService.subscribeState((state) => {
+        if (this.scopeConnection.kind === ScopeConnectionKind.Connected) {
+          this.scopeConnection = { ...this.scopeConnection, state };
+        }
+        this.broadcastJsonToInstrument(SupportedInstrument.Dho804, {
+          type: MessageType.ScopeState,
+          state,
+        });
+      }),
+      this.scopeService.subscribeWaveform((frame) => this.broadcastWaveform(frame)),
+      this.dmmService.subscribeConnection((connection) => {
+        this.dmmConnection = connection;
+        this.dmmConnectionRevision += 1;
+        this.broadcastJsonToInstrument(
+          SupportedInstrument.Dm858e,
+          this.dmmLifecycleMessage(connection),
+        );
+      }),
+      this.dmmService.subscribeState((state) => {
+        if (this.dmmConnection.kind === DmmConnectionKind.Connected) {
+          this.dmmConnection = { ...this.dmmConnection, state };
+        }
+        this.broadcastJsonToInstrument(SupportedInstrument.Dm858e, {
+          type: MessageType.DmmState,
+          state,
+        });
+      }),
+      this.dmmService.subscribeSnapshot((snapshot) => {
+        this.broadcastJsonToInstrument(SupportedInstrument.Dm858e, {
+          type: MessageType.DmmSnapshot,
+          snapshot,
+        });
+      }),
+    ];
+
     this.webSocketServer = new WebSocketServer({
       server,
       path: "/ws",
       perMessageDeflate: false,
     });
-
-    this.attachScopeStateSubscription(initialScopeConnection);
     this.webSocketServer.on("connection", (socket) => {
       this.acceptClient(socket);
     });
   }
 
-  public setScopeConnection(connection: ServerScopeConnection): void {
-    this.unsubscribeScopeStateStore?.();
-    this.unsubscribeScopeStateStore = undefined;
-    this.scopeConnection = connection;
-    this.scopeConnectionRevision += 1;
-    this.attachScopeStateSubscription(connection);
-    this.broadcastJsonToInstrument(SupportedInstrument.Dho804, this.scopeLifecycleMessage(connection));
-  }
-
-  public setDmmConnection(connection: ServerDmmConnection): void {
-    this.dmmConnection = connection;
-    this.dmmConnectionRevision += 1;
-    this.broadcastJsonToInstrument(SupportedInstrument.Dm858e, this.dmmLifecycleMessage(connection));
-  }
-
-  public publishDmmState(state: DmmState): void {
-    if (this.dmmConnection.kind !== ServerDmmConnectionKind.Connected) {
-      return;
-    }
-    this.dmmConnection = { ...this.dmmConnection, state };
-    this.broadcastJsonToInstrument(SupportedInstrument.Dm858e, {
-      type: MessageType.DmmState,
-      state,
-    });
-  }
-
-  public broadcastDmmSnapshot(snapshot: DmmReadingSnapshot): void {
-    this.broadcastJsonToInstrument(SupportedInstrument.Dm858e, {
-      type: MessageType.DmmSnapshot,
-      snapshot,
-    });
-  }
-
-  public broadcastWaveform(frame: Uint8Array): void {
+  private broadcastWaveform(frame: Uint8Array): void {
     const header = readWaveformHeader(frame);
 
     if (header.kind !== WaveformKind.Live || header.captureId !== 0) {
@@ -668,8 +631,9 @@ export class WebSocketGateway {
   }
 
   public async close(): Promise<void> {
-    this.unsubscribeScopeStateStore?.();
-    this.unsubscribeScopeStateStore = undefined;
+    for (const unsubscribe of this.unsubscribeServices) {
+      unsubscribe();
+    }
 
     await Promise.all(
       [...this.clients.values()].map((client) => this.instruments.releaseSession(client)),
@@ -687,19 +651,6 @@ export class WebSocketGateway {
         }
 
         reject(error);
-      });
-    });
-  }
-
-  private attachScopeStateSubscription(connection: ServerScopeConnection): void {
-    if (connection.kind !== ServerScopeConnectionKind.Connected) {
-      return;
-    }
-
-    this.unsubscribeScopeStateStore = connection.stateStore.subscribe((state) => {
-      this.broadcastJsonToInstrument(SupportedInstrument.Dho804, {
-        type: MessageType.ScopeState,
-        state,
       });
     });
   }
@@ -819,12 +770,12 @@ export class WebSocketGateway {
           return;
         case MessageType.ControlSet: {
           this.requireSubscribed(client, SupportedInstrument.Dho804);
-          const { controller, revision } = this.connectedScopeController();
+          const revision = this.connectedScopeRevision();
           const pausesLive =
             message.control.kind === ControlKind.HorizontalScale ||
             message.control.kind === ControlKind.HorizontalPosition;
           if (pausesLive) {
-            await this.waveformHandlers.pauseLiveWaveform?.();
+            await this.scopeService.pauseLiveWaveform();
           }
           console.info("Scope control requested", {
             kind: message.control.kind,
@@ -833,22 +784,22 @@ export class WebSocketGateway {
             pausesLive,
           });
           try {
-            await controller.setControl(message.control);
+            await this.scopeService.setControl(message.control);
             this.requireScopeConnectionRevision(revision);
             this.sendCompleted(client, message.requestId);
           } finally {
             if (pausesLive) {
-              this.waveformHandlers.resumeLiveWaveform?.();
+              this.scopeService.resumeLiveWaveform();
             }
           }
           return;
         }
         case MessageType.InteractionUpdate: {
           this.requireSubscribed(client, SupportedInstrument.Dho804);
-          const { controller } = this.connectedScopeController();
-          await this.waveformHandlers.pauseLiveWaveform?.();
+          this.connectedScopeRevision();
+          await this.scopeService.pauseLiveWaveform();
           try {
-            await controller.updateInteraction(message.control);
+            await this.scopeService.updateInteraction(message.control);
           } catch (error) {
             console.error("Interactive scope update failed", error);
           }
@@ -856,28 +807,28 @@ export class WebSocketGateway {
         }
         case MessageType.InteractionCommit: {
           this.requireSubscribed(client, SupportedInstrument.Dho804);
-          const { controller, revision } = this.connectedScopeController();
+          const revision = this.connectedScopeRevision();
           try {
-            await controller.commitInteraction(message.control);
+            await this.scopeService.commitInteraction(message.control);
             this.requireScopeConnectionRevision(revision);
             this.sendCompleted(client, message.requestId);
           } finally {
-            this.waveformHandlers.resumeLiveWaveform?.();
+            this.scopeService.resumeLiveWaveform();
           }
           return;
         }
         case MessageType.AcquisitionAction: {
           this.requireSubscribed(client, SupportedInstrument.Dho804);
-          const { controller, revision } = this.connectedScopeController();
-          await controller.performAcquisitionAction(message.action);
+          const revision = this.connectedScopeRevision();
+          await this.scopeService.performAcquisitionAction(message.action);
           this.requireScopeConnectionRevision(revision);
           this.sendCompleted(client, message.requestId);
           return;
         }
         case MessageType.MeasurementRead: {
           this.requireSubscribed(client, SupportedInstrument.Dho804);
-          const { controller, revision } = this.connectedScopeController();
-          const values = await controller.readMeasurements(message.measurements);
+          const revision = this.connectedScopeRevision();
+          const values = await this.scopeService.readMeasurements(message.measurements);
           this.requireScopeConnectionRevision(revision);
           this.sendJson(client, {
             type: MessageType.MeasurementResult,
@@ -888,8 +839,8 @@ export class WebSocketGateway {
         }
         case MessageType.MeasurementSet: {
           this.requireSubscribed(client, SupportedInstrument.Dho804);
-          const { controller, revision } = this.connectedScopeController();
-          await controller.setMeasurements(message.measurements);
+          const revision = this.connectedScopeRevision();
+          await this.scopeService.setMeasurements(message.measurements);
           this.requireScopeConnectionRevision(revision);
           this.sendCompleted(client, message.requestId);
           return;
@@ -898,12 +849,12 @@ export class WebSocketGateway {
           this.requireSubscribed(client, message.instrument);
           let response: string;
           if (message.instrument === SupportedInstrument.Dho804) {
-            const { controller, revision } = this.connectedScopeController();
-            response = await controller.executeRawScpi(message.command);
+            const revision = this.connectedScopeRevision();
+            response = await this.scopeService.executeRawScpi(message.command);
             this.requireScopeConnectionRevision(revision);
           } else {
             const revision = this.dmmConnectionRevision;
-            response = await this.dmmHandlers.executeRawScpi(message.command);
+            response = await this.dmmService.executeRawScpi(message.command);
             this.requireDmmConnectionRevision(revision);
           }
           this.sendJson(client, {
@@ -915,14 +866,15 @@ export class WebSocketGateway {
         }
         case MessageType.DeepCaptureRequest: {
           this.requireSubscribed(client, SupportedInstrument.Dho804);
-          const result = await this.waveformHandlers.requestDeepCapture(message.requestId);
-          if (
-            result.type !== MessageType.DeepCaptureReady ||
-            result.requestId !== message.requestId
-          ) {
-            throw new Error("Deep capture handler returned a mismatched result");
-          }
-          this.sendJson(client, result);
+          const revision = this.connectedScopeRevision();
+          const result = await this.scopeService.captureDeep();
+          this.requireScopeConnectionRevision(revision);
+          this.sendJson(client, {
+            type: MessageType.DeepCaptureReady,
+            requestId: message.requestId,
+            captureId: result.captureId,
+            channels: result.channels,
+          });
           return;
         }
         case MessageType.WaveformViewportRequest:
@@ -932,7 +884,7 @@ export class WebSocketGateway {
         case MessageType.DmmControlSet: {
           this.requireSubscribed(client, SupportedInstrument.Dm858e);
           const revision = this.dmmConnectionRevision;
-          await this.dmmHandlers.setControl(message.control);
+          await this.dmmService.setControl(message.control);
           this.requireDmmConnectionRevision(revision);
           this.sendCompleted(client, message.requestId);
           return;
@@ -1002,7 +954,13 @@ export class WebSocketGateway {
   ): Promise<void> {
     const generation = (client.viewportGenerations.get(message.channel) ?? 0) + 1;
     client.viewportGenerations.set(message.channel, generation);
-    const frame = await this.waveformHandlers.requestViewport(message);
+    const frame = await this.scopeService.requestViewport({
+      captureId: message.captureId,
+      channel: message.channel,
+      startSample: message.startSample,
+      endSample: message.endSample,
+      pixelWidth: message.pixelWidth,
+    });
 
     if (client.viewportGenerations.get(message.channel) !== generation) {
       this.sendFailure(
@@ -1034,15 +992,11 @@ export class WebSocketGateway {
     this.sendBinary(client, frame);
   }
 
-  private connectedScopeController(): { controller: ScopeController; revision: number } {
-    if (this.scopeConnection.kind !== ServerScopeConnectionKind.Connected) {
+  private connectedScopeRevision(): number {
+    if (this.scopeConnection.kind !== ScopeConnectionKind.Connected) {
       throw new Error(`Scope disconnected: ${this.scopeConnection.reason}`);
     }
-
-    return {
-      controller: this.scopeConnection.controller,
-      revision: this.scopeConnectionRevision,
-    };
+    return this.scopeConnectionRevision;
   }
 
   private requireScopeConnectionRevision(revision: number): void {
@@ -1057,8 +1011,8 @@ export class WebSocketGateway {
     }
   }
 
-  private scopeLifecycleMessage(connection: ServerScopeConnection): ServerJsonMessage {
-    if (connection.kind === ServerScopeConnectionKind.Disconnected) {
+  private scopeLifecycleMessage(connection: ScopeConnection): ServerJsonMessage {
+    if (connection.kind === ScopeConnectionKind.Disconnected) {
       return {
         type: MessageType.ScopeDisconnected,
         reason: connection.reason,
@@ -1069,12 +1023,12 @@ export class WebSocketGateway {
       type: MessageType.ScopeConnected,
       protocolVersion: PROTOCOL_VERSION,
       info: connection.info,
-      state: connection.stateStore.getState(),
+      state: connection.state,
     };
   }
 
-  private dmmLifecycleMessage(connection: ServerDmmConnection): ServerJsonMessage {
-    if (connection.kind === ServerDmmConnectionKind.Disconnected) {
+  private dmmLifecycleMessage(connection: DmmConnection): ServerJsonMessage {
+    if (connection.kind === DmmConnectionKind.Disconnected) {
       return {
         type: MessageType.DmmDisconnected,
         reason: connection.reason,

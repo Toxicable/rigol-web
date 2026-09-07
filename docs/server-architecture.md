@@ -13,12 +13,14 @@ Browser WebSocket
       |
       v
 WebSocketGateway
-      |
-      v
-InstrumentRegistry
    /            \
   v              v
+ScopeService    DmmService
+  |              |
+  v              v
 ScopeRuntime    DmmRuntime
+   \            /
+   InstrumentRegistry lifecycle
   |              |
 Dho804Driver   Dm858eDriver
    \            /
@@ -109,7 +111,11 @@ Drivers do not maintain independent raw-SCPI query scanners.
 ```text
 WebSocketGateway
    |
+ScopeService
+   |
 ScopeController
+   |
+ScopeRuntime session
    |
 Dho804Driver
    |
@@ -126,14 +132,18 @@ ScpiTransport
 
 `ScopePoller` validates important physical scope state. Live/deep waveform services remain DHO804-specific.
 
-`ScopeRuntime` composes the active DHO804 session and is started/stopped only by `InstrumentRegistry` subscription ownership.
+`ScopeService` is the application boundary for scope controls, acquisition actions, measurements, raw SCPI and waveform/deep-capture operations. It owns per-session `ScopeController` instances and exposes data-only connection/state/waveform publications.
+
+`ScopeRuntime` owns only active DHO804 physical-session composition and reconnection. It does not import WebSocket gateway or wire-result types. It remains started/stopped by `InstrumentRegistry` subscription ownership until the later runtime-lifetime stream.
 
 ## DM858E path
 
 ```text
 WebSocketGateway
    |
-DmmRuntime
+DmmService
+   |
+DmmRuntime session
    |
 Dm858eDriver
    |
@@ -159,12 +169,14 @@ ScpiTransport
 
 The display snapshot is not a sample stream. It carries no sequence/sample identity and must not be used for sample statistics.
 
-`DmmRuntime` owns:
+`DmmService` owns:
 
-- fresh-session connect/identify/start/stop/reconnect lifecycle
 - one logical mutation queue shared by browser controls and raw SCPI
 - authoritative state readback after mutations
 - stale function-dependent control rejection
+- current display snapshot deduplication, invalidation and replay
+
+`DmmRuntime` owns only fresh-session connect/identify/start/stop/reconnect composition plus DMM polling for its active physical session
 
 Range/rate messages carry the function under which the browser created them. Under mutation ownership the runtime compares that expected function with a fresh authoritative state read. The driver then rechecks `SENSe:FUNCtion?` immediately before the write in the same scheduler operation. Stale requests fail rather than being reinterpreted under another function.
 
@@ -305,7 +317,7 @@ Tests live beside the files they exercise.
 - `Dho804Driver` owns DHO804 SCPI semantics.
 - `Dm858eDriver` owns DM858E SCPI semantics.
 - `ScopeController` remains scope-only.
-- `DmmRuntime` owns DMM logical mutation serialization and state reconciliation.
+- `DmmService` owns DMM logical mutation serialization and state reconciliation; `DmmRuntime` owns physical session composition/recovery.
 - `ScpiScheduler` owns serialized transport access for one instrument session.
 - generic raw-SCPI message classification lives in the SCPI layer.
 - waveform services remain DHO804-specific.

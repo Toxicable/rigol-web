@@ -1,20 +1,14 @@
-import type { ScopeInfo } from "../shared/scope-types.js";
+import type { ScopeInfo, ScopeState } from "../shared/scope-types.js";
 import {
-  MessageType,
-  type DeepCaptureReadyMessage,
-  type WaveformViewportRequestMessage,
-} from "../shared/websocket-protocol.js";
+  ScopeConnectionKind,
+  type ScopeConnection,
+} from "./instruments/instrument-connection.js";
 import { ScpiPriority, ScpiScheduler } from "./scpi/scpi-scheduler.js";
 import { ScpiTransport } from "./scpi/scpi-transport.js";
 import { Dho804Driver } from "./scope/dho804-driver.js";
-import { ScopeController } from "./scope/scope-controller.js";
 import { ScopeStateStore } from "./scope/scope-state-store.js";
 import { DeepCaptureService } from "./waveform/deep-capture-service.js";
 import { LiveWaveformService } from "./waveform/live-waveform-service.js";
-import {
-  ServerScopeConnectionKind,
-  type ServerScopeConnection,
-} from "./websocket/websocket-gateway.js";
 
 const DEFAULT_RECONNECT_DELAY_MS = 2_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 3_000;
@@ -24,14 +18,17 @@ interface FailureSignal {
   fail(error: unknown): void;
 }
 
-interface ScopeSession {
-  info: ScopeInfo;
+export interface ScopeRuntimeSession {
+  readonly info: ScopeInfo;
+  readonly driver: Dho804Driver;
+  readonly stateStore: ScopeStateStore;
+  readonly live: LiveWaveformService;
+  readonly deep: DeepCaptureService;
+}
+
+interface OwnedScopeSession extends ScopeRuntimeSession {
   transport: ScpiTransport;
   scheduler: ScpiScheduler;
-  stateStore: ScopeStateStore;
-  controller: ScopeController;
-  live: LiveWaveformService;
-  deep: DeepCaptureService;
   unsubscribeState: () => void;
   failure: FailureSignal;
 }
@@ -39,7 +36,8 @@ interface ScopeSession {
 export interface ScopeRuntimeOptions {
   host: string;
   port: number;
-  publishConnection: (connection: ServerScopeConnection) => void;
+  publishConnection: (connection: ScopeConnection) => void;
+  publishState: (state: ScopeState) => void;
   publishWaveform: (frame: Uint8Array) => void;
   reconnectDelayMs?: number;
   connectTimeoutMs?: number;
@@ -78,10 +76,11 @@ export class ScopeRuntime {
   private readonly reconnectDelayMs: number;
   private readonly connectTimeoutMs: number;
   private readonly publishConnection: ScopeRuntimeOptions["publishConnection"];
+  private readonly publishState: ScopeRuntimeOptions["publishState"];
   private readonly publishWaveform: ScopeRuntimeOptions["publishWaveform"];
   private running = false;
   private loopPromise: Promise<void> | null = null;
-  private session: ScopeSession | null = null;
+  private session: OwnedScopeSession | null = null;
   private initializingTransport: ScpiTransport | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryResolve: (() => void) | null = null;
@@ -108,6 +107,7 @@ export class ScopeRuntime {
     this.reconnectDelayMs = reconnectDelayMs;
     this.connectTimeoutMs = connectTimeoutMs;
     this.publishConnection = options.publishConnection;
+    this.publishState = options.publishState;
     this.publishWaveform = options.publishWaveform;
   }
 
@@ -118,7 +118,7 @@ export class ScopeRuntime {
     this.running = true;
     this.disconnectedReason = "Scope connection pending";
     this.publishConnection({
-      kind: ServerScopeConnectionKind.Disconnected,
+      kind: ScopeConnectionKind.Disconnected,
       reason: this.disconnectedReason,
     });
     this.loopPromise = this.runLoop();
@@ -132,7 +132,7 @@ export class ScopeRuntime {
     this.running = false;
     this.disconnectedReason = "Scope runtime inactive";
     this.publishConnection({
-      kind: ServerScopeConnectionKind.Disconnected,
+      kind: ScopeConnectionKind.Disconnected,
       reason: this.disconnectedReason,
     });
     this.wakeRetryDelay();
@@ -146,42 +146,27 @@ export class ScopeRuntime {
     this.loopPromise = null;
   }
 
-  public async requestDeepCapture(requestId: number): Promise<DeepCaptureReadyMessage> {
-    const session = this.requireSession();
-    const capture = await session.deep.capture();
-    this.requireSameSession(session);
-    return {
-      type: MessageType.DeepCaptureReady,
-      requestId,
-      captureId: capture.captureId,
-      channels: capture.channels,
-    };
+  public getSession(): ScopeRuntimeSession | null {
+    return this.session;
   }
 
-  public async pauseLiveWaveform(): Promise<void> {
-    await this.session?.live.pause();
+  public requireSession(): ScopeRuntimeSession {
+    const session = this.session;
+    if (session === null) {
+      throw new Error(`Scope disconnected: ${this.disconnectedReason}`);
+    }
+    return session;
   }
 
-  public resumeLiveWaveform(): void {
-    this.session?.live.resume();
-  }
-
-  public async requestViewport(request: WaveformViewportRequestMessage): Promise<Uint8Array> {
-    const session = this.requireSession();
-    const frame = session.deep.getViewport({
-      captureId: request.captureId,
-      channel: request.channel,
-      startSample: request.startSample,
-      endSample: request.endSample,
-      pixelWidth: request.pixelWidth,
-    });
-    this.requireSameSession(session);
-    return frame;
+  public requireSameSession(session: ScopeRuntimeSession): void {
+    if (this.session !== session) {
+      throw new Error("Scope session changed while request was in flight");
+    }
   }
 
   private async runLoop(): Promise<void> {
     while (this.running) {
-      let session: ScopeSession | null = null;
+      let session: OwnedScopeSession | null = null;
       try {
         session = await this.createSession();
         if (!this.running) {
@@ -191,10 +176,9 @@ export class ScopeRuntime {
 
         this.session = session;
         this.publishConnection({
-          kind: ServerScopeConnectionKind.Connected,
+          kind: ScopeConnectionKind.Connected,
           info: session.info,
-          stateStore: session.stateStore,
-          controller: session.controller,
+          state: session.stateStore.getState(),
         });
         session.live.start();
 
@@ -234,7 +218,7 @@ export class ScopeRuntime {
     }
   }
 
-  private async createSession(): Promise<ScopeSession> {
+  private async createSession(): Promise<OwnedScopeSession> {
     const transport = new ScpiTransport();
     let scheduler: ScpiScheduler | null = null;
     this.initializingTransport = transport;
@@ -246,7 +230,6 @@ export class ScopeRuntime {
       const info = await driver.identify();
       const initialState = await driver.readScopeState(ScpiPriority.Normal);
       const stateStore = new ScopeStateStore(initialState);
-      const controller = new ScopeController(driver, stateStore);
       const failure = createFailureSignal();
       const live = new LiveWaveformService({
         driver,
@@ -261,16 +244,21 @@ export class ScopeRuntime {
         },
       });
       const deep = new DeepCaptureService(driver);
-      const unsubscribeState = stateStore.subscribe(() => {
+      const unsubscribeState = stateStore.subscribe((state) => {
+        const session = this.session;
+        if (session === null || session.stateStore !== stateStore) {
+          return;
+        }
         live.requestFresh();
+        this.publishState(state);
       });
 
       return {
         info,
         transport,
         scheduler,
+        driver,
         stateStore,
-        controller,
         live,
         deep,
         unsubscribeState,
@@ -308,7 +296,7 @@ export class ScopeRuntime {
     }
   }
 
-  private async disposeSession(session: ScopeSession, reason: Error): Promise<void> {
+  private async disposeSession(session: OwnedScopeSession, reason: Error): Promise<void> {
     session.unsubscribeState();
     session.live.stop();
     session.scheduler.stop(reason);
@@ -316,24 +304,10 @@ export class ScopeRuntime {
     await session.live.waitForIdle();
   }
 
-  private requireSession(): ScopeSession {
-    const session = this.session;
-    if (session === null) {
-      throw new Error(`Scope disconnected: ${this.disconnectedReason}`);
-    }
-    return session;
-  }
-
-  private requireSameSession(session: ScopeSession): void {
-    if (this.session !== session) {
-      throw new Error("Scope session changed while request was in flight");
-    }
-  }
-
   private publishDisconnected(error: unknown): void {
     this.disconnectedReason = errorMessage(error);
     this.publishConnection({
-      kind: ServerScopeConnectionKind.Disconnected,
+      kind: ScopeConnectionKind.Disconnected,
       reason: this.disconnectedReason,
     });
   }
