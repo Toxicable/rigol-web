@@ -18,9 +18,18 @@ jobs:
         with:
           node-version: '22'
       - run: corepack enable
+      - name: Apply final server-test patch
+        run: python .github/stream-a-scope-test-fix.py
       - name: Install
         run: |
           pnpm config set dangerouslyAllowAllBuilds true
           pnpm install --frozen-lockfile
       - name: Server tests
         run: pnpm exec vitest run --root . src/server
+      - name: Commit server-test patch
+        run: |
+          git config user.name "Fabian Wiles"
+          git config user.email "fabianwiles@canva.com"
+          git add src/server/scope-runtime.test.ts
+          git commit -m "Update scope runtime tests for data-only connection state"
+          git push origin HEAD:stream-a-validation-20260907
