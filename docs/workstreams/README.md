@@ -1,5 +1,26 @@
 # Implementation Workstreams
 
+## Current architecture refactor
+
+The current usage-driven architecture refactor is defined in:
+
+- `architecture-refactor.md`
+
+It is the active handoff for post-use architectural work. Its streams are intended to be completed one at a time in order:
+
+```text
+A. Server application-service boundary
+B. Scope power/lifecycle ownership
+C. WebSocket broker + instrument adapters
+D. Server-owned runtime lifetime + publication subscriptions
+E. Browser transport + instrument bindings
+F. Browser domain actions
+G. Acquisition operation model
+H. PPK2 integration
+```
+
+The older workstreams below describe the original DHO804 implementation decomposition and remain useful historical/implementation context, but they are not the active architecture-refactor sequence.
+
 ## Purpose
 
 Rigol Web is split into implementation streams so multiple coding agents/branches can work with minimal overlap.
