@@ -7,7 +7,7 @@ import {
   DmmRangeMode,
   type DmmState,
 } from "../../shared/dmm-types.js";
-import { DmmRuntime } from "./dmm-runtime.js";
+import { DmmService } from "./dmm-service.js";
 import { DmmStateStore } from "./dmm-state-store.js";
 
 interface Deferred {
@@ -67,33 +67,27 @@ function sessionFor(driver: MutationDriver): object {
   };
 }
 
-describe("DmmRuntime mutation session ownership", () => {
-  it("rejects queued control and raw-SCPI work instead of replaying it on a replacement session", async () => {
+describe("DmmService mutation session ownership", () => {
+  it("rejects queued control and raw-SCPI work instead of replaying it on a replacement runtime session", async () => {
     const blocker = createDeferred();
     const entered = createDeferred();
     const firstDriver = new MutationDriver(blocker, entered);
     const secondDriver = new MutationDriver();
-    const runtime = new DmmRuntime({
-      host: "dmm.test",
-      port: 5556,
-      publishConnection: () => {},
-      publishState: () => {},
-      publishSnapshot: () => {},
-    });
-    const internals = runtime as unknown as RuntimeInternals;
+    const service = new DmmService({ host: "dmm.test", port: 5556 });
+    const internals = service.runtime as unknown as RuntimeInternals;
     internals.session = sessionFor(firstDriver);
 
-    const activeMutation = runtime.setControl({
+    const activeMutation = service.setControl({
       kind: DmmControlKind.Function,
       value: DmmMeasurementFunction.Resistance2Wire,
     });
     await entered.promise;
 
-    const queuedControl = runtime.setControl({
+    const queuedControl = service.setControl({
       kind: DmmControlKind.Function,
       value: DmmMeasurementFunction.AcVoltage,
     });
-    const queuedRawScpi = runtime.executeRawScpi("*CLS");
+    const queuedRawScpi = service.executeRawScpi("*CLS");
 
     internals.session = sessionFor(secondDriver);
     blocker.resolve();
