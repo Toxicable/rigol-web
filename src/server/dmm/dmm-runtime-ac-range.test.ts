@@ -15,7 +15,7 @@ import {
 } from "../scpi/scpi-scheduler.js";
 import type { ScpiTransport } from "../scpi/scpi-transport.js";
 import { Dm858eDriver } from "./dm858e-driver.js";
-import { DmmRuntime } from "./dmm-runtime.js";
+import { DmmService } from "./dmm-service.js";
 import { DmmStateStore } from "./dmm-state-store.js";
 
 interface PhysicalRange {
@@ -100,42 +100,41 @@ interface RuntimeInternals {
     driver: Dm858eDriver;
     stateStore: DmmStateStore;
     transport: Pick<ScpiTransport, "isUsable">;
+    failure: { fail(error: unknown): void };
   } | null;
 }
 
-function runtimeFor(transport: AcRangeRaceTransport, initialState: DmmState): {
-  runtime: DmmRuntime;
+function serviceFor(transport: AcRangeRaceTransport, initialState: DmmState): {
+  service: DmmService;
   stateStore: DmmStateStore;
 } {
-  const runtime = new DmmRuntime({
+  const service = new DmmService({
     host: "dmm.test",
     port: 5556,
-    publishConnection: () => {},
-    publishState: () => {},
-    publishSnapshot: () => {},
   });
   const stateStore = new DmmStateStore(initialState);
-  (runtime as unknown as RuntimeInternals).session = {
+  (service.runtime as unknown as RuntimeInternals).session = {
     driver: driverFor(transport),
     stateStore,
     transport,
+    failure: { fail: () => {} },
   };
-  return { runtime, stateStore };
+  return { service, stateStore };
 }
 
-describe("DmmRuntime AC rate range races", () => {
+describe("DmmService AC rate range races", () => {
   it("preserves a front-panel fixed 10 V to fixed 100 V change", async () => {
     const transport = new AcRangeRaceTransport(
       { auto: false, value: 10 },
       { auto: false, value: 100 },
     );
-    const { runtime, stateStore } = runtimeFor(transport, {
+    const { service, stateStore } = serviceFor(transport, {
       function: DmmMeasurementFunction.AcVoltage,
       range: { mode: DmmRangeMode.Fixed, value: 10 },
       acquisitionRate: DmmAcquisitionRate.Slow,
     });
 
-    await runtime.setControl({
+    await service.setControl({
       kind: DmmControlKind.AcquisitionRate,
       function: DmmMeasurementFunction.AcVoltage,
       value: DmmAcquisitionRate.Fast,
@@ -156,13 +155,13 @@ describe("DmmRuntime AC rate range races", () => {
       { auto: true, value: 10 },
       { auto: false, value: 100 },
     );
-    const { runtime, stateStore } = runtimeFor(transport, {
+    const { service, stateStore } = serviceFor(transport, {
       function: DmmMeasurementFunction.AcVoltage,
       range: { mode: DmmRangeMode.Auto },
       acquisitionRate: DmmAcquisitionRate.Slow,
     });
 
-    await runtime.setControl({
+    await service.setControl({
       kind: DmmControlKind.AcquisitionRate,
       function: DmmMeasurementFunction.AcVoltage,
       value: DmmAcquisitionRate.Fast,
