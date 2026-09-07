@@ -19,7 +19,9 @@ jobs:
           node-version: '22'
       - run: corepack enable
       - name: Apply Stream A
-        run: python .github/stream-a-apply.py
+        run: |
+          python .github/stream-a-apply.py
+          python .github/stream-a-fix.py
       - name: Install
         run: |
           pnpm config set dangerouslyAllowAllBuilds true
