@@ -39,3 +39,5 @@ jobs:
           git add src docs
           git commit -m "Implement Stream A server application-service boundary"
           git push origin HEAD:stream-a-validation-20260907
+
+# Triggered through the contents API so GitHub Actions receives a push event.
