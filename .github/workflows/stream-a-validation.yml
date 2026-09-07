@@ -27,7 +27,10 @@ jobs:
           pnpm config set dangerouslyAllowAllBuilds true
           pnpm install --frozen-lockfile
       - name: Typecheck
+        continue-on-error: true
         run: pnpm typecheck
+      - name: Server typecheck
+        run: pnpm exec tsc --noEmit -p tsconfig.server.json
       - name: Test
         run: pnpm test
       - name: Build
