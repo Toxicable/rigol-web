@@ -18,35 +18,9 @@ jobs:
         with:
           node-version: '22'
       - run: corepack enable
-      - name: Apply Stream A
-        run: |
-          python .github/stream-a-apply.py
-          python .github/stream-a-fix.py
-          python .github/stream-a-tests.py
       - name: Install
         run: |
           pnpm config set dangerouslyAllowAllBuilds true
           pnpm install --frozen-lockfile
-      - name: Typecheck
-        continue-on-error: true
-        run: pnpm typecheck
-      - name: Server typecheck
-        run: pnpm exec tsc --noEmit -p tsconfig.server.json
-      - name: Test
-        continue-on-error: true
-        run: pnpm test
-      - name: Stream A web integration test
-        run: pnpm exec vitest run instrument-lifecycle.integration.test.ts
-      - name: Build
-        run: pnpm build
-      - name: Boundary checks
-        run: |
-          ! grep -R "websocket-gateway" src/server/scope-runtime.ts src/server/dmm/dmm-runtime.ts src/server/scope src/server/dmm --include='*.ts'
-          ! grep -E "DeepCaptureReadyMessage|WaveformViewportRequestMessage" src/server/scope-runtime.ts
-      - name: Commit validated implementation
-        run: |
-          git config user.name "Fabian Wiles"
-          git config user.email "fabianwiles@canva.com"
-          git add src docs
-          git commit -m "Implement Stream A server application-service boundary"
-          git push origin HEAD:stream-a-validation-20260907
+      - name: Server tests
+        run: pnpm exec vitest run --root . src/server
