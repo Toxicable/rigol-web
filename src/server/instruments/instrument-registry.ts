@@ -9,12 +9,12 @@ export interface InstrumentEndpoint {
 export interface InstrumentRuntime {
   start(): void | Promise<void>;
   stop(): void | Promise<void>;
-  subscriberAdded?(): void | Promise<void>;
 }
 
 interface InstrumentEntry {
   endpoint: InstrumentEndpoint;
   runtime: InstrumentRuntime;
+  subscriberAdded: (() => void | Promise<void>) | undefined;
   subscribers: Set<object>;
   running: boolean;
   suspended: boolean;
@@ -25,6 +25,7 @@ interface InstrumentEntry {
 export interface InstrumentRegistration {
   endpoint: InstrumentEndpoint;
   runtime: InstrumentRuntime;
+  subscriberAdded?: () => void | Promise<void>;
 }
 
 export interface InstrumentRegistrations {
@@ -95,7 +96,7 @@ export class InstrumentRegistry {
     try {
       await this.queueReconcile(instrument, entry);
       if (entry.subscribers.has(session)) {
-        await entry.runtime.subscriberAdded?.();
+        await entry.subscriberAdded?.();
       }
     } catch (error) {
       if (entry.subscribers.delete(session)) {
@@ -170,6 +171,7 @@ export class InstrumentRegistry {
     return {
       endpoint: registration.endpoint,
       runtime: registration.runtime,
+      subscriberAdded: registration.subscriberAdded,
       subscribers: new Set(),
       running: false,
       suspended: false,

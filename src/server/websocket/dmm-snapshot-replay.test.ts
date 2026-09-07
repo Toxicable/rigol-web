@@ -25,8 +25,8 @@ import {
 } from "../../shared/websocket-protocol.js";
 import { InstrumentRegistry } from "../instruments/instrument-registry.js";
 import {
-  ServerDmmConnectionKind,
-  ServerScopeConnectionKind,
+  DmmConnectionKind,
+  ScopeConnectionKind,
   WebSocketGateway,
 } from "./websocket-gateway.js";
 
@@ -91,7 +91,7 @@ async function connect(port: number): Promise<WebSocket> {
 class ReplayDmmRuntime {
   public readonly start = vi.fn(async () => {
     this.gateway().setDmmConnection({
-      kind: ServerDmmConnectionKind.Connected,
+      kind: DmmConnectionKind.Connected,
       info: dmmInfo,
       state: this.currentState,
     });
@@ -100,7 +100,7 @@ class ReplayDmmRuntime {
   public readonly stop = vi.fn(async () => {
     this.currentSnapshot = null;
     this.gateway().setDmmConnection({
-      kind: ServerDmmConnectionKind.Disconnected,
+      kind: DmmConnectionKind.Disconnected,
       reason: "DMM inactive",
     });
   });
@@ -157,11 +157,11 @@ function createRegistry(runtime: ReplayDmmRuntime): InstrumentRegistry {
 function createGateway(server: HttpServer, registry: InstrumentRegistry): WebSocketGateway {
   return new WebSocketGateway(
     server,
-    { kind: ServerScopeConnectionKind.Disconnected, reason: "scope unused" },
+    { kind: ScopeConnectionKind.Disconnected, reason: "scope unused" },
     {
       instruments: registry,
       initialDmmConnection: {
-        kind: ServerDmmConnectionKind.Disconnected,
+        kind: DmmConnectionKind.Disconnected,
         reason: "DMM inactive",
       },
       waveformHandlers: {

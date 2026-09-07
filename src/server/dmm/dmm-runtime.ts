@@ -1,20 +1,14 @@
-import {
-  DmmControlKind,
-  DmmReadingKind,
-  DmmReadingUnavailableReason,
-  dmmUnitForFunction,
-  type DmmControlChange,
-  type DmmInfo,
-  type DmmMeasurementFunction,
-  type DmmReadingSnapshot,
-  type DmmState,
+import type {
+  DmmInfo,
+  DmmReadingSnapshot,
+  DmmState,
 } from "../../shared/dmm-types.js";
-import { ScpiPriority, ScpiScheduler } from "../scpi/scpi-scheduler.js";
-import { ScpiTransport } from "../scpi/scpi-transport.js";
 import {
-  ServerDmmConnectionKind,
-  type ServerDmmConnection,
-} from "../websocket/websocket-gateway.js";
+  DmmConnectionKind,
+  type DmmConnection,
+} from "../instruments/instrument-connection.js";
+import { ScpiScheduler } from "../scpi/scpi-scheduler.js";
+import { ScpiTransport } from "../scpi/scpi-transport.js";
 import { Dm858eDriver } from "./dm858e-driver.js";
 import { DmmPoller } from "./dmm-poller.js";
 import { DmmStateStore } from "./dmm-state-store.js";
@@ -27,12 +21,15 @@ interface FailureSignal {
   fail(error: unknown): void;
 }
 
-interface DmmSession {
-  info: DmmInfo;
+export interface DmmRuntimeSession {
+  readonly info: DmmInfo;
+  readonly driver: Dm858eDriver;
+  readonly stateStore: DmmStateStore;
+}
+
+interface OwnedDmmSession extends DmmRuntimeSession {
   transport: ScpiTransport;
   scheduler: ScpiScheduler;
-  driver: Dm858eDriver;
-  stateStore: DmmStateStore;
   poller: DmmPoller;
   unsubscribeState: () => void;
   failure: FailureSignal;
@@ -41,8 +38,8 @@ interface DmmSession {
 export interface DmmRuntimeOptions {
   host: string;
   port: number;
-  publishConnection: (connection: ServerDmmConnection) => void;
-  publishState: (state: ReturnType<DmmStateStore["getState"]>) => void;
+  publishConnection: (connection: DmmConnection) => void;
+  publishState: (state: DmmState) => void;
   publishSnapshot: (snapshot: DmmReadingSnapshot) => void;
   reconnectDelayMs?: number;
   connectTimeoutMs?: number;
@@ -58,13 +55,11 @@ export class DmmRuntime {
   private readonly publishSnapshot: DmmRuntimeOptions["publishSnapshot"];
   private running = false;
   private loopPromise: Promise<void> | null = null;
-  private session: DmmSession | null = null;
-  private currentSnapshot: DmmReadingSnapshot | null = null;
+  private session: OwnedDmmSession | null = null;
   private initializingTransport: ScpiTransport | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryResolve: (() => void) | null = null;
   private disconnectedReason = "DMM runtime inactive";
-  private mutationTail: Promise<void> = Promise.resolve();
 
   public constructor(options: DmmRuntimeOptions) {
     if (options.host.trim().length === 0) {
@@ -98,10 +93,9 @@ export class DmmRuntime {
     }
 
     this.running = true;
-    this.currentSnapshot = null;
     this.disconnectedReason = "DMM connection pending";
     this.publishConnection({
-      kind: ServerDmmConnectionKind.Disconnected,
+      kind: DmmConnectionKind.Disconnected,
       reason: this.disconnectedReason,
     });
     this.loopPromise = this.runLoop();
@@ -113,12 +107,11 @@ export class DmmRuntime {
     }
 
     this.running = false;
-    this.currentSnapshot = null;
     const session = this.session;
     this.session = null;
     this.disconnectedReason = "DMM runtime inactive";
     this.publishConnection({
-      kind: ServerDmmConnectionKind.Disconnected,
+      kind: DmmConnectionKind.Disconnected,
       reason: this.disconnectedReason,
     });
     this.wakeRetryDelay();
@@ -132,93 +125,30 @@ export class DmmRuntime {
     this.loopPromise = null;
   }
 
-  public subscriberAdded(): void {
-    if (this.session === null || this.currentSnapshot === null) {
-      return;
+  public requireSession(): DmmRuntimeSession {
+    const session = this.session;
+    if (session === null) {
+      throw new Error(`DMM disconnected: ${this.disconnectedReason}`);
     }
-    this.publishSnapshot(this.currentSnapshot);
+    return session;
   }
 
-  public async setControl(control: DmmControlChange): Promise<void> {
-    const session = this.requireSession();
-    await this.serializeMutation(session, async () => {
-      try {
-        switch (control.kind) {
-          case DmmControlKind.Function:
-            await session.driver.setFunction(control.value);
-            break;
-          case DmmControlKind.Range: {
-            const current = await session.driver.readDmmState(ScpiPriority.Immediate);
-            this.requireSameSession(session);
-            requireExpectedFunction(current.function, control.function);
-            if (current.range === null) {
-              throw new Error("Current DMM function does not expose a range control");
-            }
-            await session.driver.setRange(control.function, control.value);
-            break;
-          }
-          case DmmControlKind.AcquisitionRate: {
-            const current = await session.driver.readDmmState(ScpiPriority.Immediate);
-            this.requireSameSession(session);
-            requireExpectedFunction(current.function, control.function);
-            if (current.acquisitionRate === null || current.range === null) {
-              throw new Error("Current DMM function does not expose an acquisition-rate control");
-            }
-            await session.driver.setAcquisitionRate(control.function, control.value);
-            break;
-          }
-        }
-
-        this.requireSameSession(session);
-        const state = await session.driver.readDmmState(ScpiPriority.Immediate);
-        this.requireSameSession(session);
-        session.stateStore.replaceState(state);
-      } catch (error) {
-        this.failSessionIfTransportLost(session, error);
-        throw error;
-      }
-    });
+  public requireSameSession(session: DmmRuntimeSession): void {
+    if (this.session !== session) {
+      throw new Error("DMM session changed while request was in flight");
+    }
   }
 
-  public async executeRawScpi(command: string): Promise<string> {
-    const session = this.requireSession();
-    return this.serializeMutation(session, async () => {
-      try {
-        const response = await session.driver.executeRawScpi(command);
-        this.requireSameSession(session);
-        const state = await session.driver.readDmmState(ScpiPriority.Immediate);
-        this.requireSameSession(session);
-        session.stateStore.replaceState(state);
-        return response;
-      } catch (error) {
-        this.failSessionIfTransportLost(session, error);
-        throw error;
-      }
-    });
-  }
-
-  private async serializeMutation<T>(
-    session: DmmSession,
-    operation: () => Promise<T>,
-  ): Promise<T> {
-    const previous = this.mutationTail;
-    let release!: () => void;
-    this.mutationTail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-
-    await previous;
-    try {
-      this.requireSameSession(session);
-      return await operation();
-    } finally {
-      release();
+  public failSessionIfTransportLost(session: DmmRuntimeSession, error: unknown): void {
+    const owned = session as OwnedDmmSession;
+    if (!owned.transport.isUsable()) {
+      owned.failure.fail(error);
     }
   }
 
   private async runLoop(): Promise<void> {
     while (this.running) {
-      let session: DmmSession | null = null;
+      let session: OwnedDmmSession | null = null;
       try {
         session = await this.createSession();
         if (!this.running) {
@@ -226,10 +156,9 @@ export class DmmRuntime {
           break;
         }
 
-        this.currentSnapshot = null;
         this.session = session;
         this.publishConnection({
-          kind: ServerDmmConnectionKind.Connected,
+          kind: DmmConnectionKind.Connected,
           info: session.info,
           state: session.stateStore.getState(),
         });
@@ -238,7 +167,6 @@ export class DmmRuntime {
         const failure = await session.failure.promise;
         if (this.session === session) {
           this.session = null;
-          this.currentSnapshot = null;
         }
         if (this.running) {
           this.publishDisconnected(failure);
@@ -252,7 +180,6 @@ export class DmmRuntime {
         if (session !== null) {
           if (this.session === session) {
             this.session = null;
-            this.currentSnapshot = null;
           }
           if (this.running) {
             this.publishDisconnected(error);
@@ -273,7 +200,7 @@ export class DmmRuntime {
     }
   }
 
-  private async createSession(): Promise<DmmSession> {
+  private async createSession(): Promise<OwnedDmmSession> {
     const transport = new ScpiTransport();
     let scheduler: ScpiScheduler | null = null;
     this.initializingTransport = transport;
@@ -289,11 +216,25 @@ export class DmmRuntime {
       const poller = new DmmPoller({
         driver,
         stateStore,
-        publishSnapshot: (snapshot) => this.acceptSnapshot(stateStore, snapshot),
+        publishSnapshot: (snapshot) => {
+          const session = this.session;
+          if (
+            session === null ||
+            session.stateStore !== stateStore ||
+            snapshot.function !== stateStore.getState().function
+          ) {
+            return;
+          }
+          this.publishSnapshot(snapshot);
+        },
         reportError: (error) => failure.fail(error),
       });
       const unsubscribeState = stateStore.subscribe((state) => {
-        this.acceptState(stateStore, state);
+        const session = this.session;
+        if (session === null || session.stateStore !== stateStore) {
+          return;
+        }
+        this.publishState(state);
       });
 
       return {
@@ -317,47 +258,6 @@ export class DmmRuntime {
     }
   }
 
-  private acceptState(stateStore: DmmStateStore, state: DmmState): void {
-    const session = this.session;
-    if (session === null || session.stateStore !== stateStore) {
-      return;
-    }
-
-    let invalidatedSnapshot: DmmReadingSnapshot | null = null;
-    if (this.currentSnapshot !== null) {
-      invalidatedSnapshot = {
-        kind: DmmReadingKind.Unavailable,
-        function: state.function,
-        unit: dmmUnitForFunction(state.function),
-        reason: DmmReadingUnavailableReason.ConfigurationChanged,
-      };
-      this.currentSnapshot = invalidatedSnapshot;
-    }
-
-    this.publishState(state);
-    if (invalidatedSnapshot !== null) {
-      this.publishSnapshot(invalidatedSnapshot);
-    }
-  }
-
-  private acceptSnapshot(
-    stateStore: DmmStateStore,
-    snapshot: DmmReadingSnapshot,
-  ): void {
-    const session = this.session;
-    if (
-      session === null ||
-      session.stateStore !== stateStore ||
-      snapshot.function !== stateStore.getState().function ||
-      sameSnapshot(snapshot, this.currentSnapshot)
-    ) {
-      return;
-    }
-
-    this.currentSnapshot = snapshot;
-    this.publishSnapshot(snapshot);
-  }
-
   private async connectTransport(transport: ScpiTransport): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_resolve, reject) => {
@@ -379,7 +279,7 @@ export class DmmRuntime {
     }
   }
 
-  private async disposeSession(session: DmmSession, reason: Error): Promise<void> {
+  private async disposeSession(session: OwnedDmmSession, reason: Error): Promise<void> {
     session.unsubscribeState();
     session.poller.stop();
     session.scheduler.stop(reason);
@@ -387,31 +287,10 @@ export class DmmRuntime {
     await session.poller.waitForIdle();
   }
 
-  private requireSession(): DmmSession {
-    const session = this.session;
-    if (session === null) {
-      throw new Error(`DMM disconnected: ${this.disconnectedReason}`);
-    }
-    return session;
-  }
-
-  private requireSameSession(session: DmmSession): void {
-    if (this.session !== session) {
-      throw new Error("DMM session changed while request was in flight");
-    }
-  }
-
-  private failSessionIfTransportLost(session: DmmSession, error: unknown): void {
-    if (!session.transport.isUsable()) {
-      session.failure.fail(error);
-    }
-  }
-
   private publishDisconnected(error: unknown): void {
-    this.currentSnapshot = null;
     this.disconnectedReason = errorMessage(error);
     this.publishConnection({
-      kind: ServerDmmConnectionKind.Disconnected,
+      kind: DmmConnectionKind.Disconnected,
       reason: this.disconnectedReason,
     });
   }
@@ -439,42 +318,6 @@ export class DmmRuntime {
     const resolve = this.retryResolve;
     this.retryResolve = null;
     resolve?.();
-  }
-}
-
-function sameSnapshot(
-  left: DmmReadingSnapshot,
-  right: DmmReadingSnapshot | null,
-): boolean {
-  if (
-    right === null ||
-    left.kind !== right.kind ||
-    left.function !== right.function ||
-    left.unit !== right.unit
-  ) {
-    return false;
-  }
-
-  switch (left.kind) {
-    case DmmReadingKind.Value:
-      return (
-        right.kind === DmmReadingKind.Value &&
-        left.value === right.value &&
-        left.resolution === right.resolution
-      );
-    case DmmReadingKind.Overload:
-      return right.kind === DmmReadingKind.Overload;
-    case DmmReadingKind.Unavailable:
-      return right.kind === DmmReadingKind.Unavailable && left.reason === right.reason;
-  }
-}
-
-function requireExpectedFunction(
-  actual: DmmMeasurementFunction,
-  expected: DmmMeasurementFunction,
-): void {
-  if (actual !== expected) {
-    throw new Error("Stale DMM control: measurement function changed before the request was applied");
   }
 }
 

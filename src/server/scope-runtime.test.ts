@@ -11,13 +11,13 @@ import { describe, expect, it } from "vitest";
 import { createHttpRequestHandler } from "./http-handler.js";
 import { ScopeRuntime } from "./scope-runtime.js";
 import {
-  ServerScopeConnectionKind,
-  type ServerScopeConnection,
-} from "./websocket/websocket-gateway.js";
+  ScopeConnectionKind,
+  type ScopeConnection,
+} from "./instruments/instrument-connection.js";
 
 type ConnectedScopeConnection = Extract<
-  ServerScopeConnection,
-  { kind: ServerScopeConnectionKind.Connected }
+  ScopeConnection,
+  { kind: ScopeConnectionKind.Connected }
 >;
 
 interface FakeConnection {
@@ -279,7 +279,7 @@ describe("ScopeRuntime integration", () => {
       reconnectDelayMs: 20,
       connectTimeoutMs: 500,
       publishConnection: (connection) => {
-        if (connection.kind === ServerScopeConnectionKind.Connected) {
+        if (connection.kind === ScopeConnectionKind.Connected) {
           connected.push(connection);
         }
       },
@@ -310,7 +310,7 @@ describe("ScopeRuntime integration", () => {
       reconnectDelayMs: 20,
       connectTimeoutMs: 500,
       publishConnection: (connection) => {
-        if (connection.kind === ServerScopeConnectionKind.Connected) {
+        if (connection.kind === ScopeConnectionKind.Connected) {
           connected.push(connection);
         }
       },

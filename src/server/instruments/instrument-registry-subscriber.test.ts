@@ -15,7 +15,8 @@ describe("InstrumentRegistry subscriber lifecycle", () => {
       },
       dm858e: {
         endpoint: { host: "dmm.test", port: 5556 },
-        runtime: { start, stop, subscriberAdded },
+        runtime: { start, stop },
+        subscriberAdded,
       },
     });
     const first = {};

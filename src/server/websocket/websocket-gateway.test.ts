@@ -45,8 +45,8 @@ import {
 } from "../scope/scope-controller.js";
 import { ScopeStateStore } from "../scope/scope-state-store.js";
 import {
-  ServerDmmConnectionKind,
-  ServerScopeConnectionKind,
+  DmmConnectionKind,
+  ScopeConnectionKind,
   WebSocketGateway,
   type DmmRequestHandlers,
   type WaveformRequestHandlers,
@@ -283,7 +283,7 @@ async function createTestServer(
   const gateway = new WebSocketGateway(
     httpServer,
     {
-      kind: ServerScopeConnectionKind.Connected,
+      kind: ScopeConnectionKind.Connected,
       info: scopeInfo,
       stateStore: store,
       controller,
@@ -291,7 +291,7 @@ async function createTestServer(
     {
       instruments,
       initialDmmConnection: {
-        kind: ServerDmmConnectionKind.Disconnected,
+        kind: DmmConnectionKind.Disconnected,
         reason: "DMM inactive",
       },
       waveformHandlers: handlers,
@@ -531,7 +531,7 @@ describe("WebSocketGateway", () => {
     }));
     await vi.waitFor(() => expect(server.dmmHandlers.setControl).toHaveBeenCalledOnce());
     server.gateway.setDmmConnection({
-      kind: ServerDmmConnectionKind.Disconnected,
+      kind: DmmConnectionKind.Disconnected,
       reason: "reconnected",
     });
     resolveControl();
@@ -563,7 +563,7 @@ describe("WebSocketGateway", () => {
     }));
     await vi.waitFor(() => expect(server.dmmHandlers.executeRawScpi).toHaveBeenCalledOnce());
     server.gateway.setDmmConnection({
-      kind: ServerDmmConnectionKind.Disconnected,
+      kind: DmmConnectionKind.Disconnected,
       reason: "reconnected",
     });
     resolveScpi("late-response");

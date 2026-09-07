@@ -113,6 +113,9 @@ The DHO804 path remains concrete:
 WebSocketGateway
    |
    v
+ScopeService
+   |
+   v
 ScopeController
    |
    v
@@ -140,7 +143,10 @@ The DM858E backend uses the same transport/scheduler foundation but separate met
 WebSocketGateway
    |
    v
-Dmm runtime/controller boundary
+DmmService
+   |
+   v
+DmmRuntime
    |
    v
 Dm858eDriver
