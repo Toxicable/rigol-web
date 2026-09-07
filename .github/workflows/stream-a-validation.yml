@@ -1,0 +1,41 @@
+name: Stream A validation
+
+on:
+  push:
+    branches:
+      - stream-a-validation-20260907
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    if: github.event.head_commit.message == 'Stream A validation bootstrap'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: corepack enable
+      - name: Apply Stream A
+        run: python .github/stream-a-apply.py
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Test
+        run: pnpm test
+      - name: Build
+        run: pnpm build
+      - name: Boundary checks
+        run: |
+          ! grep -R "websocket-gateway" src/server/scope-runtime.ts src/server/dmm/dmm-runtime.ts src/server/scope src/server/dmm --include='*.ts'
+          ! grep -E "DeepCaptureReadyMessage|WaveformViewportRequestMessage" src/server/scope-runtime.ts
+      - name: Commit validated implementation
+        run: |
+          git config user.name "Fabian Wiles"
+          git config user.email "fabianwiles@canva.com"
+          git add src docs
+          git commit -m "Implement Stream A server application-service boundary"
+          git push origin HEAD:stream-a-validation-20260907
