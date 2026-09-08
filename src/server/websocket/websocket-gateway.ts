@@ -13,11 +13,7 @@ import {
   PROTOCOL_VERSION,
   type ServerJsonMessage,
 } from "../../shared/websocket-protocol.js";
-import type { DmmApplicationService } from "../dmm/dmm-service.js";
 import { InstrumentRegistry } from "../instruments/instrument-registry.js";
-import type { ScopeApplicationService } from "../scope/scope-service.js";
-import { DmmWebSocketAdapter } from "./dmm-websocket-adapter.js";
-import { ScopeWebSocketAdapter } from "./scope-websocket-adapter.js";
 import type {
   BinarySendCallback,
   WebSocketAdapterHost,
@@ -35,8 +31,8 @@ const MAX_BUFFERED_BYTES = 256 * 1024;
 
 export interface WebSocketGatewayOptions {
   instruments: InstrumentRegistry;
-  scopeService: ScopeApplicationService;
-  dmmService: DmmApplicationService;
+  scopeAdapter: WebSocketInstrumentAdapter;
+  dmmAdapter: WebSocketInstrumentAdapter;
 }
 
 interface ClientState extends WebSocketSession {
@@ -105,7 +101,8 @@ function errorMessage(error: unknown): string {
  * Common WebSocket session/protocol broker.
  *
  * Instrument command validation, service dispatch, lifecycle projection and
- * waveform behaviour live in the explicit scope/DMM adapters.
+ * waveform behaviour live in the explicit scope/DMM adapters supplied by the
+ * server composition root.
  */
 export class WebSocketGateway implements WebSocketAdapterHost {
   private readonly webSocketServer: WebSocketServer;
@@ -123,16 +120,23 @@ export class WebSocketGateway implements WebSocketAdapterHost {
     options: WebSocketGatewayOptions,
   ) {
     this.instruments = options.instruments;
-
-    const scopeAdapter = new ScopeWebSocketAdapter(options.scopeService);
-    const dmmAdapter = new DmmWebSocketAdapter(options.dmmService);
-    this.adapters = [scopeAdapter, dmmAdapter];
+    requireAdapterInstrument(
+      options.scopeAdapter,
+      SupportedInstrument.Dho804,
+      "scopeAdapter",
+    );
+    requireAdapterInstrument(
+      options.dmmAdapter,
+      SupportedInstrument.Dm858e,
+      "dmmAdapter",
+    );
+    this.adapters = [options.scopeAdapter, options.dmmAdapter];
     this.adaptersByInstrument = new Map<
       SupportedInstrument,
       WebSocketInstrumentAdapter
     >([
-      [scopeAdapter.instrument, scopeAdapter],
-      [dmmAdapter.instrument, dmmAdapter],
+      [SupportedInstrument.Dho804, options.scopeAdapter],
+      [SupportedInstrument.Dm858e, options.dmmAdapter],
     ]);
 
     for (const adapter of this.adapters) {
@@ -485,5 +489,15 @@ export class WebSocketGateway implements WebSocketAdapterHost {
 
   private client(session: WebSocketSession): ClientState {
     return session as ClientState;
+  }
+}
+
+function requireAdapterInstrument(
+  adapter: WebSocketInstrumentAdapter,
+  expected: SupportedInstrument,
+  name: string,
+): void {
+  if (adapter.instrument !== expected) {
+    throw new Error(`${name} does not target the expected instrument`);
   }
 }
