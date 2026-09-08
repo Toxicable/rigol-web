@@ -5,8 +5,8 @@ import {
   MeasurementKind,
 } from "../../shared/scope-types.js";
 import { LocalMeasurementAccumulator } from "../local-measurements.js";
+import type { ScopeBinding } from "../scope-binding.js";
 import { MeasurementSource, useScopeStore } from "../scope-store.js";
-import type { ScopeWebSocketClient } from "../websocket-client.js";
 import type { WaveformController } from "../waveform/waveform-controller.js";
 
 const KIND_LABELS: Record<MeasurementKind, string> = {
@@ -41,7 +41,7 @@ const MEASUREMENT_GROUPS = [
 ] as const;
 
 interface MeasurementPanelProps {
-  client: ScopeWebSocketClient;
+  client: ScopeBinding;
   controller: WaveformController;
 }
 
