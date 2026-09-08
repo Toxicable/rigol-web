@@ -65,22 +65,14 @@ const scopeService = new ScopeService({
 const dmmService = new DmmService(dmmEndpoint);
 
 const instruments = new InstrumentRegistry({
-  dho804: {
-    endpoint: scopeEndpoint,
-    runtime: scopeService.runtime,
-  },
-  dm858e: {
-    endpoint: dmmEndpoint,
-    runtime: dmmService.runtime,
-    subscriberAdded: () => dmmService.replayCurrentSnapshot(),
-  },
+  dho804: scopeService.runtime,
+  dm858e: dmmService.runtime,
 });
 
 const server = createServer(createHttpRequestHandler());
 const scopeAdapter = new ScopeWebSocketAdapter(scopeService);
 const dmmAdapter = new DmmWebSocketAdapter(dmmService);
 const gateway = new WebSocketGateway(server, {
-  instruments,
   scopeAdapter,
   dmmAdapter,
 });
@@ -108,8 +100,8 @@ async function shutdown(signal: string): Promise<void> {
   scopeService.close();
 
   try {
-    await instruments.stopAll();
     await gateway.close();
+    await instruments.stopAll();
     await closeHttpServer();
   } catch (error) {
     console.error("Rigol Web shutdown failed", error);
@@ -129,6 +121,7 @@ server.once("error", (error) => {
   process.exitCode = 1;
 });
 
+await instruments.startAll();
 server.listen(httpPort, () => {
   console.log(`Rigol Web server listening on http://localhost:${httpPort}`);
 });
