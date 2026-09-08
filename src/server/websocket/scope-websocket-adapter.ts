@@ -62,6 +62,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
   private connectionRevision = 0;
   private unsubscribeServices: Array<() => void> = [];
   private readonly clients = new WeakMap<WebSocketSession, ScopeClientState>();
+  private interactionOwner: WebSocketSession | null = null;
 
   public constructor(private readonly scopeService: ScopeApplicationService) {
     this.connection = scopeService.getConnection();
@@ -76,6 +77,9 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
       this.scopeService.subscribeConnection((connection) => {
         this.connection = connection;
         this.connectionRevision += 1;
+        if (connection.kind === ScopeConnectionKind.Disconnected) {
+          this.releaseInteractionOwner();
+        }
         host.broadcastJson(this.instrument, this.lifecycleMessage(connection));
       }),
       this.scopeService.subscribeState((state) => {
@@ -94,6 +98,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
   }
 
   public detach(): void {
+    this.releaseInteractionOwner();
     for (const unsubscribe of this.unsubscribeServices) {
       unsubscribe();
     }
@@ -116,6 +121,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
           control.kind === ControlKind.HorizontalScale ||
           control.kind === ControlKind.HorizontalPosition;
         if (pausesLive) {
+          this.requireInteractionAvailable(session);
           await this.scopeService.pauseLiveWaveform();
         }
         console.info("Scope control requested", {
@@ -129,7 +135,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
           this.requireConnectionRevision(revision);
           host.sendCompleted(session, requestId);
         } finally {
-          if (pausesLive) {
+          if (pausesLive && this.interactionOwner === null) {
             this.scopeService.resumeLiveWaveform();
           }
         }
@@ -142,7 +148,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
         try {
           host.requireSubscribed(session, this.instrument);
           this.connectedRevision();
-          await this.scopeService.pauseLiveWaveform();
+          await this.acquireInteraction(session);
           await this.scopeService.updateInteraction(control);
         } catch (error) {
           console.error("Interactive scope update failed", error);
@@ -156,12 +162,13 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
         const host = this.requireHost();
         host.requireSubscribed(session, this.instrument);
         const revision = this.connectedRevision();
+        await this.acquireInteraction(session);
         try {
           await this.scopeService.commitInteraction(control);
           this.requireConnectionRevision(revision);
           host.sendCompleted(session, requestId);
         } finally {
-          this.scopeService.resumeLiveWaveform();
+          this.releaseInteraction(session);
         }
         return true;
       }
@@ -266,21 +273,15 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
     }
   }
 
-  public sendLifecycle(session: WebSocketSession): void {
+  public sendInitialPublications(session: WebSocketSession): void {
     this.requireHost().sendJson(session, this.lifecycleMessage(this.connection));
-  }
-
-  public sendDisconnected(session: WebSocketSession, reason: string): void {
-    this.requireHost().sendJson(session, {
-      type: MessageType.ScopeDisconnected,
-      reason,
-    });
   }
 
   public sessionUnsubscribed(session: WebSocketSession): void {
     const state = this.clients.get(session);
     state?.pendingLiveFrames.clear();
     state?.viewportGenerations.clear();
+    this.releaseInteraction(session);
   }
 
   public transportAvailable(session: WebSocketSession): void {
@@ -314,6 +315,45 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
     if (revision !== this.connectionRevision) {
       throw new Error("Scope session changed while request was in flight");
     }
+  }
+
+  private requireInteractionAvailable(session: WebSocketSession): void {
+    if (this.interactionOwner !== null && this.interactionOwner !== session) {
+      throw new Error("Scope interaction is owned by another browser session");
+    }
+  }
+
+  private async acquireInteraction(session: WebSocketSession): Promise<void> {
+    this.requireInteractionAvailable(session);
+    if (this.interactionOwner === session) {
+      return;
+    }
+
+    this.interactionOwner = session;
+    try {
+      await this.scopeService.pauseLiveWaveform();
+    } catch (error) {
+      if (this.interactionOwner === session) {
+        this.interactionOwner = null;
+      }
+      throw error;
+    }
+  }
+
+  private releaseInteraction(session: WebSocketSession): void {
+    if (this.interactionOwner !== session) {
+      return;
+    }
+    this.interactionOwner = null;
+    this.scopeService.resumeLiveWaveform();
+  }
+
+  private releaseInteractionOwner(): void {
+    if (this.interactionOwner === null) {
+      return;
+    }
+    this.interactionOwner = null;
+    this.scopeService.resumeLiveWaveform();
   }
 
   private broadcastWaveform(frame: Uint8Array): void {
