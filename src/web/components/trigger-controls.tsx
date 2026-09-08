@@ -8,9 +8,7 @@ import {
   TriggerType,
   type ScopeState,
 } from "../../shared/scope-types.js";
-import { ControlKind, type ControlChange } from "../../shared/websocket-protocol.js";
-import type { ScopeBinding } from "../scope-binding.js";
-import { useScopeStore } from "../scope-store.js";
+import type { ScopeActions } from "../scope-actions.js";
 import { EditableNumberInput } from "./editable-number.js";
 
 const TYPE_LABELS: Record<TriggerType, string> = {
@@ -53,19 +51,10 @@ const COUPLING_LABELS: Record<TriggerCoupling, string> = {
 
 interface TriggerControlsProps {
   scope: ScopeState;
-  client: ScopeBinding;
+  actions: ScopeActions;
 }
 
-export function TriggerControls({ scope, client }: TriggerControlsProps) {
-  const setControl = (control: ControlChange) => {
-    useScopeStore.getState().applyOptimisticControl(control);
-    void client.setControl(control).catch((error: unknown) => {
-      useScopeStore.getState().setError(
-        error instanceof Error ? error.message : String(error),
-      );
-    });
-  };
-
+export function TriggerControls({ scope, actions }: TriggerControlsProps) {
   if (scope.trigger.type !== TriggerType.Edge) {
     return (
       <section className="panel">
@@ -76,9 +65,9 @@ export function TriggerControls({ scope, client }: TriggerControlsProps) {
         </dl>
         <button
           type="button"
-          onClick={() =>
-            setControl({ kind: ControlKind.TriggerType, value: TriggerType.Edge })
-          }
+          onClick={() => {
+            void actions.setTriggerType(TriggerType.Edge);
+          }}
         >
           Switch to Edge
         </button>
@@ -94,12 +83,9 @@ export function TriggerControls({ scope, client }: TriggerControlsProps) {
           Source
           <select
             value={scope.trigger.source}
-            onChange={(event: ChangeEvent<HTMLSelectElement>) =>
-              setControl({
-                kind: ControlKind.TriggerSource,
-                value: Number(event.target.value) as Channel,
-              })
-            }
+            onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+              void actions.setTriggerSource(Number(event.target.value) as Channel);
+            }}
           >
             {[Channel.Ch1, Channel.Ch2, Channel.Ch3, Channel.Ch4].map((channel) => (
               <option value={channel} key={channel}>CH{channel}</option>
@@ -110,12 +96,9 @@ export function TriggerControls({ scope, client }: TriggerControlsProps) {
           Slope
           <select
             value={scope.trigger.slope}
-            onChange={(event: ChangeEvent<HTMLSelectElement>) =>
-              setControl({
-                kind: ControlKind.TriggerSlope,
-                value: Number(event.target.value) as EdgeSlope,
-              })
-            }
+            onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+              void actions.setTriggerSlope(Number(event.target.value) as EdgeSlope);
+            }}
           >
             {[EdgeSlope.Rising, EdgeSlope.Falling, EdgeSlope.Either].map((slope) => (
               <option value={slope} key={slope}>{SLOPE_LABELS[slope]}</option>
@@ -127,7 +110,9 @@ export function TriggerControls({ scope, client }: TriggerControlsProps) {
           <EditableNumberInput
             value={scope.trigger.level}
             ariaLabel="Trigger level"
-            onCommit={(value) => setControl({ kind: ControlKind.TriggerLevel, value })}
+            onCommit={(value) => {
+              void actions.setTriggerLevel(value);
+            }}
           />
         </label>
       </div>
