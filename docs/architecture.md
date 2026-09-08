@@ -38,12 +38,22 @@ ScpiTransport              ScpiTransport
 DHO804                     DM858E
 ```
 
-The browser side mirrors that separation:
+The browser mirrors the instrument separation while sharing only transport concerns:
 
 ```text
-AppConnection
-  +-> ScopeBinding -> scope store + waveform controller
-  `-> DmmBinding   -> DMM store
+                    AppConnection
+                   /             \
+                  v               v
+            ScopeBinding      DmmBinding
+                 ^               ^
+                 |               |
+            ScopeActions      DmmActions
+                 |               |
+                 v               v
+             scope UI          DMM UI
+
+ScopeBinding -> scope store + waveform controller
+DmmBinding   -> DMM store
 ```
 
 ## Fixed configuration and routes
@@ -105,9 +115,33 @@ The tiny adapter boundary exists only for these known transports. It is not a ge
 
 `src/web/app-transport-store.ts` is the single Zustand owner of browser transport state: Connecting, Connected, or Disconnected. Scope and DMM stores do not duplicate WebSocket lifecycle state.
 
-`ScopeBinding` and `DmmBinding` own instrument-specific browser protocol mapping. Route mount/unmount activates/deactivates publication subscriptions through those bindings without recreating `AppConnection`.
+`ScopeBinding` and `DmmBinding` own instrument-specific wire mapping and publication projection. Route mount/unmount activates/deactivates publication subscriptions through those bindings without recreating `AppConnection`.
 
 The old scope-shaped global WebSocket client has been removed. There is no compatibility alias.
+
+## Browser domain action boundary
+
+Ordinary React controls do not construct WebSocket requests or coordinate request failures directly.
+
+`ScopeActions` owns browser-side scope command orchestration:
+
+- concrete domain methods such as channel scale/offset, trigger controls, run/stop/single and Sleep;
+- optimistic scope presentation;
+- latest-value coalescing and final commit for continuous interactions;
+- ordinary scope command error presentation;
+- Sleep pending state;
+- displayed-measurement configuration and non-overlapping polling.
+
+`DmmActions` owns browser-side DMM control orchestration:
+
+- concrete function/range/acquisition-rate methods;
+- construction of function-dependent controls from current authoritative DMM state;
+- suppression of redundant writes;
+- generation-safe pending/error ownership so stale completion cannot overwrite a newer control/session.
+
+Action APIs remain instrument-specific. There is no generic browser command dispatcher, cross-instrument reducer or event bus.
+
+The raw SCPI console remains an intentional transport diagnostic exception: arbitrary SCPI is explicitly instrument-targeted through `AppConnection.executeScpi(instrument, command)` rather than being disguised as a domain action.
 
 ## Browser protocol handshake
 
@@ -120,14 +154,18 @@ browser -> ProtocolHelloAck(PROTOCOL_VERSION)
 
 Application traffic is rejected before a matching acknowledgement. `Connected` browser transport state means this handshake completed, not merely that a socket opened.
 
-Protocol version 6 remains current. The architecture refactor through Stream E changes ownership only and does not require a wire-protocol version change.
+Protocol version 6 remains current. Streams A-F change ownership boundaries without requiring a wire-protocol version change.
 
 On an unexpected close, pending requests fail and the browser reconnects. Desired route subscriptions are replayed only after the new handshake succeeds. A disposed `AppConnection` cancels any pending reconnect so application teardown cannot recreate the transport.
 
 ## DHO804 application path
 
 ```text
-ScopeWebSocketAdapter
+React scope control
+ -> ScopeActions
+ -> ScopeBinding
+ -> AppConnection
+ -> ScopeWebSocketAdapter
  -> ScopeService
  -> ScopeController / waveform services
  -> Dho804Driver
@@ -135,7 +173,7 @@ ScopeWebSocketAdapter
  -> ScpiTransport
 ```
 
-`ScopeService` owns application semantics: controls, acquisition actions, measurements, raw SCPI, deep/live waveform operations, and Sleep. `ScopeRuntime` owns physical-session composition/recovery and deliberate Sleep suspension.
+`ScopeService` owns server application semantics: controls, acquisition actions, measurements, raw SCPI, deep/live waveform operations, and Sleep. `ScopeRuntime` owns physical-session composition/recovery and deliberate Sleep suspension.
 
 Scope Sleep uses the normal application path rather than HTTP:
 
@@ -144,12 +182,16 @@ browser -> ScopeWebSocketAdapter -> ScopeService.sleep()
         -> ScopePowerLifecycle -> ScopeRuntime / Dho804PowerControl
 ```
 
-The physical DHO804 remains authoritative for scope state. Browser interactions may be optimistic, but complete authoritative state/readback reconciles presentation.
+The physical DHO804 remains authoritative for scope state. `ScopeActions` may update browser presentation optimistically, but complete authoritative state/readback replaces it when received.
 
 ## DM858E application path
 
 ```text
-DmmWebSocketAdapter
+React DMM control
+ -> DmmActions
+ -> DmmBinding
+ -> AppConnection
+ -> DmmWebSocketAdapter
  -> DmmService
  -> DmmRuntime
  -> Dm858eDriver
@@ -161,13 +203,15 @@ DmmWebSocketAdapter
 
 DM858E display snapshots are latest display state, not identified physical samples. They must not be promoted into statistics/logging streams without verified sample identity semantics.
 
-Scope and DMM domain stores remain separate.
+Scope and DMM domain stores and action APIs remain separate.
 
 ## Multi-browser controls
 
 Atomic controls are global; the last accepted physical write wins.
 
 Long-lived scope interaction is explicitly browser-session-owned in `ScopeWebSocketAdapter`. The first interactive update acquires the interaction lease and pauses live waveform delivery. Only that session may continue/commit it. Commit, unsubscribe, socket close, or physical scope disconnect releases ownership and resumes live delivery as applicable.
+
+The browser action layer coalesces pointer updates only for presentation/transport efficiency. Scope route unmount cancels any queued browser-side interaction update before unsubscribe so no stale update can be sent after route exit.
 
 Publication subscription itself is never a physical-runtime lease.
 
@@ -187,6 +231,8 @@ Live and deep acquisition remain distinct.
 
 Live waveform data is disposable and latest-oriented. Scope-specific server backpressure may replace stale pending live frames. Browser waveform bytes pass through `AppConnection` unchanged, then `ScopeBinding` decodes them and hands them to `WaveformController`; waveform arrays never enter React/Zustand or generic transport semantics.
 
+The waveform component keeps imperative drawing and pointer geometry, but sends horizontal/channel/trigger domain intent to `ScopeActions`; it no longer constructs protocol interaction discriminants or owns coalescing/error handling.
+
 Deep acquisition retains full source data server-side. Browser requests display-sized min/max-reduced viewport windows and may pan/zoom the retained capture without rereading the instrument.
 
 ## Failure policy
@@ -203,22 +249,23 @@ If SCPI framing/socket integrity is lost:
 
 Do not add persistent command queues, per-command retry systems, runtime policy flags, a generic event bus, or a generic instrument framework without a concrete requirement.
 
-## Refactor boundary after Stream E
+## Refactor boundary after Stream F
 
-Streams A-E have established:
+Streams A-F have established:
 
 - explicit server application services;
 - scope power ownership inside the scope service/runtime;
 - WebSocket broker + instrument adapters;
 - server-owned physical runtime lifetime;
-- app-wide browser transport + explicit scope/DMM bindings.
+- app-wide browser transport + explicit scope/DMM bindings;
+- instrument-specific browser domain actions owning ordinary command orchestration.
 
-Stream F is the next architectural work: move view-side optimistic command/error orchestration behind scope/DMM domain action layers. Acquisition-operation modeling and PPK2 remain later Streams G/H.
+Stream G is next: introduce an explicit server-owned acquisition operation/storage model with lifetime independent of browser routes. PPK2 integration remains Stream H after that model exists.
 
 ## References
 
 - `server-architecture.md` — server ownership and lifecycle
-- `frontend.md` — browser transport/binding/store ownership
+- `frontend.md` — browser transport/binding/action/store ownership
 - `scope-model.md` — DHO804 domain model and SCPI mapping
 - `scpi-scheduler.md` — serialized SCPI scheduling
 - `waveforms.md` — DHO804 live/deep acquisition
