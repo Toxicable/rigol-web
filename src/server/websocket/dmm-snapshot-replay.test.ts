@@ -26,6 +26,8 @@ import {
 } from "../instruments/instrument-connection.js";
 import { InstrumentRegistry } from "../instruments/instrument-registry.js";
 import type { ScopeApplicationService } from "../scope/scope-service.js";
+import { DmmWebSocketAdapter } from "./dmm-websocket-adapter.js";
+import { ScopeWebSocketAdapter } from "./scope-websocket-adapter.js";
 import { WebSocketGateway } from "./websocket-gateway.js";
 
 const dmmInfo: DmmInfo = {
@@ -64,6 +66,7 @@ class UnusedScopeService implements ScopeApplicationService {
   public async updateInteraction(): Promise<void> { throw new Error("unused"); }
   public async commitInteraction(): Promise<void> { throw new Error("unused"); }
   public async performAcquisitionAction(): Promise<void> { throw new Error("unused"); }
+  public async sleep(): Promise<void> { throw new Error("unused"); }
   public async readMeasurements(): Promise<never[]> { throw new Error("unused"); }
   public async setMeasurements(): Promise<void> { throw new Error("unused"); }
   public async executeRawScpi(): Promise<string> { throw new Error("unused"); }
@@ -128,8 +131,8 @@ function createHarness(server: HttpServer) {
   });
   const gateway = new WebSocketGateway(server, {
     instruments: registry,
-    scopeService: new UnusedScopeService(),
-    dmmService: service,
+    scopeAdapter: new ScopeWebSocketAdapter(new UnusedScopeService()),
+    dmmAdapter: new DmmWebSocketAdapter(service),
   });
   return { service, internals, gateway, start, stop };
 }
