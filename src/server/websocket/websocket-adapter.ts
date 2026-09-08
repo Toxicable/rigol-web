@@ -31,8 +31,7 @@ export interface WebSocketInstrumentAdapter {
   attach(host: WebSocketAdapterHost): void;
   detach(): void;
   tryDispatch(session: WebSocketSession, message: Record<string, unknown>): Promise<boolean>;
-  sendLifecycle(session: WebSocketSession): void;
-  sendDisconnected(session: WebSocketSession, reason: string): void;
+  sendInitialPublications(session: WebSocketSession): void;
   sessionUnsubscribed(session: WebSocketSession): void;
   transportAvailable(session: WebSocketSession): void;
 }
