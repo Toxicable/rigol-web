@@ -9,9 +9,8 @@ npm run dev
 ```
 
 It starts the TypeScript backend with `.env` loaded and Vite on
-`http://localhost:5173`. Vite proxies `/ws`, `/health` and `/api` to the
-backend on port `3000`, so browser UI edits hot-reload without rebuilding the
-Docker image.
+`http://localhost:5173`. Vite proxies `/ws` and `/health` to the backend on port
+`3000`, so browser UI edits hot-reload without rebuilding the Docker image.
 
 To use the authenticated external hostname during development, run:
 
@@ -81,22 +80,26 @@ Rigol Web exposes a one-way DHO804 **Sleep** control. Remote Wake is not exposed
 because real-scope testing confirmed that native Sleep takes the instrument off
 the network, including both SCPI and LAN ADB.
 
-For **Sleep**, Rigol Web first suspends the DHO804 instrument runtime while
-preserving browser subscribers. That cleanly stops the live waveform service,
-SCPI scheduler and SCPI/TCP transport and prevents reconnect attempts while the
-scope is sleeping. It then invokes the DHO804's own `Power > Sleep` path instead
-of reproducing Rigol's private shutdown sequence: panel-power key `1073741851`
-is injected, the server waits 1500 ms for the stock power popup, re-checks ADB,
-and launches a tap at the stock Sleep-button centre `(324, 375)`.
+Sleep is an ordinary scope application command. The browser sends a typed
+`ScopeSleep` WebSocket request, `ScopeService.sleep()` owns the operation, and
+the scope runtime temporarily suspends only its physical SCPI session while
+browser subscription ownership remains unchanged. This cleanly stops the live
+waveform service, SCPI scheduler and SCPI/TCP transport and prevents reconnect
+attempts while the scope is sleeping. There is no HTTP scope-power endpoint.
+
+The service then invokes the DHO804's own `Power > Sleep` path instead of
+reproducing Rigol's private shutdown sequence: panel-power key `1073741851` is
+injected, the server waits 1500 ms for the stock power popup, re-checks ADB, and
+launches a tap at the stock Sleep-button centre `(324, 375)`.
 
 The final tap is intentionally a one-way dispatch. Real-scope testing confirmed
 the tap enters native Sleep, but the successful transition can tear down the ADB
 connection before the local `adb` process reports a normal exit status. Waiting
-for that exit produced a false HTTP 502 even though the scope slept. Rigol Web
-therefore returns success once the final ADB process has successfully launched;
-ADB reachability is checked immediately beforehand, and a local failure to
-launch `adb` still fails the request. If Sleep fails before dispatch, the SCPI
-runtime is resumed.
+for that process exit therefore produces a false failure even when the scope has
+slept. The scope command completes once the final ADB process has successfully
+launched; ADB reachability is checked immediately beforehand, and a local
+failure to launch `adb` still fails the WebSocket request. If Sleep fails before
+dispatch, the SCPI runtime is resumed.
 
 That coordinate is derived from the decompiled DHO800 layout and confirmed
 against a real 1024x600 DHO804 framebuffer capture. The earlier `uiautomator`
@@ -109,12 +112,10 @@ SCPI runtime is suspended, Rigol Web performs only a quiet TCP reachability
 probe against the configured SCPI port every 2 seconds. It sends no SCPI
 commands and requires the endpoint to have been observed offline before later
 reachability is treated as a physical wake. Once the SCPI port comes back, the
-runtime is resumed and existing browser subscribers reconnect automatically.
-
-Power-control errors shown in the toolbar are sanitized. Short `text/plain`
-backend errors are shown verbatim; HTML/proxy error pages and oversized response
-bodies are replaced with a concise HTTP-status message so an upstream error page
-cannot be dumped into the instrument header.
+runtime is resumed and existing browser subscribers reconnect automatically. A
+wake-monitor failure also releases the deliberate sleep suspension so the normal
+runtime recovery loop can resume instead of leaving the service permanently
+suspended.
 
 RIGOL documents instrument **Sleep** under the scope's own Power menu. The
 DHO800 user guide states that Sleep keeps some processes alive, uses more power

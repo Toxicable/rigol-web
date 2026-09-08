@@ -11,8 +11,8 @@ import {
 } from "./websocket-protocol";
 
 describe("websocket protocol constants", () => {
-  it("uses the hard-cut DMM resolution snapshot protocol version", () => {
-    expect(PROTOCOL_VERSION).toBe(4);
+  it("uses the hard-cut scope Sleep protocol version", () => {
+    expect(PROTOCOL_VERSION).toBe(6);
   });
 
   it("keeps existing message type values stable and assigns instrument ranges", () => {
@@ -28,12 +28,14 @@ describe("websocket protocol constants", () => {
       MessageType.WaveformViewportRequest,
       MessageType.ScpiExecute,
       MessageType.MeasurementRead,
+      MessageType.MeasurementSet,
+      MessageType.ScopeSleep,
       MessageType.CommandCompleted,
       MessageType.CommandFailed,
       MessageType.ScpiResult,
       MessageType.MeasurementResult,
       MessageType.DeepCaptureReady,
-    ]).toEqual([1, 2, 3, 10, 11, 12, 13, 14, 15, 16, 17, 20, 21, 22, 23, 24]);
+    ]).toEqual([1, 2, 3, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
 
     expect([
       MessageType.ProtocolHello,

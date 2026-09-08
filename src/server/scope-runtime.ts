@@ -79,6 +79,7 @@ export class ScopeRuntime {
   private readonly publishState: ScopeRuntimeOptions["publishState"];
   private readonly publishWaveform: ScopeRuntimeOptions["publishWaveform"];
   private running = false;
+  private sleepSuspended = false;
   private loopPromise: Promise<void> | null = null;
   private session: OwnedScopeSession | null = null;
   private initializingTransport: ScpiTransport | null = null;
@@ -116,12 +117,15 @@ export class ScopeRuntime {
       return;
     }
     this.running = true;
-    this.disconnectedReason = "Scope connection pending";
-    this.publishConnection({
-      kind: ScopeConnectionKind.Disconnected,
-      reason: this.disconnectedReason,
-    });
-    this.loopPromise = this.runLoop();
+    if (this.sleepSuspended) {
+      this.disconnectedReason = "Scope sleeping";
+      this.publishConnection({
+        kind: ScopeConnectionKind.Disconnected,
+        reason: this.disconnectedReason,
+      });
+      return;
+    }
+    this.startSessionLoop();
   }
 
   public async stop(): Promise<void> {
@@ -135,15 +139,38 @@ export class ScopeRuntime {
       kind: ScopeConnectionKind.Disconnected,
       reason: this.disconnectedReason,
     });
-    this.wakeRetryDelay();
-    this.initializingTransport?.disconnect();
-    this.session?.failure.fail(new Error("Scope runtime stopped"));
+    this.interruptSessionLoop(new Error("Scope runtime stopped"));
+    await this.waitForSessionLoop();
+  }
 
-    const loop = this.loopPromise;
-    if (loop !== null) {
-      await loop;
+  public async suspendForSleep(): Promise<void> {
+    if (this.sleepSuspended) {
+      return;
     }
-    this.loopPromise = null;
+    if (!this.running) {
+      throw new Error("Scope runtime inactive");
+    }
+
+    this.sleepSuspended = true;
+    this.disconnectedReason = "Scope sleeping";
+    this.publishConnection({
+      kind: ScopeConnectionKind.Disconnected,
+      reason: this.disconnectedReason,
+    });
+    this.interruptSessionLoop(new Error("Scope sleeping"));
+    await this.waitForSessionLoop();
+  }
+
+  public resumeAfterSleep(): void {
+    if (!this.sleepSuspended) {
+      return;
+    }
+
+    this.sleepSuspended = false;
+    if (!this.running || this.loopPromise !== null) {
+      return;
+    }
+    this.startSessionLoop();
   }
 
   public getSession(): ScopeRuntimeSession | null {
@@ -164,12 +191,42 @@ export class ScopeRuntime {
     }
   }
 
+  private startSessionLoop(): void {
+    this.disconnectedReason = "Scope connection pending";
+    this.publishConnection({
+      kind: ScopeConnectionKind.Disconnected,
+      reason: this.disconnectedReason,
+    });
+    this.loopPromise = this.runLoop();
+  }
+
+  private shouldRunSession(): boolean {
+    return this.running && !this.sleepSuspended;
+  }
+
+  private interruptSessionLoop(reason: Error): void {
+    this.wakeRetryDelay();
+    this.initializingTransport?.disconnect();
+    this.session?.failure.fail(reason);
+  }
+
+  private async waitForSessionLoop(): Promise<void> {
+    const loop = this.loopPromise;
+    if (loop === null) {
+      return;
+    }
+    await loop;
+    if (this.loopPromise === loop) {
+      this.loopPromise = null;
+    }
+  }
+
   private async runLoop(): Promise<void> {
-    while (this.running) {
+    while (this.shouldRunSession()) {
       let session: OwnedScopeSession | null = null;
       try {
         session = await this.createSession();
-        if (!this.running) {
+        if (!this.shouldRunSession()) {
           await this.disposeSession(session, new Error("Scope runtime stopped"));
           break;
         }
@@ -186,12 +243,12 @@ export class ScopeRuntime {
         if (this.session === session) {
           this.session = null;
         }
-        if (this.running) {
+        if (this.shouldRunSession()) {
           this.publishDisconnected(failure);
         }
         await this.disposeSession(session, failure);
 
-        if (!this.running) {
+        if (!this.shouldRunSession()) {
           break;
         }
       } catch (error) {
@@ -199,20 +256,20 @@ export class ScopeRuntime {
           if (this.session === session) {
             this.session = null;
           }
-          if (this.running) {
+          if (this.shouldRunSession()) {
             this.publishDisconnected(error);
           }
           await this.disposeSession(session, asError(error));
-        } else if (this.running) {
+        } else if (this.shouldRunSession()) {
           this.publishDisconnected(error);
         }
 
-        if (!this.running) {
+        if (!this.shouldRunSession()) {
           break;
         }
       }
 
-      if (this.running) {
+      if (this.shouldRunSession()) {
         await this.waitRetryDelay();
       }
     }

@@ -16,7 +16,7 @@ import type {
   TriggerType,
 } from "./scope-types.js";
 
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 export type NonEmptyArray<T> = [T, ...T[]];
 
@@ -34,6 +34,7 @@ export enum MessageType {
   ScpiExecute = 16,
   MeasurementRead = 17,
   MeasurementSet = 18,
+  ScopeSleep = 19,
 
   CommandCompleted = 20,
   CommandFailed = 21,
@@ -166,6 +167,11 @@ export interface AcquisitionActionMessage {
   type: MessageType.AcquisitionAction;
   requestId: number;
   action: AcquisitionAction;
+}
+
+export interface ScopeSleepMessage {
+  type: MessageType.ScopeSleep;
+  requestId: number;
 }
 
 export interface MeasurementReadMessage {
@@ -307,6 +313,7 @@ export type ClientMessage =
   | InteractionUpdateMessage
   | InteractionCommitMessage
   | AcquisitionActionMessage
+  | ScopeSleepMessage
   | DeepCaptureRequestMessage
   | WaveformViewportRequestMessage
   | ScpiExecuteMessage

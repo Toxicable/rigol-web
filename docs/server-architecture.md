@@ -33,7 +33,7 @@ Each active instrument gets its **own** scheduler and transport instance. Only t
 
 ## InstrumentRegistry
 
-`InstrumentRegistry` owns activation decisions for the exactly two supported instruments.
+`InstrumentRegistry` owns subscription-driven activation decisions for the exactly two supported instruments.
 
 Responsibilities:
 
@@ -46,6 +46,8 @@ Responsibilities:
 - serialize activation/deactivation transitions so rapid route changes cannot leave runtime state inverted
 - roll back a subscription if runtime activation rejects, so the same browser can retry cleanly
 - mark the registry inactive before awaiting idempotent runtime deactivation, so a failed `stop()` remains retryable on a later subscription
+
+DHO804 Sleep is deliberately **not** a registry suspension mode. The scope service/runtime owns that instrument-specific physical-session suspension while registry subscription ownership remains unchanged. The later runtime-lifetime refactor still owns replacement of subscription-driven activation itself.
 
 This is a small lifecycle registry, not a generic plugin framework or dependency-injection container.
 
@@ -132,9 +134,24 @@ ScpiTransport
 
 `ScopePoller` validates important physical scope state. Live/deep waveform services remain DHO804-specific.
 
-`ScopeService` is the application boundary for scope controls, acquisition actions, measurements, raw SCPI and waveform/deep-capture operations. It owns per-session `ScopeController` instances and exposes data-only connection/state/waveform publications.
+`ScopeService` is the application boundary for scope controls, acquisition actions, measurements, raw SCPI, waveform/deep-capture operations and DHO804 Sleep. It owns per-session `ScopeController` instances and exposes data-only connection/state/waveform publications.
 
-`ScopeRuntime` owns only active DHO804 physical-session composition and reconnection. It does not import WebSocket gateway or wire-result types. It remains started/stopped by `InstrumentRegistry` subscription ownership until the later runtime-lifetime stream.
+DHO804 Sleep follows one application path:
+
+```text
+browser ScopeSleep request
+  -> WebSocketGateway
+  -> ScopeService.sleep()
+  -> ScopePowerLifecycle
+       -> ScopeRuntime.suspendForSleep()
+       -> Dho804PowerControl.sleep()
+       -> TCP offline/online wake monitor
+       -> ScopeRuntime.resumeAfterSleep()
+```
+
+The runtime's sleep suspension preserves its registry activation/subscribers but stops its physical session and reconnect loop until a physical wake is observed. A failed ADB Sleep or failed wake monitor releases the suspension so normal runtime recovery can continue. `POST /api/scope/sleep` does not exist; HTTP is not a second scope control plane.
+
+`ScopeRuntime` owns active DHO804 physical-session composition, reconnection and deliberate Sleep suspension. It does not import WebSocket gateway or wire-result types. Outside Sleep it remains started/stopped by `InstrumentRegistry` subscription ownership until the later runtime-lifetime stream.
 
 ## DM858E path
 
@@ -176,9 +193,9 @@ The display snapshot is not a sample stream. It carries no sequence/sample ident
 - stale function-dependent control rejection
 - current display snapshot deduplication, invalidation and replay
 
-`DmmRuntime` owns only fresh-session connect/identify/start/stop/reconnect composition plus DMM polling for its active physical session
+`DmmRuntime` owns only fresh-session connect/identify/start/stop/reconnect composition plus DMM polling for its active physical session.
 
-Range/rate messages carry the function under which the browser created them. Under mutation ownership the runtime compares that expected function with a fresh authoritative state read. The driver then rechecks `SENSe:FUNCtion?` immediately before the write in the same scheduler operation. Stale requests fail rather than being reinterpreted under another function.
+Range/rate messages carry the function under which the browser created them. Under mutation ownership the service compares that expected function with a fresh authoritative state read. The driver then rechecks `SENSe:FUNCtion?` immediately before the write in the same scheduler operation. Stale requests fail rather than being reinterpreted under another function.
 
 Do not route DM858E commands through `ScopeController`, and do not place DM858E state into `ScopeStateStore`.
 
@@ -196,11 +213,12 @@ Responsibilities:
 - structurally validate function-bound DMM range/rate controls
 - publish lifecycle/state/snapshots/waveforms only to subscribed sessions
 - route raw SCPI to the explicitly named instrument
+- route DHO804 Sleep to `ScopeService.sleep()`
 - send command results/errors
 - enforce DHO804 waveform backpressure behaviour
 - release all session subscriptions when the socket closes
 
-It must not construct instrument SCPI commands, directly mutate instrument state or implement waveform downsampling.
+It must not construct instrument SCPI commands, directly mutate instrument state, implement DHO804 power orchestration or implement waveform downsampling.
 
 Multiple browser tabs may subscribe to the same physical instrument. They share one runtime/session for that instrument; there is no exclusive browser lock.
 
@@ -208,14 +226,14 @@ See `websocket-protocol.md`.
 
 ## Protocol compatibility
 
-WebSocket protocol version 3 uses an application-level handshake before subscriptions:
+WebSocket protocol version 6 uses an application-level handshake before subscriptions:
 
 ```text
 server: ProtocolHello(PROTOCOL_VERSION)
 client: ProtocolHelloAck(PROTOCOL_VERSION)
 ```
 
-Version 3 hard-cuts the DMM surface to latest-reading snapshot semantics, explicit non-applicable controls and function-bound range/rate requests. Any non-handshake client message received before acknowledgement closes the socket with a protocol error.
+Version 6 adds the DHO804 `ScopeSleep` request to the normal command path and is a hard cut from older browser/server bundles. Any non-handshake client message received before acknowledgement closes the socket with a protocol error.
 
 ## Raw SCPI
 
@@ -225,7 +243,7 @@ Raw SCPI console targeting is explicit:
 ScpiExecute(instrument, command)
 ```
 
-The gateway routes it to the selected runtime's normal mutation/scheduler path. There is no implicit DHO804 target and no direct socket bypass.
+The gateway routes it to the selected service's normal mutation/scheduler path. There is no implicit DHO804 target and no direct socket bypass.
 
 ## DMM lifecycle publication
 
@@ -237,6 +255,10 @@ The gateway exposes separate DM858E lifecycle/data messages:
 - `DmmSnapshot`
 
 `DmmSnapshot` is latest display state, not a new-measurement event. `Unavailable` snapshots replace a prior valid display when the backend can no longer report a usable current value.
+
+## HTTP boundary
+
+HTTP owns frontend/static serving and simple HTTP-specific infrastructure such as `/health`. Instrument application operations use the WebSocket/application-service path. There is no REST/HTTP scope power control surface.
 
 ## Failure philosophy
 
@@ -261,7 +283,7 @@ WebSocket / app routing
 instrument-specific app semantics
         |
         v
-instrument-specific driver
+instrument-specific runtime/driver
         |
         v
 shared SCPI scheduler/program-message rules
@@ -294,7 +316,9 @@ src/
 |  |  `- scpi-program-message.ts
 |  |- scope/
 |  |  |- dho804-driver.ts
+|  |  |- dho804-power-control.ts
 |  |  |- scope-controller.ts
+|  |  |- scope-power-lifecycle.ts
 |  |  |- scope-state-store.ts
 |  |  `- scope-poller.ts
 |  |- dmm/
@@ -313,7 +337,8 @@ Tests live beside the files they exercise.
 
 ## Key boundaries
 
-- `InstrumentRegistry` owns subscription-driven activation, not instrument semantics.
+- `InstrumentRegistry` owns subscription-driven activation, not instrument semantics or DHO804 power suspension.
+- `ScopeService`/`ScopePowerLifecycle` own DHO804 Sleep orchestration; `ScopeRuntime` owns the corresponding physical-session suspension/resume.
 - `Dho804Driver` owns DHO804 SCPI semantics.
 - `Dm858eDriver` owns DM858E SCPI semantics.
 - `ScopeController` remains scope-only.
@@ -321,4 +346,4 @@ Tests live beside the files they exercise.
 - `ScpiScheduler` owns serialized transport access for one instrument session.
 - generic raw-SCPI message classification lives in the SCPI layer.
 - waveform services remain DHO804-specific.
-- `WebSocketGateway` owns transport/session routing, not device commands.
+- `WebSocketGateway` owns transport/session routing, not device commands or power orchestration.

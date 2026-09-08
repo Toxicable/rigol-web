@@ -1,12 +1,9 @@
 import { createServer } from "node:http";
 
-import { SupportedInstrument } from "../shared/instrument-types.js";
 import { DmmService } from "./dmm/dmm-service.js";
 import { createHttpRequestHandler } from "./http-handler.js";
 import { InstrumentRegistry } from "./instruments/instrument-registry.js";
 import { ScopeService } from "./scope/scope-service.js";
-import { Dho804PowerControl } from "./scope/dho804-power-control.js";
-import { waitForOfflineThenOnline } from "./scope/tcp-reachability-monitor.js";
 import { WebSocketGateway } from "./websocket/websocket-gateway.js";
 
 const HTTP_PORT_DEFAULT = 3_000;
@@ -58,9 +55,11 @@ const dmmEndpoint = {
   host: readInstrumentHost("RIGOL_DMM_HOST"),
   port: readInstrumentPort("RIGOL_DMM_PORT"),
 };
-const scopePower = new Dho804PowerControl(scopeEndpoint.host, readScopeAdbPort());
 
-const scopeService = new ScopeService(scopeEndpoint);
+const scopeService = new ScopeService({
+  ...scopeEndpoint,
+  adbPort: readScopeAdbPort(),
+});
 const dmmService = new DmmService(dmmEndpoint);
 
 const instruments = new InstrumentRegistry({
@@ -75,56 +74,7 @@ const instruments = new InstrumentRegistry({
   },
 });
 
-let scopePhysicalWakeMonitor: AbortController | null = null;
-
-function startScopePhysicalWakeMonitor(): void {
-  scopePhysicalWakeMonitor?.abort();
-  const controller = new AbortController();
-  scopePhysicalWakeMonitor = controller;
-
-  void waitForOfflineThenOnline(
-    scopeEndpoint.host,
-    scopeEndpoint.port,
-    controller.signal,
-  ).then(async (woke) => {
-    if (!woke || controller.signal.aborted || scopePhysicalWakeMonitor !== controller) {
-      return;
-    }
-
-    scopePhysicalWakeMonitor = null;
-    console.log("[DHO804 sleep] SCPI endpoint reachable after physical wake; resuming runtime");
-    try {
-      await instruments.resume(SupportedInstrument.Dho804);
-    } catch (error) {
-      console.error("Failed to resume DHO804 SCPI runtime after physical wake", error);
-    }
-  }).catch((error) => {
-    if (!controller.signal.aborted) {
-      console.error("DHO804 physical-wake monitor failed", error);
-    }
-  });
-}
-
-const server = createServer(createHttpRequestHandler(undefined, {
-  sleepScope: async () => {
-    if (scopePhysicalWakeMonitor !== null) {
-      throw new Error("DHO804 is already sleeping");
-    }
-
-    await instruments.suspend(SupportedInstrument.Dho804);
-    try {
-      await scopePower.sleep();
-      startScopePhysicalWakeMonitor();
-    } catch (error) {
-      try {
-        await instruments.resume(SupportedInstrument.Dho804);
-      } catch (resumeError) {
-        console.error("Failed to resume DHO804 SCPI runtime after Sleep failure", resumeError);
-      }
-      throw error;
-    }
-  },
-}));
+const server = createServer(createHttpRequestHandler());
 
 const gateway = new WebSocketGateway(server, {
   instruments,
@@ -152,8 +102,7 @@ async function shutdown(signal: string): Promise<void> {
   }
   shuttingDown = true;
   console.log(`Rigol Web shutting down on ${signal}`);
-  scopePhysicalWakeMonitor?.abort();
-  scopePhysicalWakeMonitor = null;
+  scopeService.close();
 
   try {
     await instruments.stopAll();

@@ -17,7 +17,6 @@ interface InstrumentEntry {
   subscriberAdded: (() => void | Promise<void>) | undefined;
   subscribers: Set<object>;
   running: boolean;
-  suspended: boolean;
   revision: number;
   transition: Promise<void>;
 }
@@ -54,7 +53,6 @@ function debugLifecycle(
     instrument,
     subscribers: entry.subscribers.size,
     running: entry.running,
-    suspended: entry.suspended,
     revision: entry.revision,
     host: entry.endpoint.host,
     port: entry.endpoint.port,
@@ -119,30 +117,6 @@ export class InstrumentRegistry {
     return this.queueReconcile(instrument, entry);
   }
 
-  public suspend(instrument: SupportedInstrument): Promise<void> {
-    const entry = this.entry(instrument);
-    if (entry.suspended) {
-      return entry.transition;
-    }
-
-    entry.suspended = true;
-    entry.revision += 1;
-    debugLifecycle("suspend", instrument, entry);
-    return this.queueReconcile(instrument, entry);
-  }
-
-  public resume(instrument: SupportedInstrument): Promise<void> {
-    const entry = this.entry(instrument);
-    if (!entry.suspended) {
-      return entry.transition;
-    }
-
-    entry.suspended = false;
-    entry.revision += 1;
-    debugLifecycle("resume", instrument, entry);
-    return this.queueReconcile(instrument, entry);
-  }
-
   public async releaseSession(session: object): Promise<void> {
     const transitions: Promise<void>[] = [];
     for (const [instrument, entry] of this.entries) {
@@ -174,7 +148,6 @@ export class InstrumentRegistry {
       subscriberAdded: registration.subscriberAdded,
       subscribers: new Set(),
       running: false,
-      suspended: false,
       revision: 0,
       transition: Promise.resolve(),
     };
@@ -206,7 +179,7 @@ export class InstrumentRegistry {
   ): Promise<void> {
     while (true) {
       const revision = entry.revision;
-      const shouldRun = entry.subscribers.size > 0 && !entry.suspended;
+      const shouldRun = entry.subscribers.size > 0;
 
       if (shouldRun && !entry.running) {
         debugLifecycle("runtime-start", instrument, entry);

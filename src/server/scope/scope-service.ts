@@ -20,7 +20,11 @@ import type {
   DeepCaptureInfo,
   DeepViewportRequest,
 } from "../waveform/deep-capture-service.js";
+import { Dho804PowerControl } from "./dho804-power-control.js";
 import { ScopeController } from "./scope-controller.js";
+import { ScopePowerLifecycle } from "./scope-power-lifecycle.js";
+
+const DEFAULT_SCOPE_ADB_PORT = 55_555;
 
 export type ScopeConnectionListener = (connection: ScopeConnection) => void;
 export type ScopeStateListener = (state: ScopeState) => void;
@@ -35,6 +39,7 @@ export interface ScopeApplicationService {
   updateInteraction(control: InteractiveControl): Promise<void>;
   commitInteraction(control: InteractiveControl): Promise<void>;
   performAcquisitionAction(action: AcquisitionAction): Promise<void>;
+  sleep(): Promise<void>;
   readMeasurements(measurements: NonEmptyArray<MeasurementSpec>): Promise<MeasurementValue[]>;
   setMeasurements(measurements: MeasurementSpec[]): Promise<void>;
   executeRawScpi(command: string): Promise<string>;
@@ -47,7 +52,9 @@ export interface ScopeApplicationService {
 export type ScopeServiceOptions = Omit<
   ScopeRuntimeOptions,
   "publishConnection" | "publishState" | "publishWaveform"
->;
+> & {
+  adbPort?: number;
+};
 
 export class ScopeService implements ScopeApplicationService {
   public readonly runtime: ScopeRuntime;
@@ -60,14 +67,29 @@ export class ScopeService implements ScopeApplicationService {
   private readonly stateListeners = new Set<ScopeStateListener>();
   private readonly waveformListeners = new Set<ScopeWaveformListener>();
   private readonly controllers = new WeakMap<ScopeRuntimeSession, ScopeController>();
+  private readonly powerLifecycle: ScopePowerLifecycle;
 
   public constructor(options: ScopeServiceOptions) {
+    const {
+      adbPort = DEFAULT_SCOPE_ADB_PORT,
+      ...runtimeOptions
+    } = options;
+    if (!Number.isInteger(adbPort) || adbPort < 1 || adbPort > 65_535) {
+      throw new Error("RIGOL_SCOPE_ADB_PORT must be an integer from 1 through 65535");
+    }
+
     this.runtime = new ScopeRuntime({
-      ...options,
+      ...runtimeOptions,
       publishConnection: (connection) => this.acceptConnection(connection),
       publishState: (state) => this.acceptState(state),
       publishWaveform: (frame) => this.publishWaveform(frame),
     });
+    this.powerLifecycle = new ScopePowerLifecycle(
+      runtimeOptions.host,
+      runtimeOptions.port,
+      this.runtime,
+      new Dho804PowerControl(runtimeOptions.host, adbPort),
+    );
   }
 
   public getConnection(): ScopeConnection {
@@ -113,6 +135,10 @@ export class ScopeService implements ScopeApplicationService {
     this.runtime.requireSameSession(session);
   }
 
+  public sleep(): Promise<void> {
+    return this.powerLifecycle.sleep();
+  }
+
   public async readMeasurements(
     measurements: NonEmptyArray<MeasurementSpec>,
   ): Promise<MeasurementValue[]> {
@@ -155,6 +181,10 @@ export class ScopeService implements ScopeApplicationService {
 
   public resumeLiveWaveform(): void {
     this.runtime.getSession()?.live.resume();
+  }
+
+  public close(): void {
+    this.powerLifecycle.close();
   }
 
   private controllerFor(session: ScopeRuntimeSession): ScopeController {

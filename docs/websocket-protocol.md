@@ -4,7 +4,7 @@
 
 Rigol Web uses one persistent WebSocket connection between each browser tab and the server.
 
-Protocol version 4 supports exactly two instrument identities:
+Protocol version 6 supports exactly two instrument identities:
 
 ```ts
 export enum SupportedInstrument {
@@ -25,12 +25,12 @@ Protocol discriminants and fixed values use numeric TypeScript enums. Object fie
 ## Protocol version
 
 ```ts
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 6;
 ```
 
-Version 4 is a hard-cut change from version 3 because every numeric DMM latest-reading snapshot now carries a required positive `resolution` quantum from the same authoritative measurement observation. Browser formatting rounds to that quantum instead of reconstructing precision from rate, digit class or Auto-range state. Old browser/server bundles must therefore fail the hello version check rather than silently mixing snapshot shapes.
+Version 6 is a hard-cut change because DHO804 Sleep is now a typed WebSocket application command (`ScopeSleep`) rather than an HTTP endpoint. Browser/server bundles must agree on the new request discriminant and command-completion semantics; older bundles fail the hello version check instead of mixing control planes.
 
-Version 3 introduced the latest-reading snapshot contract, explicit non-applicable DMM controls and function-bound DMM controls. Version 2 introduced instrument subscriptions, explicit raw-SCPI targets and DM858E lifecycle/control messages.
+Version 4 introduced authoritative DMM numeric `resolution` in latest-reading snapshots. Version 3 introduced the latest-reading snapshot contract, explicit non-applicable DMM controls and function-bound DMM controls. Version 2 introduced instrument subscriptions, explicit raw-SCPI targets and DM858E lifecycle/control messages. Version 5 was the production protocol immediately before Stream B; the checked-in protocol-constant test had lagged that source version and is corrected alongside the version-6 hard cut.
 
 Do not renumber existing message values when changing names or adding messages unless a deliberate protocol break requires it.
 
@@ -72,6 +72,8 @@ export enum MessageType {
   WaveformViewportRequest = 15,
   ScpiExecute = 16,
   MeasurementRead = 17,
+  MeasurementSet = 18,
+  ScopeSleep = 19,
 
   CommandCompleted = 20,
   CommandFailed = 21,
@@ -114,7 +116,7 @@ These messages do not use request IDs. The observable result is the correspondin
 Server behaviour:
 
 - only subscribed browser sessions receive that instrument's lifecycle/state/data;
-- scope commands require a DHO804 subscription;
+- scope commands, including `ScopeSleep`, require a DHO804 subscription;
 - DMM commands require a DM858E subscription;
 - `ScpiExecute` requires a subscription to its explicit target;
 - closing the browser WebSocket releases all subscriptions owned by that session.
@@ -144,6 +146,8 @@ type ScopeLifecycleMessage =
 ```
 
 `ScopeConnected` is not published until DHO804 identity is verified and a complete initial `ScopeState` has been read. The server sends complete authoritative `ScopeState` snapshots rather than partial patches.
+
+During deliberate Sleep suspension the service publishes a disconnected scope lifecycle while preserving browser subscriptions. When the physical SCPI endpoint is observed offline and later online, the runtime resumes and normal connection lifecycle publication continues.
 
 ## DMM lifecycle and latest-reading snapshots
 
@@ -249,6 +253,23 @@ export enum AcquisitionAction {
 
 These actions are DHO804-only and require a DHO804 subscription.
 
+## DHO804 Sleep
+
+Sleep is a normal request/completion application command:
+
+```ts
+interface ScopeSleepMessage {
+  type: MessageType.ScopeSleep; // 19
+  requestId: number;
+}
+```
+
+A successful request receives `CommandCompleted`. If runtime suspension, ADB dispatch or other synchronous Sleep orchestration fails, the request receives `CommandFailed` with the error text. The browser must not call a REST/HTTP power endpoint.
+
+Successful command completion means the final native Sleep tap has been dispatched successfully after an immediate ADB reachability check. The scope can tear down ADB before that child process reports a normal exit, so the server deliberately does not wait for post-tap process completion.
+
+Physical wake is not a browser command. The scope is woken with its front-panel power key; the server-side scope service watches the configured SCPI endpoint for offline-then-online transition and resumes the physical runtime session.
+
 ## DMM controls
 
 ```ts
@@ -312,6 +333,8 @@ interface MeasurementResultMessage {
 ```
 
 Requests must be non-empty. Values are returned in request order. Any failed requested measurement fails the request rather than returning a partial optional result.
+
+`MeasurementSetMessage` uses message type 18 and the same request/completion framing for measurement-selection mutation.
 
 ## Raw SCPI
 
@@ -398,10 +421,12 @@ type ClientMessage =
   | InteractionUpdateMessage
   | InteractionCommitMessage
   | AcquisitionActionMessage
+  | ScopeSleepMessage
   | DeepCaptureRequestMessage
   | WaveformViewportRequestMessage
   | ScpiExecuteMessage
   | MeasurementReadMessage
+  | MeasurementSetMessage
   | DmmControlSetMessage;
 
 type ServerJsonMessage =

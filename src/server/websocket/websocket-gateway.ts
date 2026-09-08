@@ -431,6 +431,11 @@ function parseClientMessage(value: unknown): ClientMessage {
         requestId: readRequestId(value.requestId),
         action: readAcquisitionAction(value.action),
       };
+    case MessageType.ScopeSleep:
+      return {
+        type: MessageType.ScopeSleep,
+        requestId: readRequestId(value.requestId),
+      };
     case MessageType.DeepCaptureRequest:
       return {
         type: MessageType.DeepCaptureRequest,
@@ -822,6 +827,12 @@ export class WebSocketGateway {
           const revision = this.connectedScopeRevision();
           await this.scopeService.performAcquisitionAction(message.action);
           this.requireScopeConnectionRevision(revision);
+          this.sendCompleted(client, message.requestId);
+          return;
+        }
+        case MessageType.ScopeSleep: {
+          this.requireSubscribed(client, SupportedInstrument.Dho804);
+          await this.scopeService.sleep();
           this.sendCompleted(client, message.requestId);
           return;
         }

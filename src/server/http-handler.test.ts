@@ -46,4 +46,12 @@ describe("createHttpRequestHandler", () => {
       expect(await response.text()).toBe("not found\n");
     });
   });
+
+  it("does not expose DHO804 Sleep as an HTTP control endpoint", async () => {
+    await withBuiltWeb(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/scope/sleep`, { method: "POST" });
+      expect(response.status).toBe(404);
+      expect(await response.text()).toBe("not found\n");
+    });
+  });
 });

@@ -24,6 +24,7 @@ import {
   type MeasurementResultMessage,
   type NonEmptyArray,
   type ProtocolHelloAckMessage,
+  type ScopeSleepMessage,
   type ScpiExecuteMessage,
   type ScpiResultMessage,
   type ServerJsonMessage,
@@ -269,6 +270,15 @@ export class ScopeWebSocketClient {
       type: MessageType.AcquisitionAction,
       requestId,
       action,
+    };
+    return this.sendCommand(message);
+  }
+
+  public sleep(): Promise<void> {
+    const requestId = this.nextRequestId();
+    const message: ScopeSleepMessage = {
+      type: MessageType.ScopeSleep,
+      requestId,
     };
     return this.sendCommand(message);
   }
@@ -527,6 +537,7 @@ export class ScopeWebSocketClient {
       | ControlSetMessage
       | InteractionCommitMessage
       | AcquisitionActionMessage
+      | ScopeSleepMessage
       | MeasurementSetMessage
       | DmmControlSetMessage,
   ): Promise<void> {
@@ -542,6 +553,7 @@ export class ScopeWebSocketClient {
       | ControlSetMessage
       | InteractionCommitMessage
       | AcquisitionActionMessage
+      | ScopeSleepMessage
       | DeepCaptureRequestMessage
       | ScpiExecuteMessage
       | MeasurementReadMessage

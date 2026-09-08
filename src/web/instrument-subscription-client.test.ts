@@ -93,6 +93,20 @@ describe("browser instrument subscriptions", () => {
     ]);
   });
 
+  it("sends scope Sleep through the normal request path", async () => {
+    const socket = new FakeSocket();
+    const client = createClient(socket);
+    completeHandshake(socket);
+
+    const result = client.sleep();
+    expect(socket.sent[0]).toEqual({
+      type: MessageType.ScopeSleep,
+      requestId: 0,
+    });
+    socket.receive({ type: MessageType.CommandCompleted, requestId: 0 });
+    await expect(result).resolves.toBeUndefined();
+  });
+
   it("targets raw SCPI at the selected instrument", async () => {
     const socket = new FakeSocket();
     const client = createClient(socket);
