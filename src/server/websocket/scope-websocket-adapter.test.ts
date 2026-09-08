@@ -18,6 +18,7 @@ import {
 import {
   ControlKind,
   MessageType,
+  type InteractiveControl,
   type ServerJsonMessage,
 } from "../../shared/websocket-protocol.js";
 import {
@@ -94,8 +95,11 @@ class FakeHost implements WebSocketAdapterHost {
 interface Harness {
   adapter: ScopeWebSocketAdapter;
   host: FakeHost;
-  service: ScopeApplicationService;
   setControl: ReturnType<typeof vi.fn>;
+  updateInteraction: ReturnType<typeof vi.fn>;
+  commitInteraction: ReturnType<typeof vi.fn>;
+  pauseLiveWaveform: ReturnType<typeof vi.fn>;
+  resumeLiveWaveform: ReturnType<typeof vi.fn>;
   publishState(state: ScopeState): void;
 }
 
@@ -107,6 +111,10 @@ function createHarness(): Harness {
   };
   let stateListener: ((state: ScopeState) => void) | undefined;
   const setControl = vi.fn(async () => undefined);
+  const updateInteraction = vi.fn(async (_control: InteractiveControl) => undefined);
+  const commitInteraction = vi.fn(async (_control: InteractiveControl) => undefined);
+  const pauseLiveWaveform = vi.fn(async () => undefined);
+  const resumeLiveWaveform = vi.fn();
   const service = {
     getConnection: () => connection,
     subscribeConnection: () => () => {},
@@ -116,8 +124,10 @@ function createHarness(): Harness {
     },
     subscribeWaveform: () => () => {},
     setControl,
-    pauseLiveWaveform: vi.fn(async () => undefined),
-    resumeLiveWaveform: vi.fn(),
+    updateInteraction,
+    commitInteraction,
+    pauseLiveWaveform,
+    resumeLiveWaveform,
   } as unknown as ScopeApplicationService;
   const adapter = new ScopeWebSocketAdapter(service);
   const host = new FakeHost();
@@ -125,8 +135,11 @@ function createHarness(): Harness {
   return {
     adapter,
     host,
-    service,
     setControl,
+    updateInteraction,
+    commitInteraction,
+    pauseLiveWaveform,
+    resumeLiveWaveform,
     publishState: (state) => stateListener?.(state),
   };
 }
@@ -182,6 +195,67 @@ describe("ScopeWebSocketAdapter", () => {
       command: "*IDN?",
     })).toBe(false);
     expect(harness.host.requireSubscribed).not.toHaveBeenCalled();
+    harness.adapter.detach();
+  });
+
+  it("keeps a long-lived interaction owned by one browser session", async () => {
+    const harness = createHarness();
+    const first = { id: 3 };
+    const second = { id: 4 };
+    const control = {
+      kind: ControlKind.HorizontalPosition,
+      value: 0.001,
+    } as const;
+
+    expect(await harness.adapter.tryDispatch(first, {
+      type: MessageType.InteractionUpdate,
+      control,
+    })).toBe(true);
+    expect(harness.pauseLiveWaveform).toHaveBeenCalledOnce();
+    expect(harness.updateInteraction).toHaveBeenCalledWith(control);
+
+    await expect(harness.adapter.tryDispatch(second, {
+      type: MessageType.InteractionCommit,
+      requestId: 9,
+      control,
+    })).rejects.toThrow("Scope interaction is owned by another browser session");
+    expect(harness.resumeLiveWaveform).not.toHaveBeenCalled();
+
+    expect(await harness.adapter.tryDispatch(first, {
+      type: MessageType.InteractionCommit,
+      requestId: 10,
+      control,
+    })).toBe(true);
+    expect(harness.commitInteraction).toHaveBeenCalledWith(control);
+    expect(harness.host.sendCompleted).toHaveBeenCalledWith(first, 10);
+    expect(harness.resumeLiveWaveform).toHaveBeenCalledOnce();
+    harness.adapter.detach();
+  });
+
+  it("releases an owned interaction when its browser unsubscribes", async () => {
+    const harness = createHarness();
+    const first = { id: 5 };
+    const second = { id: 6 };
+    const control = {
+      kind: ControlKind.TriggerLevel,
+      value: 0.5,
+    } as const;
+
+    await harness.adapter.tryDispatch(first, {
+      type: MessageType.InteractionUpdate,
+      control,
+    });
+    harness.adapter.sessionUnsubscribed(first);
+
+    expect(harness.resumeLiveWaveform).toHaveBeenCalledOnce();
+
+    await harness.adapter.tryDispatch(second, {
+      type: MessageType.InteractionUpdate,
+      control,
+    });
+    expect(harness.pauseLiveWaveform).toHaveBeenCalledTimes(2);
+    expect(harness.updateInteraction).toHaveBeenCalledTimes(2);
+    harness.adapter.sessionUnsubscribed(second);
     harness.adapter.detach();
   });
 });
