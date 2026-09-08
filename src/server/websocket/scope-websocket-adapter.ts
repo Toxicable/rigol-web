@@ -121,7 +121,6 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
           control.kind === ControlKind.HorizontalScale ||
           control.kind === ControlKind.HorizontalPosition;
         if (pausesLive) {
-          this.requireInteractionAvailable(session);
           await this.scopeService.pauseLiveWaveform();
         }
         console.info("Scope control requested", {
