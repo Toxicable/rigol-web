@@ -232,10 +232,47 @@ describe("ScopeWebSocketAdapter", () => {
     harness.adapter.detach();
   });
 
+  it("keeps atomic controls global while another browser owns an interaction", async () => {
+    const harness = createHarness();
+    const owner = { id: 5 };
+    const writer = { id: 6 };
+    const interactionControl = {
+      kind: ControlKind.HorizontalPosition,
+      value: 0.001,
+    } as const;
+    const atomicControl = {
+      kind: ControlKind.HorizontalScale,
+      value: 0.002,
+    } as const;
+
+    await harness.adapter.tryDispatch(owner, {
+      type: MessageType.InteractionUpdate,
+      control: interactionControl,
+    });
+
+    expect(await harness.adapter.tryDispatch(writer, {
+      type: MessageType.ControlSet,
+      requestId: 11,
+      control: atomicControl,
+    })).toBe(true);
+    expect(harness.setControl).toHaveBeenCalledWith(atomicControl);
+    expect(harness.host.sendCompleted).toHaveBeenCalledWith(writer, 11);
+    expect(harness.pauseLiveWaveform).toHaveBeenCalledTimes(2);
+    expect(harness.resumeLiveWaveform).not.toHaveBeenCalled();
+
+    await harness.adapter.tryDispatch(owner, {
+      type: MessageType.InteractionCommit,
+      requestId: 12,
+      control: interactionControl,
+    });
+    expect(harness.resumeLiveWaveform).toHaveBeenCalledOnce();
+    harness.adapter.detach();
+  });
+
   it("releases an owned interaction when its browser unsubscribes", async () => {
     const harness = createHarness();
-    const first = { id: 5 };
-    const second = { id: 6 };
+    const first = { id: 7 };
+    const second = { id: 8 };
     const control = {
       kind: ControlKind.TriggerLevel,
       value: 0.5,
