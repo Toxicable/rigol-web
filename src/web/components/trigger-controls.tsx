@@ -9,8 +9,8 @@ import {
   type ScopeState,
 } from "../../shared/scope-types.js";
 import { ControlKind, type ControlChange } from "../../shared/websocket-protocol.js";
+import type { ScopeBinding } from "../scope-binding.js";
 import { useScopeStore } from "../scope-store.js";
-import type { ScopeWebSocketClient } from "../websocket-client.js";
 import { EditableNumberInput } from "./editable-number.js";
 
 const TYPE_LABELS: Record<TriggerType, string> = {
@@ -53,7 +53,7 @@ const COUPLING_LABELS: Record<TriggerCoupling, string> = {
 
 interface TriggerControlsProps {
   scope: ScopeState;
-  client: ScopeWebSocketClient;
+  client: ScopeBinding;
 }
 
 export function TriggerControls({ scope, client }: TriggerControlsProps) {
