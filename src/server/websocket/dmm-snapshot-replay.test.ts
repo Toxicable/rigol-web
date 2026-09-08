@@ -2,7 +2,7 @@ import { once } from "node:events";
 import { createServer, type Server as HttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { WebSocket, type RawData } from "ws";
 
 import {
@@ -24,7 +24,6 @@ import {
   ScopeConnectionKind,
   type DmmConnection,
 } from "../instruments/instrument-connection.js";
-import { InstrumentRegistry } from "../instruments/instrument-registry.js";
 import type { ScopeApplicationService } from "../scope/scope-service.js";
 import { DmmWebSocketAdapter } from "./dmm-websocket-adapter.js";
 import { ScopeWebSocketAdapter } from "./scope-websocket-adapter.js";
@@ -116,31 +115,17 @@ function createHarness(server: HttpServer) {
   const service = new DmmService({ host: "dmm.test", port: 5556 });
   const internals = service as unknown as DmmServiceInternals;
   internals.acceptConnection({ kind: DmmConnectionKind.Connected, info: dmmInfo, state: dmmState });
-  const start = vi.fn(async () => undefined);
-  const stop = vi.fn(async () => undefined);
-  const registry = new InstrumentRegistry({
-    dho804: {
-      endpoint: { host: "scope.test", port: 5555 },
-      runtime: { start: vi.fn(), stop: vi.fn() },
-    },
-    dm858e: {
-      endpoint: { host: "dmm.test", port: 5556 },
-      runtime: { start, stop },
-      subscriberAdded: () => service.replayCurrentSnapshot(),
-    },
-  });
   const gateway = new WebSocketGateway(server, {
-    instruments: registry,
     scopeAdapter: new ScopeWebSocketAdapter(new UnusedScopeService()),
     dmmAdapter: new DmmWebSocketAdapter(service),
   });
-  return { service, internals, gateway, start, stop };
+  return { service, internals, gateway };
 }
 
-describe("DMM snapshot subscription replay", () => {
-  it("replays an unchanged current snapshot to second and reconnecting subscribers", async () => {
+describe("DMM snapshot publication replay", () => {
+  it("replays the current snapshot only to each newly subscribing session", async () => {
     const httpServer = createServer();
-    const { internals, gateway, start } = createHarness(httpServer);
+    const { internals, gateway } = createHarness(httpServer);
     const port = await listen(httpServer);
     const clients: WebSocket[] = [];
 
@@ -150,11 +135,18 @@ describe("DMM snapshot subscription replay", () => {
       const firstConnected = waitForJson(first, (message) => message.type === MessageType.DmmConnected);
       first.send(JSON.stringify({ type: MessageType.InstrumentSubscribe, instrument: SupportedInstrument.Dm858e }));
       await firstConnected;
-      expect(start).toHaveBeenCalledOnce();
 
       const firstSnapshot = waitForJson(first, (message) => message.type === MessageType.DmmSnapshot);
       internals.acceptSnapshot(snapshot);
       expect(await firstSnapshot).toEqual({ type: MessageType.DmmSnapshot, snapshot });
+
+      let firstReplayCount = 0;
+      const firstListener = (data: RawData, isBinary: boolean): void => {
+        if (isBinary) return;
+        const message = JSON.parse(data.toString()) as ServerJsonMessage;
+        if (message.type === MessageType.DmmSnapshot) firstReplayCount += 1;
+      };
+      first.on("message", firstListener);
 
       const second = await connect(port);
       clients.push(second);
@@ -163,7 +155,9 @@ describe("DMM snapshot subscription replay", () => {
       second.send(JSON.stringify({ type: MessageType.InstrumentSubscribe, instrument: SupportedInstrument.Dm858e }));
       await secondConnected;
       expect(await secondSnapshot).toEqual({ type: MessageType.DmmSnapshot, snapshot });
-      expect(start).toHaveBeenCalledOnce();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(firstReplayCount).toBe(0);
+      first.off("message", firstListener);
 
       const closed = once(second, "close");
       second.close();
@@ -176,13 +170,12 @@ describe("DMM snapshot subscription replay", () => {
       reconnect.send(JSON.stringify({ type: MessageType.InstrumentSubscribe, instrument: SupportedInstrument.Dm858e }));
       await reconnectConnected;
       expect(await reconnectSnapshot).toEqual({ type: MessageType.DmmSnapshot, snapshot });
-      expect(start).toHaveBeenCalledOnce();
     } finally {
       await closeHarness(clients, gateway, httpServer);
     }
   });
 
-  it("never replays a pre-change numeric snapshot after same-function state changes", async () => {
+  it("replays the current invalidated snapshot after same-function state changes", async () => {
     const httpServer = createServer();
     const { internals, gateway } = createHarness(httpServer);
     const port = await listen(httpServer);
