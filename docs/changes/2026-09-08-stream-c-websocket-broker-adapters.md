@@ -11,7 +11,7 @@ The server WebSocket layer is now split at the instrument application boundary.
 - `DmmWebSocketAdapter` owns DM858E request validation/dispatch, lifecycle/state/snapshot projection, raw SCPI mapping, and connection-revision checks.
 - `websocket-validation.ts` contains only validation primitives shared by the broker/adapters; instrument-specific validation remains in the relevant adapter.
 - The adapter/host contract is deliberately tiny and transport-only. The two adapters remain fixed server composition; no plugin registry, DI framework, generic instrument capability model, or event bus was added.
-- Scope/DMM application services are unchanged and remain independent of WebSocket types.
+- Scope/DMM application services are unchanged and do not depend on the WebSocket gateway/adapters. Existing shared request/domain types are not redesigned in this stream.
 - Wire protocol remains version 6. No compatibility path or protocol migration was introduced.
 - Physical runtime activation remains browser-subscription-owned. Moving runtime lifetime to server ownership remains Stream D.
 
