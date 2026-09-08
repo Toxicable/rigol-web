@@ -35,7 +35,7 @@ const reading = {
 } as const;
 
 beforeEach(() => {
-  useDmmStore.getState().setConnecting();
+  useDmmStore.getState().setAwaitingInstrument();
 });
 
 describe("DMM store", () => {
