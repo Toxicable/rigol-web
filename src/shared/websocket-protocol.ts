@@ -1,3 +1,4 @@
+import type { AcquisitionOperation } from "./acquisition-types.js";
 import type {
   DmmControlChange,
   DmmInfo,
@@ -16,7 +17,7 @@ import type {
   TriggerType,
 } from "./scope-types.js";
 
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 export type NonEmptyArray<T> = [T, ...T[]];
 
@@ -53,6 +54,13 @@ export enum MessageType {
   DmmSnapshot = 43,
 
   DmmControlSet = 50,
+
+  AcquisitionOperationStart = 60,
+  AcquisitionOperationStop = 61,
+  AcquisitionOperationGet = 62,
+  AcquisitionOperationList = 63,
+  AcquisitionOperationResult = 64,
+  AcquisitionOperationListResult = 65,
 }
 
 export enum AcquisitionAction {
@@ -292,6 +300,41 @@ export type DmmLifecycleMessage =
   | DmmDisconnectedMessage
   | DmmSnapshotMessage;
 
+export interface AcquisitionOperationStartMessage {
+  type: MessageType.AcquisitionOperationStart;
+  requestId: number;
+  label: string;
+}
+
+export interface AcquisitionOperationStopMessage {
+  type: MessageType.AcquisitionOperationStop;
+  requestId: number;
+  operationId: number;
+}
+
+export interface AcquisitionOperationGetMessage {
+  type: MessageType.AcquisitionOperationGet;
+  requestId: number;
+  operationId: number;
+}
+
+export interface AcquisitionOperationListMessage {
+  type: MessageType.AcquisitionOperationList;
+  requestId: number;
+}
+
+export interface AcquisitionOperationResultMessage {
+  type: MessageType.AcquisitionOperationResult;
+  requestId: number;
+  operation: AcquisitionOperation;
+}
+
+export interface AcquisitionOperationListResultMessage {
+  type: MessageType.AcquisitionOperationListResult;
+  requestId: number;
+  operations: AcquisitionOperation[];
+}
+
 export interface CommandCompletedMessage {
   type: MessageType.CommandCompleted;
   requestId: number;
@@ -319,7 +362,11 @@ export type ClientMessage =
   | ScpiExecuteMessage
   | MeasurementReadMessage
   | MeasurementSetMessage
-  | DmmControlSetMessage;
+  | DmmControlSetMessage
+  | AcquisitionOperationStartMessage
+  | AcquisitionOperationStopMessage
+  | AcquisitionOperationGetMessage
+  | AcquisitionOperationListMessage;
 
 export type ServerJsonMessage =
   | ProtocolHelloMessage
@@ -328,4 +375,6 @@ export type ServerJsonMessage =
   | CommandResult
   | ScpiResultMessage
   | MeasurementResultMessage
-  | DeepCaptureReadyMessage;
+  | DeepCaptureReadyMessage
+  | AcquisitionOperationResultMessage
+  | AcquisitionOperationListResultMessage;
