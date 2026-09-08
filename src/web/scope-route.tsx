@@ -7,6 +7,7 @@ import { MeasurementOverlay } from "./components/measurement-overlay.js";
 import { MeasurementPanel } from "./components/measurement-panel.js";
 import { ScopeToolbar } from "./components/scope-toolbar.js";
 import { TriggerControls } from "./components/trigger-controls.js";
+import type { ScopeActions } from "./scope-actions.js";
 import type { ScopeBinding } from "./scope-binding.js";
 import { bindScopeRoute } from "./scope-route-binding.js";
 import { BrowserConnectionKind, useScopeStore } from "./scope-store.js";
@@ -15,10 +16,11 @@ import { WaveformPlot } from "./waveform/waveform-plot.js";
 
 interface ScopeRouteProps {
   binding: ScopeBinding;
+  actions: ScopeActions;
   controller: WaveformController;
 }
 
-export function ScopeRoute({ binding, controller }: ScopeRouteProps) {
+export function ScopeRoute({ binding, actions, controller }: ScopeRouteProps) {
   const transport = useAppTransportStore((state) => state.transport);
   const connection = useScopeStore((state) => state.connection);
 
@@ -39,7 +41,7 @@ export function ScopeRoute({ binding, controller }: ScopeRouteProps) {
 
   return (
     <section className="scope-route">
-      <ScopeToolbar client={binding} />
+      <ScopeToolbar actions={actions} />
       {connected ? (
         <div className="scope-layout">
           <div className="waveform-column">
@@ -47,16 +49,16 @@ export function ScopeRoute({ binding, controller }: ScopeRouteProps) {
               <WaveformPlot
                 scope={connection.scope}
                 controller={controller}
-                client={binding}
+                actions={actions}
               />
               <MeasurementOverlay scope={connection.scope} />
             </section>
-            <MeasurementPanel client={binding} controller={controller} />
+            <MeasurementPanel actions={actions} controller={controller} />
           </div>
           <aside className="control-stack">
-            <ChannelControls channels={connection.scope.channels} client={binding} />
-            <HorizontalControls scope={connection.scope} client={binding} />
-            <TriggerControls scope={connection.scope} client={binding} />
+            <ChannelControls channels={connection.scope.channels} actions={actions} />
+            <HorizontalControls scope={connection.scope} actions={actions} />
+            <TriggerControls scope={connection.scope} actions={actions} />
           </aside>
         </div>
       ) : (
