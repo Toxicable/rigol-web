@@ -7,7 +7,7 @@ The browser serves two fixed instrument routes while keeping one application tra
 - `/` — DHO804 oscilloscope
 - `/dm858e` — DM858E digital multimeter
 
-The browser architecture is concrete rather than a generic instrument framework. Scope and DMM keep separate domain stores and bindings.
+The browser architecture is concrete rather than a generic instrument framework. Scope and DMM keep separate domain stores, bindings and action APIs.
 
 ## Top-level ownership
 
@@ -23,18 +23,32 @@ React App
   |     - shared transport state
   |
   +-> ScopeBinding
-  |     - DHO804 lifecycle/state projection
-  |     - scope request construction
+  |     - DHO804 wire request/message mapping
+  |     - lifecycle/state projection
   |     - waveform decode/controller handoff
   |     - scope publication subscription
+  |       ^
+  |       |
+  |     ScopeActions
+  |     - domain-valued scope commands
+  |     - optimistic updates
+  |     - interaction coalescing/commit
+  |     - command error/pending ownership
+  |     - measurement configuration/polling
   |
   `-> DmmBinding
-        - DM858E lifecycle/state/snapshot projection
-        - DMM request construction
+        - DM858E wire request/message mapping
+        - lifecycle/state/snapshot projection
         - DMM publication subscription
+          ^
+          |
+        DmmActions
+        - domain-valued DMM controls
+        - redundant-write suppression
+        - pending/error ownership
 ```
 
-`App` constructs one `AppConnection` above the route elements. Route navigation does not recreate it. `ScopeBinding` and `DmmBinding` are also application-owned and remain alive while their route is unmounted; route mount/unmount only calls `activate()` / `deactivate()`.
+`App` constructs one `AppConnection`, `ScopeBinding`, `DmmBinding`, `ScopeActions` and `DmmActions` above the route elements. Route navigation does not recreate them. Route mount/unmount controls publication subscriptions only.
 
 The obsolete scope-shaped global `ScopeWebSocketClient` no longer exists.
 
@@ -50,9 +64,9 @@ export enum AppTransportKind {
 }
 ```
 
-`Connected` means the WebSocket has completed the application protocol handshake, not merely that the TCP/WebSocket socket opened.
+`Connected` means the WebSocket completed the application protocol handshake, not merely that the socket opened.
 
-Scope and DMM stores do not duplicate WebSocket connecting/disconnected state. They represent the selected physical instrument/domain presentation only. When shared transport leaves `Connected`, active bindings invalidate stale instrument presentation by returning their instrument store to its awaiting-instrument state.
+Scope and DMM stores do not duplicate WebSocket transport state. They represent physical instrument/domain presentation only. When shared transport leaves `Connected`, active bindings invalidate stale instrument presentation by returning their instrument store to its awaiting-instrument state.
 
 Transport and physical instrument lifecycle answer different questions:
 
@@ -74,9 +88,9 @@ connect
   -> resend desired instrument subscriptions
 ```
 
-Application messages fail locally before the handshake is complete. A protocol-version mismatch closes the socket clearly. When a socket closes unexpectedly, pending requests fail, shared transport becomes disconnected, and the connection retries. Desired route subscriptions remain remembered and are replayed after the next successful handshake.
+Application messages fail locally before handshake completion. A protocol-version mismatch closes the socket clearly. Unexpected close rejects pending requests and schedules reconnect. Desired route subscriptions are replayed only after the next successful handshake.
 
-Request IDs and request/result correlation are application-wide responsibilities of `AppConnection`; they are not duplicated by instrument bindings.
+Request IDs and request/result correlation are application-wide responsibilities of `AppConnection`; instrument bindings and actions do not duplicate them.
 
 ## Route subscriptions
 
@@ -90,34 +104,63 @@ DMM route mount       -> DmmBinding.activate()     -> subscribe DM858E
 DMM route unmount     -> DmmBinding.deactivate()   -> unsubscribe DM858E
 ```
 
-These subscriptions do not own physical runtime lifetime. The server starts and maintains the configured DHO804 and DM858E runtimes independently of browser routes. Route changes, last unsubscribe, browser disconnect and browser reconnect do not start or stop physical runtimes.
+Scope route unmount also cancels any browser-side coalesced interaction update before unsubscribing, preventing an interaction update from being emitted after route exit.
+
+These subscriptions do not own physical runtime lifetime. The server maintains the configured DHO804 and DM858E runtimes independently of browser routes, last unsubscribe, browser disconnect and browser reconnect.
+
+## Domain actions
+
+Ordinary React controls express instrument-domain intent, not WebSocket messages or protocol discriminants.
+
+Examples:
+
+```text
+Channel scale input
+  -> ScopeActions.setChannelScale(channel, value)
+  -> optimistic scope presentation
+  -> ScopeBinding.setControl(...)
+  -> AppConnection request
+  -> authoritative ScopeState later replaces optimistic state
+
+DMM range button
+  -> DmmActions.setRange(range)
+  -> construct control from current authoritative DMM function
+  -> DMM pending ownership
+  -> DmmBinding.setDmmControl(...)
+  -> authoritative DmmState later wins
+```
+
+`ScopeActions` owns ordinary scope command failure presentation, optimistic control updates, 50 ms latest-value interaction coalescing, final interaction commit, Sleep pending state, and scope measurement configuration/polling. `DmmActions` owns DMM control construction, redundant-write suppression, and generation-safe pending/error handling.
+
+Scope and DMM actions remain separate. There is no generic dispatcher, reducer or cross-instrument command abstraction.
+
+Local UI-only state stays in components where appropriate; for example DMM trend viewport state and measurement picker selections do not need an action layer.
 
 ## Scope binding
 
-`ScopeBinding` owns the browser-side mapping between DHO804 protocol traffic and scope application/domain behavior. It currently owns:
+`ScopeBinding` maps DHO804 protocol traffic to scope domain behavior. It owns:
 
 - DHO804 lifecycle/state message handling;
-- scope command request construction;
-- measurement request/poll coordination;
-- deep-capture request/result handling;
+- wire request construction for scope controls/actions;
+- deep-capture request/result wire mapping;
 - DHO804 binary waveform decoding;
 - waveform-controller session reset and deep-capture retirement;
 - transport-loss invalidation of scope presentation;
 - publication subscribe/unsubscribe.
 
-Ordinary React components still call scope binding methods in Stream E. Moving optimistic command/error orchestration out of views into a dedicated scope action layer is Stream F; do not fold that work back into `AppConnection`.
+It does not own ordinary measurement polling, optimistic control orchestration or React command error handling; those belong to `ScopeActions`.
 
 ## DMM binding
 
-`DmmBinding` owns the browser-side mapping between DM858E protocol traffic and DMM domain state. It owns:
+`DmmBinding` maps DM858E protocol traffic to DMM domain state. It owns:
 
 - DMM lifecycle/state/snapshot message handling;
-- DMM command request construction;
+- DMM wire request construction;
 - instrument-targeted DMM SCPI calls;
 - transport-loss invalidation of DMM presentation;
 - publication subscribe/unsubscribe.
 
-The DMM store remains separate from scope state. DMM pending-control/error presentation remains DMM-specific; Stream F owns moving view-side control orchestration behind domain actions.
+The DMM store remains separate from scope state. DMM control pending/error orchestration belongs to `DmmActions`.
 
 ## Instrument stores
 
@@ -129,6 +172,7 @@ The DMM store remains separate from scope state. DMM pending-control/error prese
 - complete authoritative `ScopeState`;
 - measurement selections/results;
 - deep-capture lifecycle metadata;
+- Sleep pending presentation;
 - scope-specific UI error state.
 
 It does not own WebSocket transport lifecycle.
@@ -140,11 +184,11 @@ It does not own WebSocket transport lifecycle.
 - awaiting/connected/disconnected physical DMM presentation;
 - complete authoritative `DmmState`;
 - latest primary reading;
-- DMM control pending/error presentation.
+- generation-safe DMM control pending/error presentation.
 
 It does not own WebSocket transport lifecycle.
 
-Physical instrument state remains authoritative. Optimistic presentation may be used for interaction, but complete later server state wins.
+Physical instrument state remains authoritative. Actions may update presentation optimistically, but later complete server state replaces the authoritative instrument snapshot.
 
 ## DHO804 waveform path
 
@@ -159,7 +203,9 @@ WebSocket binary frame
   -> uPlot
 ```
 
-`AppConnection` does not decode or interpret DHO804 waveform payloads. Scope-specific decoding, sequence handling, live/deep display state and malformed-frame policy stay in `ScopeBinding` / the waveform layer.
+`AppConnection` does not decode DHO804 waveform payloads. Scope-specific decoding, sequence handling, live/deep display state and malformed-frame policy stay in `ScopeBinding` / the waveform layer.
+
+The waveform view keeps pointer geometry and imperative rendering. It emits domain interaction intent to `ScopeActions`; it no longer constructs `InteractiveControl` wire values or owns interaction coalescing/error handling.
 
 Create one uPlot instance for the mounted scope waveform view and update it imperatively. Use uPlot mode 2 so channels can carry independent X/Y arrays. Do not auto-range channel Y scales from waveform values.
 
@@ -167,15 +213,15 @@ DHO804 live samples remain latest-oriented and disposable. Deep-capture source d
 
 ## Scope interactions
 
-Continuous scope interactions remain optimistic. During a drag, presentation updates locally and `InteractionUpdate` is sent without waiting for acknowledgement. At interaction end, `InteractionCommit` completes through normal request correlation and authoritative server state reconciles the result.
+Continuous scope interactions remain optimistic. During a drag, `ScopeActions` updates presentation immediately and emits the newest coalesced `InteractionUpdate` without waiting for acknowledgement. At interaction end it sends `InteractionCommit`; authoritative scope state later reconciles the result.
 
 The server owns the browser-session lease for long-lived scope interactions. Browser route subscription is not a physical-runtime lease.
 
-The waveform shell remains the interaction coordinate system for horizontal position, channel-offset markers and trigger-level markers. Established full-shell drag equations and clamped-marker behavior remain unchanged by Stream E.
+The waveform shell remains the interaction coordinate system for horizontal position, channel-offset markers and trigger-level markers. Existing full-shell drag equations and clamped-marker behavior remain unchanged.
 
 ## Measurements and deep capture
 
-Scope measurements remain dynamic request/result data, not `ScopeState`. Only displayed scope measurements are polled, with overlapping measurement requests suppressed.
+Scope measurements remain dynamic request/result data, not `ScopeState`. `ScopeActions` configures displayed measurements and suppresses overlapping polling requests.
 
 Deep capture remains an explicit scope operation:
 
@@ -187,13 +233,13 @@ Deep capture remains an explicit scope operation:
 
 ## Raw SCPI
 
-Raw SCPI is explicitly instrument-targeted:
+Raw SCPI is deliberately transport-oriented and explicitly instrument-targeted:
 
 ```text
 AppConnection.executeScpi(instrument, command)
 ```
 
-There is no implicit scope target. `AppConnection` owns request correlation only; server-side scope/DMM adapters own instrument dispatch.
+The raw SCPI console is the intentional exception to ordinary domain-action controls: it is a diagnostic protocol surface whose purpose is to send arbitrary SCPI to a selected instrument. There is no implicit scope target and no fake domain action wrapper around arbitrary SCPI.
 
 ## Presentation rules
 
@@ -205,11 +251,11 @@ The shared instrument header continues to own application-level controls such as
 
 - keep one application WebSocket across route changes;
 - keep WebSocket transport state in one application store;
-- keep scope/DMM domain stores separate;
+- keep scope/DMM domain stores and action APIs separate;
 - keep waveform samples outside React/Zustand and outside generic transport semantics;
 - reuse one uPlot instance while the scope view is mounted;
-- keep continuous interactions optimistic;
+- keep continuous interactions optimistic and latest-oriented;
 - keep live/deep waveform caches bounded/latest-oriented;
 - do not retain stale DMM or scope connected presentation after transport loss;
-- do not add a generic instrument store, plugin layer or client-side event bus;
+- do not add a generic instrument store, plugin layer, command dispatcher or client-side event bus;
 - measure before adding throttles or rendering machinery.
