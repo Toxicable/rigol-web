@@ -1,44 +1,20 @@
 import { SupportedInstrument } from "../../shared/instrument-types.js";
 import { isRigolScpiLoggingEnabled } from "../logging.js";
 
-export interface InstrumentEndpoint {
-  host: string;
-  port: number;
-}
-
 export interface InstrumentRuntime {
   start(): void | Promise<void>;
   stop(): void | Promise<void>;
 }
 
 interface InstrumentEntry {
-  endpoint: InstrumentEndpoint;
   runtime: InstrumentRuntime;
-  subscriberAdded: (() => void | Promise<void>) | undefined;
-  subscribers: Set<object>;
   running: boolean;
-  revision: number;
   transition: Promise<void>;
 }
 
-export interface InstrumentRegistration {
-  endpoint: InstrumentEndpoint;
-  runtime: InstrumentRuntime;
-  subscriberAdded?: () => void | Promise<void>;
-}
-
 export interface InstrumentRegistrations {
-  dho804: InstrumentRegistration;
-  dm858e: InstrumentRegistration;
-}
-
-function validateEndpoint(name: string, endpoint: InstrumentEndpoint): void {
-  if (endpoint.host.trim().length === 0) {
-    throw new Error(`${name} host must be a non-empty string`);
-  }
-  if (!Number.isInteger(endpoint.port) || endpoint.port < 1 || endpoint.port > 65_535) {
-    throw new Error(`${name} port must be an integer from 1 through 65535`);
-  }
+  dho804: InstrumentRuntime;
+  dm858e: InstrumentRuntime;
 }
 
 function debugLifecycle(
@@ -51,11 +27,7 @@ function debugLifecycle(
   }
   console.debug(`[SCPI] instrument ${event}`, {
     instrument,
-    subscribers: entry.subscribers.size,
     running: entry.running,
-    revision: entry.revision,
-    host: entry.endpoint.host,
-    port: entry.endpoint.port,
   });
 }
 
@@ -63,111 +35,50 @@ export class InstrumentRegistry {
   private readonly entries: Map<SupportedInstrument, InstrumentEntry>;
 
   public constructor(registrations: InstrumentRegistrations) {
-    validateEndpoint("DHO804", registrations.dho804.endpoint);
-    validateEndpoint("DM858E", registrations.dm858e.endpoint);
-
     this.entries = new Map([
       [SupportedInstrument.Dho804, this.createEntry(registrations.dho804)],
       [SupportedInstrument.Dm858e, this.createEntry(registrations.dm858e)],
     ]);
   }
 
-  public isSubscribed(session: object, instrument: SupportedInstrument): boolean {
-    return this.entry(instrument).subscribers.has(session);
-  }
-
-  public endpoint(instrument: SupportedInstrument): InstrumentEndpoint {
-    return this.entry(instrument).endpoint;
-  }
-
-  public async subscribe(session: object, instrument: SupportedInstrument): Promise<void> {
-    const entry = this.entry(instrument);
-    if (entry.subscribers.has(session)) {
-      await entry.transition;
-      return;
-    }
-
-    entry.subscribers.add(session);
-    entry.revision += 1;
-    debugLifecycle("subscribe", instrument, entry);
-
-    try {
-      await this.queueReconcile(instrument, entry);
-      if (entry.subscribers.has(session)) {
-        await entry.subscriberAdded?.();
-      }
-    } catch (error) {
-      if (entry.subscribers.delete(session)) {
-        entry.revision += 1;
-        debugLifecycle("subscribe-rollback", instrument, entry);
-        await this.queueReconcile(instrument, entry).catch(() => undefined);
-      }
-      throw error;
-    }
-  }
-
-  public unsubscribe(session: object, instrument: SupportedInstrument): Promise<void> {
-    const entry = this.entry(instrument);
-    if (!entry.subscribers.delete(session)) {
-      return entry.transition;
-    }
-
-    entry.revision += 1;
-    debugLifecycle("unsubscribe", instrument, entry);
-    return this.queueReconcile(instrument, entry);
-  }
-
-  public async releaseSession(session: object): Promise<void> {
-    const transitions: Promise<void>[] = [];
-    for (const [instrument, entry] of this.entries) {
-      if (!entry.subscribers.delete(session)) {
-        continue;
-      }
-      entry.revision += 1;
-      debugLifecycle("release-session", instrument, entry);
-      transitions.push(this.queueReconcile(instrument, entry));
-    }
-    await Promise.all(transitions);
+  public async startAll(): Promise<void> {
+    await Promise.all(
+      [...this.entries].map(([instrument, entry]) =>
+        this.queueTransition(instrument, entry, true),
+      ),
+    );
   }
 
   public async stopAll(): Promise<void> {
-    const transitions: Promise<void>[] = [];
-    for (const [instrument, entry] of this.entries) {
-      entry.subscribers.clear();
-      entry.revision += 1;
-      debugLifecycle("stop-all", instrument, entry);
-      transitions.push(this.queueReconcile(instrument, entry));
+    const results = await Promise.allSettled(
+      [...this.entries].map(([instrument, entry]) =>
+        this.queueTransition(instrument, entry, false),
+      ),
+    );
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (failure !== undefined) {
+      throw failure.reason;
     }
-    await Promise.all(transitions);
   }
 
-  private createEntry(registration: InstrumentRegistration): InstrumentEntry {
+  private createEntry(runtime: InstrumentRuntime): InstrumentEntry {
     return {
-      endpoint: registration.endpoint,
-      runtime: registration.runtime,
-      subscriberAdded: registration.subscriberAdded,
-      subscribers: new Set(),
+      runtime,
       running: false,
-      revision: 0,
       transition: Promise.resolve(),
     };
   }
 
-  private entry(instrument: SupportedInstrument): InstrumentEntry {
-    const entry = this.entries.get(instrument);
-    if (entry === undefined) {
-      throw new Error(`Unsupported instrument ${instrument}`);
-    }
-    return entry;
-  }
-
-  private queueReconcile(
+  private queueTransition(
     instrument: SupportedInstrument,
     entry: InstrumentEntry,
+    shouldRun: boolean,
   ): Promise<void> {
     const transition = entry.transition.then(
-      () => this.reconcile(instrument, entry),
-      () => this.reconcile(instrument, entry),
+      () => this.reconcile(instrument, entry, shouldRun),
+      () => this.reconcile(instrument, entry, shouldRun),
     );
     entry.transition = transition.catch(() => undefined);
     return transition;
@@ -176,26 +87,23 @@ export class InstrumentRegistry {
   private async reconcile(
     instrument: SupportedInstrument,
     entry: InstrumentEntry,
+    shouldRun: boolean,
   ): Promise<void> {
-    while (true) {
-      const revision = entry.revision;
-      const shouldRun = entry.subscribers.size > 0;
-
-      if (shouldRun && !entry.running) {
-        debugLifecycle("runtime-start", instrument, entry);
-        await entry.runtime.start();
-        entry.running = true;
-        debugLifecycle("runtime-started", instrument, entry);
-      } else if (!shouldRun && entry.running) {
-        entry.running = false;
-        debugLifecycle("runtime-stop", instrument, entry);
-        await entry.runtime.stop();
-        debugLifecycle("runtime-stopped", instrument, entry);
-      }
-
-      if (revision === entry.revision) {
-        return;
-      }
+    if (shouldRun === entry.running) {
+      return;
     }
+
+    if (shouldRun) {
+      debugLifecycle("runtime-start", instrument, entry);
+      await entry.runtime.start();
+      entry.running = true;
+      debugLifecycle("runtime-started", instrument, entry);
+      return;
+    }
+
+    debugLifecycle("runtime-stop", instrument, entry);
+    await entry.runtime.stop();
+    entry.running = false;
+    debugLifecycle("runtime-stopped", instrument, entry);
   }
 }
