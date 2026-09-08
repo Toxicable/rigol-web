@@ -16,8 +16,8 @@ import {
   horizontalPositionFromDrag,
   triggerLevelFromMarkerDrag,
 } from "../interaction-math.js";
+import type { ScopeBinding } from "../scope-binding.js";
 import { DeepCaptureKind, useScopeStore } from "../scope-store.js";
-import type { ScopeWebSocketClient } from "../websocket-client.js";
 import {
   divisionSplits,
   formatTimeAxisValues,
@@ -33,7 +33,7 @@ import {
 interface WaveformPlotProps {
   scope: ScopeState;
   controller: WaveformController;
-  client: ScopeWebSocketClient;
+  client: ScopeBinding;
 }
 
 interface PlotLayout {
@@ -167,9 +167,6 @@ function triggerMarkerPlacement(
   if (source === undefined) {
     return null;
   }
-  // Scope state can briefly contain an uninitialized scale while the first
-  // instrument state packet is arriving. Do not pass a zero/invalid domain to
-  // the marker geometry helper during that transition.
   if (
     !validMarkerLayout(layout) ||
     !Number.isFinite(source.scale) ||
