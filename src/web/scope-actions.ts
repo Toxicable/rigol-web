@@ -41,6 +41,10 @@ export class ScopeActions {
 
   public dispose(): void {
     this.sleepGeneration += 1;
+    this.cancelPendingInteraction();
+  }
+
+  public cancelPendingInteraction(): void {
     if (this.interactionTimer !== null) {
       window.clearTimeout(this.interactionTimer);
       this.interactionTimer = null;
@@ -268,11 +272,7 @@ export class ScopeActions {
   }
 
   private commitInteraction(control: InteractiveControl): Promise<void> {
-    if (this.interactionTimer !== null) {
-      window.clearTimeout(this.interactionTimer);
-      this.interactionTimer = null;
-    }
-    this.pendingInteraction = null;
+    this.cancelPendingInteraction();
     useScopeStore.getState().applyOptimisticControl(control);
     return this.binding.interactionCommit(control).catch((error: unknown) => {
       this.surfaceError(error);
