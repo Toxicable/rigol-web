@@ -58,6 +58,7 @@ export interface ScopeStoreState {
   measurementSpecs: MeasurementSpec[];
   measurementValues: MeasurementValue[];
   deepCapture: DeepCaptureState;
+  sleepPending: boolean;
   lastError: string | null;
   setAwaitingInstrument(): void;
   setScopeDisconnected(reason: string): void;
@@ -149,6 +150,7 @@ export const useScopeStore = create<ScopeStoreState>((set) => ({
   measurementSpecs: [],
   measurementValues: [],
   deepCapture: noDeepCapture(),
+  sleepPending: false,
   lastError: null,
 
   setAwaitingInstrument: () =>
@@ -156,6 +158,7 @@ export const useScopeStore = create<ScopeStoreState>((set) => ({
       connection: { kind: BrowserConnectionKind.AwaitingInstrument },
       deepCapture: noDeepCapture(),
       measurementValues: [],
+      sleepPending: false,
     }),
 
   setScopeDisconnected: (reason) =>
@@ -163,6 +166,7 @@ export const useScopeStore = create<ScopeStoreState>((set) => ({
       connection: { kind: BrowserConnectionKind.ScopeDisconnected, reason },
       deepCapture: noDeepCapture(),
       measurementValues: [],
+      sleepPending: false,
     }),
 
   setScopeConnected: (info, scope) =>
@@ -170,6 +174,7 @@ export const useScopeStore = create<ScopeStoreState>((set) => ({
       connection: { kind: BrowserConnectionKind.ScopeConnected, info, scope },
       deepCapture: noDeepCapture(),
       measurementValues: [],
+      sleepPending: false,
       lastError: null,
     }),
 
