@@ -43,6 +43,7 @@ export interface WebSocketLike {
 type SocketFactory = (url: string) => WebSocketLike;
 type JsonMessageListener = (message: ServerJsonMessage) => void;
 type BinaryMessageListener = (data: ArrayBuffer) => void;
+type UnhandledFailureListener = (message: CommandFailedMessage) => void;
 
 export type RequestMessage =
   | ControlSetMessage
@@ -53,7 +54,8 @@ export type RequestMessage =
   | ScpiExecuteMessage
   | MeasurementReadMessage
   | MeasurementSetMessage
-  | DmmControlSetMessage;
+  | DmmControlSetMessage
+  | WaveformViewportRequestMessage;
 
 interface PendingRequest {
   resolve: (message: ServerJsonMessage) => void;
@@ -108,6 +110,7 @@ export class AppConnection {
   private readonly subscriptions = new Set<SupportedInstrument>();
   private readonly jsonListeners = new Set<JsonMessageListener>();
   private readonly binaryListeners = new Set<BinaryMessageListener>();
+  private readonly unhandledFailureListeners = new Set<UnhandledFailureListener>();
   private disposed = false;
   private protocolReady = false;
 
@@ -150,6 +153,7 @@ export class AppConnection {
     this.subscriptions.clear();
     this.jsonListeners.clear();
     this.binaryListeners.clear();
+    this.unhandledFailureListeners.clear();
     this.socket?.close(1000, "Client disposed");
     this.socket = null;
     this.rejectPending(new Error("WebSocket client disposed"));
@@ -188,6 +192,11 @@ export class AppConnection {
     return () => this.binaryListeners.delete(listener);
   }
 
+  public onUnhandledFailure(listener: UnhandledFailureListener): () => void {
+    this.unhandledFailureListeners.add(listener);
+    return () => this.unhandledFailureListeners.delete(listener);
+  }
+
   public send(message: ClientMessage): void {
     const socket = this.socket;
     if (socket === null || socket.readyState !== OPEN) {
@@ -199,12 +208,16 @@ export class AppConnection {
     socket.send(JSON.stringify(message));
   }
 
-  public request(buildMessage: (requestId: number) => RequestMessage): Promise<ServerJsonMessage> {
+  public request(
+    buildMessage: (requestId: number) => RequestMessage,
+    requestAllocated?: (requestId: number) => void,
+  ): Promise<ServerJsonMessage> {
     const requestId = this.allocateRequestId();
     const message = buildMessage(requestId);
     if (message.requestId !== requestId) {
       throw new Error("Request builder returned the wrong request ID");
     }
+    requestAllocated?.(requestId);
 
     return new Promise((resolve, reject) => {
       this.pending.set(requestId, { resolve, reject });
@@ -297,7 +310,11 @@ export class AppConnection {
     }
 
     if (message.type === MessageType.CommandFailed) {
-      this.rejectRequest(message);
+      if (!this.rejectRequest(message)) {
+        for (const listener of this.unhandledFailureListeners) {
+          listener(message);
+        }
+      }
     } else if ("requestId" in message && typeof message.requestId === "number") {
       this.resolvePending(message.requestId, message);
     }
@@ -322,13 +339,14 @@ export class AppConnection {
     pending.resolve(message);
   }
 
-  private rejectRequest(message: CommandFailedMessage): void {
+  private rejectRequest(message: CommandFailedMessage): boolean {
     const pending = this.pending.get(message.requestId);
     if (pending === undefined) {
-      return;
+      return false;
     }
     this.pending.delete(message.requestId);
     pending.reject(new Error(message.error));
+    return true;
   }
 
   private rejectPending(error: Error): void {
