@@ -79,16 +79,21 @@ The application-level WebSocket lives above route elements, so navigation does n
 
 Direct navigation to `/dm858e` uses the production SPA fallback. Missing static assets remain `404`.
 
-## Current physical instrument lifetime
+## Physical instrument lifetime
 
-Physical instrument sessions are still subscription-owned in the current architecture:
+Physical instrument sessions are server-owned, not browser-owned.
 
-1. first browser subscription activates the runtime;
-2. additional subscribers share it;
-3. last unsubscribe stops it;
-4. closing a WebSocket releases that session's subscriptions.
+At server startup:
 
-This model is intentionally unchanged by the WebSocket adapter refactor. The active architecture-refactor sequence moves physical lifetime to server ownership in Stream D; browser subscriptions then become publication/fanout concerns only.
+1. the fixed DHO804 and DM858E runtimes are started once;
+2. each runtime maintains its own physical SCPI session and reconnect loop;
+3. browser subscribe/unsubscribe changes publication fanout only;
+4. closing the last browser tab does not stop either physical runtime;
+5. server shutdown stops both runtimes explicitly.
+
+`InstrumentRegistry` is the small server-owned runtime manager for these two known runtimes. It does not track browser sessions or publication subscriptions.
+
+A route subscription is never a lease on a physical instrument session.
 
 ## WebSocket broker and adapters
 
@@ -100,8 +105,7 @@ The common `WebSocketGateway` owns only application transport/session concerns:
 - publication subscriptions;
 - common JSON/binary delivery;
 - common command completion/failure framing;
-- common socket backpressure threshold;
-- release of registry subscriptions on disconnect.
+- common socket backpressure threshold.
 
 Instrument semantics live behind explicit adapters:
 
@@ -111,9 +115,9 @@ WebSocketGateway
   -> DmmWebSocketAdapter   -> DmmService
 ```
 
-`ScopeWebSocketAdapter` owns scope request validation/dispatch, lifecycle/state projection, measurements, DHO804 raw SCPI mapping, deep-capture wire mapping and all DHO804 waveform browser-delivery semantics.
+`ScopeWebSocketAdapter` owns scope request validation/dispatch, lifecycle/state projection, measurements, DHO804 raw SCPI mapping, deep-capture wire mapping, DHO804 waveform browser-delivery semantics, and browser-session ownership of long-lived interactive scope controls.
 
-`DmmWebSocketAdapter` owns DMM request validation/dispatch, lifecycle/state/snapshot projection and DM858E raw SCPI mapping.
+`DmmWebSocketAdapter` owns DMM request validation/dispatch, lifecycle/state/snapshot projection, DM858E raw SCPI mapping, and current-snapshot replay to a newly subscribing browser session.
 
 The adapter contract is a small internal transport boundary for these two fixed adapters, not a plugin API. Scope and DMM domain models remain separate.
 
@@ -128,9 +132,9 @@ browser -> ProtocolHelloAck(version)
 
 Application traffic before a matching acknowledgement is rejected. Version mismatch closes the socket clearly.
 
-Protocol version 6 remains current. The Stream C adapter split is internal and does not change the wire protocol or add compatibility shims.
+Protocol version 6 remains current. The server-owned lifetime refactor is internal and does not change the wire protocol or add compatibility shims.
 
-After handshake the browser sends explicit instrument subscriptions. Publications are delivered only to subscribed sessions.
+After handshake the browser sends explicit instrument subscriptions. Publications are delivered only to subscribed sessions; those subscriptions do not start or stop physical runtimes.
 
 The WebSocket carries:
 
@@ -149,7 +153,7 @@ See `websocket-protocol.md` and `waveform-protocol.md`.
 
 ## Shared SCPI foundation
 
-Each active physical instrument owns its own `ScpiTransport` and `ScpiScheduler`. Implementations are shared; socket state and queues are not.
+Each physical instrument owns its own `ScpiTransport` and `ScpiScheduler`. Implementations are shared; socket state and queues are not.
 
 The scheduler preserves:
 
@@ -198,6 +202,20 @@ browser
 
 HTTP is not a second scope control plane.
 
+## Multi-browser control semantics
+
+Atomic instrument controls are global. Multiple subscribed browsers may issue them; the last accepted physical write wins.
+
+Long-lived scope interactions use an explicit browser-session lease in `ScopeWebSocketAdapter`:
+
+- the first `InteractionUpdate` acquires the lease and pauses live waveform delivery;
+- only that browser session may continue/commit the interaction while it owns the lease;
+- commit releases the lease and resumes live waveform delivery;
+- route unsubscribe or socket close releases the lease and resumes live waveform delivery;
+- a physical scope disconnect clears the lease because the old physical session is no longer usable.
+
+This is a narrow scope interaction rule, not collaborative locking infrastructure.
+
 ## DM858E server path
 
 ```text
@@ -218,7 +236,9 @@ ScpiTransport
 DM858E
 ```
 
-The physical DM858E remains authoritative. `DmmService` owns mutation serialization, authoritative post-mutation readback, stale function-dependent request rejection, and display-snapshot invalidation/deduplication/replay. `DmmRuntime` owns physical-session composition/recovery.
+The physical DM858E remains authoritative. `DmmService` owns mutation serialization, authoritative post-mutation readback, stale function-dependent request rejection, and display-snapshot invalidation/deduplication. `DmmRuntime` owns physical-session composition/recovery.
+
+The current display snapshot is retained by `DmmService`; `DmmWebSocketAdapter` sends that retained snapshot directly to each newly subscribing browser without rebroadcasting it to existing sessions.
 
 Do not route DM858E commands through scope services or place DMM state into scope state.
 
@@ -301,9 +321,11 @@ If SCPI socket/framing integrity is lost:
 
 - fail affected work clearly;
 - discard stale queued work;
-- close the uncertain session;
-- create a fresh session only while the runtime remains active under the current lifetime policy;
+- close the uncertain physical session;
+- create a fresh session while the server-owned runtime remains active;
 - never replay stale commands after reconnect.
+
+Physical reconnect does not require any browser subscriber to exist.
 
 Do not add persistent command queues, circuit breakers or per-command retry machinery without measured need.
 
