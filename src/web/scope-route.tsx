@@ -24,7 +24,13 @@ export function ScopeRoute({ binding, actions, controller }: ScopeRouteProps) {
   const transport = useAppTransportStore((state) => state.transport);
   const connection = useScopeStore((state) => state.connection);
 
-  useEffect(() => bindScopeRoute(binding), [binding]);
+  useEffect(() => {
+    const unbind = bindScopeRoute(binding);
+    return () => {
+      actions.cancelPendingInteraction();
+      unbind();
+    };
+  }, [actions, binding]);
 
   useEffect(() => {
     if (
