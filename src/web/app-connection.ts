@@ -63,6 +63,7 @@ interface PendingRequest {
 }
 
 const OPEN = 1;
+const RECONNECT_DELAY_MS = 500;
 
 function defaultSocketFactory(url: string): WebSocketLike {
   return new WebSocket(url) as WebSocketLike;
@@ -113,6 +114,7 @@ export class AppConnection {
   private readonly unhandledFailureListeners = new Set<UnhandledFailureListener>();
   private disposed = false;
   private protocolReady = false;
+  private reconnectTimer: number | null = null;
 
   public constructor(
     private readonly socketFactory: SocketFactory = defaultSocketFactory,
@@ -122,6 +124,7 @@ export class AppConnection {
   public connect(): void {
     this.disposed = false;
     this.protocolReady = false;
+    this.cancelReconnect();
     useAppTransportStore.getState().setConnecting();
 
     const socket = this.socketFactory(this.urlFactory());
@@ -140,9 +143,7 @@ export class AppConnection {
       const reason = event.reason || "WebSocket disconnected";
       useAppTransportStore.getState().setDisconnected(reason);
       this.rejectPending(new Error(reason));
-      if (!this.disposed) {
-        window.setTimeout(() => this.connect(), 500);
-      }
+      this.scheduleReconnect();
     };
     this.socket = socket;
   }
@@ -150,6 +151,7 @@ export class AppConnection {
   public dispose(): void {
     this.disposed = true;
     this.protocolReady = false;
+    this.cancelReconnect();
     this.subscriptions.clear();
     this.jsonListeners.clear();
     this.binaryListeners.clear();
@@ -354,5 +356,25 @@ export class AppConnection {
       pending.reject(error);
     }
     this.pending.clear();
+  }
+
+  private scheduleReconnect(): void {
+    if (this.disposed || this.reconnectTimer !== null) {
+      return;
+    }
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      if (!this.disposed) {
+        this.connect();
+      }
+    }, RECONNECT_DELAY_MS);
+  }
+
+  private cancelReconnect(): void {
+    if (this.reconnectTimer === null) {
+      return;
+    }
+    window.clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
   }
 }
