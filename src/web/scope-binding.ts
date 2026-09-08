@@ -31,7 +31,6 @@ const MAX_BINARY_ERRORS = 3;
 export class ScopeBinding {
   private active = false;
   private binaryErrors = 0;
-  private measurementInFlight = false;
   private readonly stopJsonListening: () => void;
   private readonly stopBinaryListening: () => void;
   private readonly stopFailureListening: () => void;
@@ -184,39 +183,6 @@ export class ScopeBinding {
     }));
   }
 
-  public async pollMeasurementsOnce(measurements: MeasurementSpec[]): Promise<void> {
-    if (measurements.length === 0 || this.measurementInFlight) {
-      return;
-    }
-
-    this.measurementInFlight = true;
-    try {
-      const [first, ...rest] = measurements;
-      if (first === undefined) {
-        return;
-      }
-      const response = await this.readMeasurements([first, ...rest]);
-      useScopeStore.getState().setMeasurementValues(response.values);
-    } finally {
-      this.measurementInFlight = false;
-    }
-  }
-
-  public startMeasurementPolling(
-    getMeasurements: () => MeasurementSpec[],
-    intervalMs = 1000,
-  ): () => void {
-    void this.pollMeasurementsOnce(getMeasurements()).catch((error: unknown) => {
-      this.surfaceError(error);
-    });
-    const timer = window.setInterval(() => {
-      void this.pollMeasurementsOnce(getMeasurements()).catch((error: unknown) => {
-        this.surfaceError(error);
-      });
-    }, intervalMs);
-    return () => window.clearInterval(timer);
-  }
-
   private handleJson(message: ServerJsonMessage): void {
     if (!this.active) {
       return;
@@ -307,5 +273,3 @@ export class ScopeBinding {
     useScopeStore.getState().setError(message);
   }
 }
-
-export { AcquisitionAction };
