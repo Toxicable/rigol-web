@@ -1,9 +1,7 @@
 import {
   DmmAcquisitionRate,
-  DmmControlKind,
   DmmMeasurementFunction,
   DmmRangeMode,
-  type DmmControlChange,
   type DmmRange,
   type DmmState,
 } from "../../../shared/dmm-types.js";
@@ -19,66 +17,9 @@ import { formatDmmRange } from "../../dmm/dmm-format.js";
 interface DmmControlsProps {
   state: DmmState;
   pending: boolean;
-  onControl(control: DmmControlChange): void;
-}
-
-export function functionControlForSelection(value: DmmMeasurementFunction): DmmControlChange {
-  return {
-    kind: DmmControlKind.Function,
-    value,
-  };
-}
-
-export function rangeControlForState(state: DmmState, value: DmmRange): DmmControlChange {
-  if (state.range === null) {
-    throw new Error("Current DMM function does not expose range control");
-  }
-  return {
-    kind: DmmControlKind.Range,
-    function: state.function,
-    value,
-  };
-}
-
-export function rateControlForState(
-  state: DmmState,
-  value: DmmAcquisitionRate,
-): DmmControlChange {
-  if (state.acquisitionRate === null) {
-    throw new Error("Current DMM function does not expose acquisition-rate control");
-  }
-  return {
-    kind: DmmControlKind.AcquisitionRate,
-    function: state.function,
-    value,
-  };
-}
-
-export function dmmControlMatchesState(
-  state: DmmState,
-  control: DmmControlChange,
-): boolean {
-  switch (control.kind) {
-    case DmmControlKind.Function:
-      return state.function === control.value;
-    case DmmControlKind.Range:
-      return control.function === state.function &&
-        state.range !== null &&
-        sameRange(state.range, control.value);
-    case DmmControlKind.AcquisitionRate:
-      return control.function === state.function &&
-        state.acquisitionRate === control.value;
-  }
-}
-
-function sameRange(left: DmmRange, right: DmmRange): boolean {
-  if (left.mode !== right.mode) {
-    return false;
-  }
-  if (left.mode === DmmRangeMode.Auto || right.mode === DmmRangeMode.Auto) {
-    return true;
-  }
-  return left.value === right.value;
+  onFunction(value: DmmMeasurementFunction): void;
+  onRange(value: DmmRange): void;
+  onAcquisitionRate(value: DmmAcquisitionRate): void;
 }
 
 function DmmFunctionIcon({ value }: { readonly value: DmmMeasurementFunction }) {
@@ -142,7 +83,13 @@ function DmmFunctionIcon({ value }: { readonly value: DmmMeasurementFunction }) 
   }
 }
 
-export function DmmControls({ state, pending, onControl }: DmmControlsProps) {
+export function DmmControls({
+  state,
+  pending,
+  onFunction,
+  onRange,
+  onAcquisitionRate,
+}: DmmControlsProps) {
   const ranges = dmmFixedRanges(state.function);
   const rangeUnit = dmmRangeUnit(state.function);
   const currentRange = state.range;
@@ -165,7 +112,7 @@ export function DmmControls({ state, pending, onControl }: DmmControlsProps) {
               aria-pressed={active}
               disabled={pending || active}
               title={option.label}
-              onClick={() => onControl(functionControlForSelection(option.value))}
+              onClick={() => onFunction(option.value)}
             >
               <span className="dmm-function-choice-label">
                 <DmmFunctionIcon value={option.value} />
@@ -185,7 +132,7 @@ export function DmmControls({ state, pending, onControl }: DmmControlsProps) {
               className={currentRange.mode === DmmRangeMode.Auto ? "dmm-choice active" : "dmm-choice"}
               aria-pressed={currentRange.mode === DmmRangeMode.Auto}
               disabled={pending || currentRange.mode === DmmRangeMode.Auto}
-              onClick={() => onControl(rangeControlForState(state, { mode: DmmRangeMode.Auto }))}
+              onClick={() => onRange({ mode: DmmRangeMode.Auto })}
             >
               Auto
             </button>
@@ -198,10 +145,10 @@ export function DmmControls({ state, pending, onControl }: DmmControlsProps) {
                   className={active ? "dmm-choice active" : "dmm-choice"}
                   aria-pressed={active}
                   disabled={pending || active}
-                  onClick={() => onControl(rangeControlForState(state, {
+                  onClick={() => onRange({
                     mode: DmmRangeMode.Fixed,
                     value: range,
-                  }))}
+                  })}
                 >
                   {rangeUnit === null ? String(range) : formatDmmRange(range, rangeUnit)}
                 </button>
@@ -228,7 +175,7 @@ export function DmmControls({ state, pending, onControl }: DmmControlsProps) {
                   className={active ? "dmm-choice active" : "dmm-choice"}
                   aria-pressed={active}
                   disabled={pending || active}
-                  onClick={() => onControl(rateControlForState(state, rate))}
+                  onClick={() => onAcquisitionRate(rate)}
                 >
                   {dmmAcquisitionRateLabel(rate)}
                 </button>
