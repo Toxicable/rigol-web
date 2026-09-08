@@ -127,9 +127,13 @@ export class WebSocketGateway implements WebSocketAdapterHost {
     const scopeAdapter = new ScopeWebSocketAdapter(options.scopeService);
     const dmmAdapter = new DmmWebSocketAdapter(options.dmmService);
     this.adapters = [scopeAdapter, dmmAdapter];
-    this.adaptersByInstrument = new Map(
-      this.adapters.map((adapter) => [adapter.instrument, adapter]),
-    );
+    this.adaptersByInstrument = new Map<
+      SupportedInstrument,
+      WebSocketInstrumentAdapter
+    >([
+      [scopeAdapter.instrument, scopeAdapter],
+      [dmmAdapter.instrument, dmmAdapter],
+    ]);
 
     for (const adapter of this.adapters) {
       adapter.attach(this);
