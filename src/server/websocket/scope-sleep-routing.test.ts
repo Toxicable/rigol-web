@@ -29,6 +29,8 @@ import {
 } from "../instruments/instrument-connection.js";
 import { InstrumentRegistry } from "../instruments/instrument-registry.js";
 import type { ScopeApplicationService } from "../scope/scope-service.js";
+import { DmmWebSocketAdapter } from "./dmm-websocket-adapter.js";
+import { ScopeWebSocketAdapter } from "./scope-websocket-adapter.js";
 import { WebSocketGateway } from "./websocket-gateway.js";
 
 const scopeInfo: ScopeInfo = {
@@ -139,7 +141,11 @@ async function createHarness(): Promise<Harness> {
       runtime: { start: vi.fn(async () => undefined), stop: vi.fn(async () => undefined) },
     },
   });
-  const gateway = new WebSocketGateway(server, { instruments, scopeService, dmmService });
+  const gateway = new WebSocketGateway(server, {
+    instruments,
+    scopeAdapter: new ScopeWebSocketAdapter(scopeService),
+    dmmAdapter: new DmmWebSocketAdapter(dmmService),
+  });
   const port = await listen(server);
   active = { server, gateway, client: null, sleep, port };
   return active;
