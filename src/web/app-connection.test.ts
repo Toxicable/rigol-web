@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SupportedInstrument } from "../shared/instrument-types.js";
 import { Channel } from "../shared/scope-types.js";
@@ -58,7 +58,12 @@ beforeEach(() => {
       callback();
       return 1;
     },
+    clearTimeout: () => undefined,
   });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("AppConnection", () => {
@@ -166,6 +171,38 @@ describe("AppConnection", () => {
     expect(useAppTransportStore.getState().transport.kind).toBe(AppTransportKind.Connected);
 
     connection.dispose();
+  });
+
+  it("cancels a pending reconnect when the app connection is disposed", () => {
+    let reconnectCallback: (() => void) | undefined;
+    const clearTimeout = vi.fn();
+    vi.stubGlobal("window", {
+      setTimeout: (callback: () => void) => {
+        reconnectCallback = callback;
+        return 42;
+      },
+      clearTimeout,
+    });
+
+    const sockets: FakeSocket[] = [];
+    const connection = new AppConnection(
+      () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      () => "ws://test/ws",
+    );
+
+    connection.connect();
+    sockets[0]!.serverClose("network lost");
+    expect(reconnectCallback).toBeDefined();
+
+    connection.dispose();
+    expect(clearTimeout).toHaveBeenCalledWith(42);
+
+    reconnectCallback?.();
+    expect(sockets).toHaveLength(1);
   });
 
   it("rejects a mismatched protocol before publishing connected transport state", () => {
