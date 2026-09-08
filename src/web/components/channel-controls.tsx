@@ -4,10 +4,8 @@ import {
   ChannelCoupling,
   type ChannelState,
 } from "../../shared/scope-types.js";
-import { ControlKind, type ControlChange } from "../../shared/websocket-protocol.js";
 import { channelUnitSymbol, formatAmplitude } from "../format-value.js";
-import type { ScopeBinding } from "../scope-binding.js";
-import { useScopeStore } from "../scope-store.js";
+import type { ScopeActions } from "../scope-actions.js";
 import { EditableNumberInput } from "./editable-number.js";
 
 const COUPLING_LABELS: Record<ChannelCoupling, string> = {
@@ -18,19 +16,10 @@ const COUPLING_LABELS: Record<ChannelCoupling, string> = {
 
 interface ChannelControlsProps {
   channels: readonly ChannelState[];
-  client: ScopeBinding;
+  actions: ScopeActions;
 }
 
-export function ChannelControls({ channels, client }: ChannelControlsProps) {
-  const setControl = (control: ControlChange) => {
-    useScopeStore.getState().applyOptimisticControl(control);
-    void client.setControl(control).catch((error: unknown) => {
-      useScopeStore.getState().setError(
-        error instanceof Error ? error.message : String(error),
-      );
-    });
-  };
-
+export function ChannelControls({ channels, actions }: ChannelControlsProps) {
   return (
     <section className="panel">
       <h2>Channels</h2>
@@ -41,13 +30,9 @@ export function ChannelControls({ channels, client }: ChannelControlsProps) {
               <input
                 type="checkbox"
                 checked={channel.enabled}
-                onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                  setControl({
-                    kind: ControlKind.ChannelEnabled,
-                    channel: channel.channel,
-                    value: event.target.checked,
-                  })
-                }
+                onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                  void actions.setChannelEnabled(channel.channel, event.target.checked);
+                }}
               />
               CH{channel.channel}
             </label>
@@ -57,13 +42,9 @@ export function ChannelControls({ channels, client }: ChannelControlsProps) {
                 value={channel.scale}
                 validate={(value) => value > 0}
                 ariaLabel={`CH${channel.channel} scale`}
-                onCommit={(value) =>
-                  setControl({
-                    kind: ControlKind.ChannelScale,
-                    channel: channel.channel,
-                    value,
-                  })
-                }
+                onCommit={(value) => {
+                  void actions.setChannelScale(channel.channel, value);
+                }}
               />
               <span>{channelUnitSymbol(channel.unit)}/div</span>
             </label>
@@ -72,13 +53,9 @@ export function ChannelControls({ channels, client }: ChannelControlsProps) {
               <EditableNumberInput
                 value={channel.offset}
                 ariaLabel={`CH${channel.channel} offset`}
-                onCommit={(value) =>
-                  setControl({
-                    kind: ControlKind.ChannelOffset,
-                    channel: channel.channel,
-                    value,
-                  })
-                }
+                onCommit={(value) => {
+                  void actions.setChannelOffset(channel.channel, value);
+                }}
               />
               <span>{channelUnitSymbol(channel.unit)}</span>
             </label>
