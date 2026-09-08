@@ -30,12 +30,11 @@ import type { DeepCaptureInfo, DeepViewportRequest } from "../server/waveform/de
 import { DmmWebSocketAdapter } from "../server/websocket/dmm-websocket-adapter.js";
 import { ScopeWebSocketAdapter } from "../server/websocket/scope-websocket-adapter.js";
 import { WebSocketGateway } from "../server/websocket/websocket-gateway.js";
+import { AppConnection, type WebSocketLike } from "./app-connection.js";
+import { DmmBinding } from "./dmm/dmm-binding.js";
 import { bindDmmRoute } from "./dmm/dmm-route-binding.js";
+import { ScopeBinding } from "./scope-binding.js";
 import { bindScopeRoute } from "./scope-route-binding.js";
-import {
-  ScopeWebSocketClient,
-  type WebSocketLike,
-} from "./websocket-client.js";
 import { WaveformController } from "./waveform/waveform-controller.js";
 
 interface LifecycleSpy {
@@ -119,15 +118,22 @@ class NodeSocketAdapter implements WebSocketLike {
   public terminate(): void { this.socket.terminate(); }
 }
 
+interface BrowserClient {
+  connection: AppConnection;
+  scopeBinding: ScopeBinding;
+  dmmBinding: DmmBinding;
+  dispose(): void;
+}
+
 interface Harness {
   httpServer: HttpServer;
   gateway: WebSocketGateway;
   instruments: InstrumentRegistry;
   scopeLifecycle: LifecycleSpy;
   dmmLifecycle: LifecycleSpy;
-  clients: ScopeWebSocketClient[];
+  clients: BrowserClient[];
   adapters: NodeSocketAdapter[];
-  createClient(): ScopeWebSocketClient;
+  createClient(): BrowserClient;
 }
 
 let active: Harness | undefined;
@@ -174,7 +180,7 @@ async function createHarness(): Promise<Harness> {
   httpServer.listen(0, "127.0.0.1");
   await once(httpServer, "listening");
   const port = (httpServer.address() as AddressInfo).port;
-  const clients: ScopeWebSocketClient[] = [];
+  const clients: BrowserClient[] = [];
   const adapters: NodeSocketAdapter[] = [];
   const harness: Harness = {
     httpServer,
@@ -185,8 +191,7 @@ async function createHarness(): Promise<Harness> {
     clients,
     adapters,
     createClient: () => {
-      const client = new ScopeWebSocketClient(
-        new WaveformController(() => 0),
+      const connection = new AppConnection(
         (url) => {
           const adapter = new NodeSocketAdapter(url);
           adapters.push(adapter);
@@ -194,8 +199,23 @@ async function createHarness(): Promise<Harness> {
         },
         () => `ws://127.0.0.1:${port}/ws`,
       );
+      const scopeBinding = new ScopeBinding(
+        connection,
+        new WaveformController(() => 0),
+      );
+      const dmmBinding = new DmmBinding(connection);
+      const client: BrowserClient = {
+        connection,
+        scopeBinding,
+        dmmBinding,
+        dispose: () => {
+          scopeBinding.dispose();
+          dmmBinding.dispose();
+          connection.dispose();
+        },
+      };
       clients.push(client);
-      client.connect();
+      connection.connect();
       return client;
     },
   };
@@ -214,13 +234,13 @@ describe("server-owned instrument lifetime through browser routes", () => {
     expect(harness.dmmLifecycle.start).toHaveBeenCalledOnce();
 
     const client = harness.createClient();
-    const leaveScope = bindScopeRoute(client);
+    const leaveScope = bindScopeRoute(client.scopeBinding);
     await settle();
     leaveScope();
-    const leaveDmm = bindDmmRoute(client);
+    const leaveDmm = bindDmmRoute(client.dmmBinding);
     await settle();
     leaveDmm();
-    const leaveScopeAgain = bindScopeRoute(client);
+    const leaveScopeAgain = bindScopeRoute(client.scopeBinding);
     await settle();
 
     expect(harness.scopeLifecycle.start).toHaveBeenCalledOnce();
@@ -234,8 +254,8 @@ describe("server-owned instrument lifetime through browser routes", () => {
     const harness = await createHarness();
     const first = harness.createClient();
     const second = harness.createClient();
-    const leaveFirst = bindScopeRoute(first);
-    const leaveSecond = bindScopeRoute(second);
+    const leaveFirst = bindScopeRoute(first.scopeBinding);
+    const leaveSecond = bindScopeRoute(second.scopeBinding);
     await settle();
 
     leaveFirst();
@@ -250,8 +270,8 @@ describe("server-owned instrument lifetime through browser routes", () => {
     const harness = await createHarness();
     const scopeClient = harness.createClient();
     const dmmClient = harness.createClient();
-    bindScopeRoute(scopeClient);
-    bindDmmRoute(dmmClient);
+    bindScopeRoute(scopeClient.scopeBinding);
+    bindDmmRoute(dmmClient.dmmBinding);
     await settle();
 
     scopeClient.dispose();
@@ -265,7 +285,7 @@ describe("server-owned instrument lifetime through browser routes", () => {
   it("reconnects browser transport without restarting physical runtimes", async () => {
     const harness = await createHarness();
     const client = harness.createClient();
-    const leaveScope = bindScopeRoute(client);
+    const leaveScope = bindScopeRoute(client.scopeBinding);
     await vi.waitFor(() => expect(harness.adapters.length).toBe(1));
 
     harness.adapters.at(-1)?.terminate();
