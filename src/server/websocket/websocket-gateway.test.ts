@@ -11,7 +11,6 @@ import {
   PROTOCOL_VERSION,
   type ServerJsonMessage,
 } from "../../shared/websocket-protocol.js";
-import { InstrumentRegistry } from "../instruments/instrument-registry.js";
 import type {
   WebSocketAdapterHost,
   WebSocketInstrumentAdapter,
@@ -27,8 +26,7 @@ class FakeAdapter implements WebSocketInstrumentAdapter {
   public readonly attachSpy = vi.fn();
   public readonly detachSpy = vi.fn();
   public readonly tryDispatchSpy = vi.fn();
-  public readonly lifecycleSpy = vi.fn();
-  public readonly disconnectedSpy = vi.fn();
+  public readonly initialPublicationsSpy = vi.fn();
   public readonly unsubscribedSpy = vi.fn();
   public readonly transportAvailableSpy = vi.fn();
 
@@ -59,23 +57,18 @@ class FakeAdapter implements WebSocketInstrumentAdapter {
     return true;
   }
 
-  public sendLifecycle(session: WebSocketSession): void {
-    this.lifecycleSpy(session);
-    this.sendDisconnected(session, "test lifecycle");
-  }
-
-  public sendDisconnected(session: WebSocketSession, reason: string): void {
-    this.disconnectedSpy(session, reason);
+  public sendInitialPublications(session: WebSocketSession): void {
+    this.initialPublicationsSpy(session);
     if (this.instrument === SupportedInstrument.Dho804) {
       this.requireHost().sendJson(session, {
         type: MessageType.ScopeDisconnected,
-        reason,
+        reason: "test lifecycle",
       });
       return;
     }
     this.requireHost().sendJson(session, {
       type: MessageType.DmmDisconnected,
-      reason,
+      reason: "test lifecycle",
     });
   }
 
@@ -122,8 +115,6 @@ interface Harness {
   gateway: WebSocketGateway;
   scopeAdapter: FakeAdapter;
   dmmAdapter: FakeAdapter;
-  scopeStart: ReturnType<typeof vi.fn>;
-  scopeStop: ReturnType<typeof vi.fn>;
   clients: WebSocket[];
   port: number;
 }
@@ -144,25 +135,9 @@ afterEach(async () => {
 
 async function createHarness(): Promise<Harness> {
   const httpServer = createServer();
-  const scopeStart = vi.fn(async () => undefined);
-  const scopeStop = vi.fn(async () => undefined);
-  const instruments = new InstrumentRegistry({
-    dho804: {
-      endpoint: { host: "scope.test", port: 5555 },
-      runtime: { start: scopeStart, stop: scopeStop },
-    },
-    dm858e: {
-      endpoint: { host: "dmm.test", port: 5556 },
-      runtime: {
-        start: vi.fn(async () => undefined),
-        stop: vi.fn(async () => undefined),
-      },
-    },
-  });
   const scopeAdapter = new FakeAdapter(SupportedInstrument.Dho804);
   const dmmAdapter = new FakeAdapter(SupportedInstrument.Dm858e);
   const gateway = new WebSocketGateway(httpServer, {
-    instruments,
     scopeAdapter,
     dmmAdapter,
   });
@@ -172,8 +147,6 @@ async function createHarness(): Promise<Harness> {
     gateway,
     scopeAdapter,
     dmmAdapter,
-    scopeStart,
-    scopeStop,
     clients: [],
     port,
   };
@@ -223,8 +196,7 @@ describe("WebSocketGateway broker", () => {
 
     const [code] = await closed;
     expect(code).toBe(1002);
-    expect(server.scopeStart).not.toHaveBeenCalled();
-    expect(server.scopeAdapter.lifecycleSpy).not.toHaveBeenCalled();
+    expect(server.scopeAdapter.initialPublicationsSpy).not.toHaveBeenCalled();
   });
 
   it("rejects protocol version mismatch before adapter dispatch", async () => {
@@ -245,29 +217,27 @@ describe("WebSocketGateway broker", () => {
     expect(server.dmmAdapter.tryDispatchSpy).not.toHaveBeenCalled();
   });
 
-  it("owns subscription lifecycle while leaving lifecycle projection to the adapter", async () => {
+  it("treats subscribe and unsubscribe as publication state only", async () => {
     const server = await createHarness();
     const first = await connect(server);
     const second = await connect(server);
 
     await subscribeScope(first);
     await subscribeScope(second);
-    await vi.waitFor(() => expect(server.scopeStart).toHaveBeenCalledOnce());
-    expect(server.scopeAdapter.lifecycleSpy).toHaveBeenCalledTimes(2);
+    expect(server.scopeAdapter.initialPublicationsSpy).toHaveBeenCalledTimes(2);
 
     first.send(JSON.stringify({
       type: MessageType.InstrumentUnsubscribe,
       instrument: SupportedInstrument.Dho804,
     }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(server.scopeStop).not.toHaveBeenCalled();
-
     second.send(JSON.stringify({
       type: MessageType.InstrumentUnsubscribe,
       instrument: SupportedInstrument.Dho804,
     }));
-    await vi.waitFor(() => expect(server.scopeStop).toHaveBeenCalledOnce());
-    expect(server.scopeAdapter.unsubscribedSpy).toHaveBeenCalledTimes(2);
+
+    await vi.waitFor(() => {
+      expect(server.scopeAdapter.unsubscribedSpy).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("delegates non-common messages to adapters and owns result framing", async () => {
@@ -308,17 +278,15 @@ describe("WebSocketGateway broker", () => {
     expect(server.dmmAdapter.tryDispatchSpy).toHaveBeenCalledOnce();
   });
 
-  it("releases registry subscriptions and adapter session state on socket close", async () => {
+  it("releases only adapter publication/session state on socket close", async () => {
     const server = await createHarness();
     const client = await connect(server);
     await subscribeScope(client);
-    await vi.waitFor(() => expect(server.scopeStart).toHaveBeenCalledOnce());
     const closed = once(client, "close");
 
     client.close();
     await closed;
 
-    await vi.waitFor(() => expect(server.scopeStop).toHaveBeenCalledOnce());
     expect(server.scopeAdapter.unsubscribedSpy).toHaveBeenCalledOnce();
   });
 });
