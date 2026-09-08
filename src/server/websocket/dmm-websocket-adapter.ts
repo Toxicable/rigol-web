@@ -159,7 +159,7 @@ export class DmmWebSocketAdapter implements WebSocketInstrumentAdapter {
 
   private requireConnectionRevision(revision: number): void {
     if (revision !== this.connectionRevision) {
-      throw new Error("DMM session changed while request was in flight");
+      throw new Error("DMM connection changed while request was in flight");
     }
   }
 
