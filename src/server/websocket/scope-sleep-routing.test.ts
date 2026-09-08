@@ -27,7 +27,6 @@ import {
   ScopeConnectionKind,
   type ScopeConnection,
 } from "../instruments/instrument-connection.js";
-import { InstrumentRegistry } from "../instruments/instrument-registry.js";
 import type { ScopeApplicationService } from "../scope/scope-service.js";
 import { DmmWebSocketAdapter } from "./dmm-websocket-adapter.js";
 import { ScopeWebSocketAdapter } from "./scope-websocket-adapter.js";
@@ -127,22 +126,12 @@ async function createHarness(): Promise<Harness> {
   } as unknown as ScopeApplicationService;
   const dmmService = {
     getConnection: () => ({ kind: DmmConnectionKind.Disconnected, reason: "unused" } as const),
+    getCurrentSnapshot: () => null,
     subscribeConnection: () => () => {},
     subscribeState: () => () => {},
     subscribeSnapshot: () => () => {},
   } as unknown as DmmApplicationService;
-  const instruments = new InstrumentRegistry({
-    dho804: {
-      endpoint: { host: "scope.test", port: 5555 },
-      runtime: { start: vi.fn(async () => undefined), stop: vi.fn(async () => undefined) },
-    },
-    dm858e: {
-      endpoint: { host: "dmm.test", port: 5556 },
-      runtime: { start: vi.fn(async () => undefined), stop: vi.fn(async () => undefined) },
-    },
-  });
   const gateway = new WebSocketGateway(server, {
-    instruments,
     scopeAdapter: new ScopeWebSocketAdapter(scopeService),
     dmmAdapter: new DmmWebSocketAdapter(dmmService),
   });
