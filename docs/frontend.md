@@ -1,320 +1,215 @@
 # Frontend Architecture
 
-## Goals
+## Purpose
 
-The frontend serves two fixed instrument routes while keeping the existing DHO804 interaction path fast:
+The browser serves two fixed instrument routes while keeping one application transport connection alive across navigation:
 
 - `/` — DHO804 oscilloscope
 - `/dm858e` — DM858E digital multimeter
 
-The browser keeps one application-level WebSocket alive while navigating between these routes. Instrument state remains separate; adding the DM858E must not turn `scope-store.ts` into a mixed generic instrument store.
+The browser architecture is concrete rather than a generic instrument framework. Scope and DMM keep separate domain stores and bindings.
 
-## Stack
-
-- TypeScript
-- React
-- React Router
-- Vite
-- Zustand for instrument/application state
-- uPlot for DHO804 waveform rendering
-- one persistent WebSocket to the Rigol Web server
-
-## Application shell and routing
-
-`BrowserRouter` is mounted at the application root. `App` owns the persistent `ScopeWebSocketClient` instance and renders route elements through `Routes`/`Route`, with `NavLink` for the instrument switcher.
-
-The WebSocket client is created above the route elements, so navigation between `/` and `/dm858e` does not recreate it.
-
-Each route owns its instrument publication subscription:
+## Top-level ownership
 
 ```text
-Scope route mount     -> subscribe DHO804 publications
-Scope route unmount   -> unsubscribe DHO804 publications
-
-DM858E route mount    -> subscribe DM858E publications
-DM858E route unmount  -> unsubscribe DM858E publications
+React App
+  |
+  +-> AppConnection
+  |     - WebSocket connect/reconnect
+  |     - protocol handshake
+  |     - request IDs/correlation
+  |     - desired publication subscriptions
+  |     - JSON/binary transport fanout
+  |     - shared transport state
+  |
+  +-> ScopeBinding
+  |     - DHO804 lifecycle/state projection
+  |     - scope request construction
+  |     - waveform decode/controller handoff
+  |     - scope publication subscription
+  |
+  `-> DmmBinding
+        - DM858E lifecycle/state/snapshot projection
+        - DMM request construction
+        - DMM publication subscription
 ```
 
-These subscriptions do not own physical runtime lifetime. The server starts and maintains both configured runtimes independently of browser routes, so route changes, the last unsubscribe, and browser disconnect do not stop either instrument runtime.
+`App` constructs one `AppConnection` above the route elements. Route navigation does not recreate it. `ScopeBinding` and `DmmBinding` are also application-owned and remain alive while their route is unmounted; route mount/unmount only calls `activate()` / `deactivate()`.
 
-Production static serving must return `index.html` for the known application routes so direct navigation/refresh works with `BrowserRouter`, while missing asset paths still return normal 404s.
+The obsolete scope-shaped global `ScopeWebSocketClient` no longer exists.
 
-The shared instrument header exposes **Copy Screenshot**. It captures the currently rendered browser viewport, including live uPlot canvases and current form values, rasterizes it locally to PNG and writes that PNG to the image clipboard. This is a viewport capture, not a stitched full-scroll document capture. Image clipboard writes require a secure browser context, so the action works on HTTPS and localhost and reports an error when browser security blocks it. The implementation is browser-local and adds no external service or package dependency.
+## Shared transport state
 
-## Shared browser transport state
-
-WebSocket transport state is separate from either instrument's device lifecycle.
-
-The shared client exposes:
+`src/web/app-transport-store.ts` is the single owner of browser/server transport state:
 
 ```ts
-export enum BrowserTransportKind {
+export enum AppTransportKind {
   Connecting = 1,
   Connected = 2,
   Disconnected = 3,
 }
 ```
 
-`Connected` means the WebSocket is open **and** the application-level protocol hello has completed successfully.
+`Connected` means the WebSocket has completed the application protocol handshake, not merely that the TCP/WebSocket socket opened.
 
-Both route/store implementations must react to transport loss. A prior `DmmConnected` or valid DMM reading must not remain visually indistinguishable from live data after the browser/server socket is lost.
+Scope and DMM stores do not duplicate WebSocket connecting/disconnected state. They represent the selected physical instrument/domain presentation only. When shared transport leaves `Connected`, active bindings invalidate stale instrument presentation by returning their instrument store to its awaiting-instrument state.
 
-Instrument lifecycle and transport lifecycle answer different questions:
+Transport and physical instrument lifecycle answer different questions:
 
-- transport: can this browser currently communicate with Rigol Web?
-- instrument: is the selected physical instrument/runtime connected and usable?
+- transport: can this browser communicate with Rigol Web?
+- instrument: is the selected physical instrument connected and usable?
 
-Do not collapse them into a single optional object.
+Do not merge those into one generic state object.
 
-## WebSocket handshake
+## Protocol handshake and reconnect
 
-The browser does not send instrument subscriptions on raw socket open.
-
-Sequence:
+`AppConnection` performs:
 
 ```text
-WebSocket open
+connect
   -> wait for ProtocolHello
   -> require matching PROTOCOL_VERSION
   -> send ProtocolHelloAck
-  -> mark shared transport Connected
-  -> send currently desired instrument subscriptions
+  -> publish AppTransportKind.Connected
+  -> resend desired instrument subscriptions
 ```
 
-Application commands fail locally while the protocol handshake is incomplete.
+Application messages fail locally before the handshake is complete. A protocol-version mismatch closes the socket clearly. When a socket closes unexpectedly, pending requests fail, shared transport becomes disconnected, and the connection retries. Desired route subscriptions remain remembered and are replayed after the next successful handshake.
 
-On reconnect, desired route subscriptions remain remembered and are resent only after the new handshake succeeds.
+Request IDs and request/result correlation are application-wide responsibilities of `AppConnection`; they are not duplicated by instrument bindings.
 
-## Instrument state separation
+## Route subscriptions
+
+Each route controls only publication fanout:
+
+```text
+Scope route mount     -> ScopeBinding.activate()   -> subscribe DHO804
+Scope route unmount   -> ScopeBinding.deactivate() -> unsubscribe DHO804
+
+DMM route mount       -> DmmBinding.activate()     -> subscribe DM858E
+DMM route unmount     -> DmmBinding.deactivate()   -> unsubscribe DM858E
+```
+
+These subscriptions do not own physical runtime lifetime. The server starts and maintains the configured DHO804 and DM858E runtimes independently of browser routes. Route changes, last unsubscribe, browser disconnect and browser reconnect do not start or stop physical runtimes.
+
+## Scope binding
+
+`ScopeBinding` owns the browser-side mapping between DHO804 protocol traffic and scope application/domain behavior. It currently owns:
+
+- DHO804 lifecycle/state message handling;
+- scope command request construction;
+- measurement request/poll coordination;
+- deep-capture request/result handling;
+- DHO804 binary waveform decoding;
+- waveform-controller session reset and deep-capture retirement;
+- transport-loss invalidation of scope presentation;
+- publication subscribe/unsubscribe.
+
+Ordinary React components still call scope binding methods in Stream E. Moving optimistic command/error orchestration out of views into a dedicated scope action layer is Stream F; do not fold that work back into `AppConnection`.
+
+## DMM binding
+
+`DmmBinding` owns the browser-side mapping between DM858E protocol traffic and DMM domain state. It owns:
+
+- DMM lifecycle/state/snapshot message handling;
+- DMM command request construction;
+- instrument-targeted DMM SCPI calls;
+- transport-loss invalidation of DMM presentation;
+- publication subscribe/unsubscribe.
+
+The DMM store remains separate from scope state. DMM pending-control/error presentation remains DMM-specific; Stream F owns moving view-side control orchestration behind domain actions.
+
+## Instrument stores
 
 ### DHO804
 
-The existing `scope-store.ts` remains scope-specific. It owns:
+`scope-store.ts` owns scope/domain presentation state only:
 
-- scope connection/device lifecycle
-- complete authoritative `ScopeState`
-- measurement selections/results
-- deep-capture lifecycle metadata
-- scope UI errors/presentation state
+- awaiting/connected/disconnected physical scope presentation;
+- complete authoritative `ScopeState`;
+- measurement selections/results;
+- deep-capture lifecycle metadata;
+- scope-specific UI error state.
 
-Do not insert DM858E state into this store.
+It does not own WebSocket transport lifecycle.
 
 ### DM858E
 
-The separate DMM store uses the shared contracts from `dmm-types.ts` and `websocket-protocol.ts`.
+`dmm-store.ts` owns DMM/domain presentation state only:
 
-It owns:
+- awaiting/connected/disconnected physical DMM presentation;
+- complete authoritative `DmmState`;
+- latest primary reading;
+- DMM control pending/error presentation.
 
-- DM858E connection lifecycle
-- complete authoritative `DmmState`
-- latest primary reading
-- pending/request state needed for controls
-- DMM-specific UI state
+It does not own WebSocket transport lifecycle.
 
-It must also consume shared browser transport state so transport loss invalidates connected/reading presentation immediately.
+Physical instrument state remains authoritative. Optimistic presentation may be used for interaction, but complete later server state wins.
 
-## DHO804 waveform separation
+## DHO804 waveform path
 
-DHO804 waveform sample arrays do not belong in React state or Zustand.
+Waveform sample arrays stay outside React and Zustand:
 
 ```text
-WebSocket
-   |
-   +---- JSON scope state/control ----> scope Zustand store ----> React
-   |
-   `---- binary waveform ------------> waveform layer ---------> uPlot
+WebSocket binary frame
+  -> AppConnection transport fanout
+  -> ScopeBinding
+  -> decodeWaveformFrame()
+  -> WaveformController
+  -> uPlot
 ```
 
-A new waveform must not require rerendering the React application.
+`AppConnection` does not decode or interpret DHO804 waveform payloads. Scope-specific decoding, sequence handling, live/deep display state and malformed-frame policy stay in `ScopeBinding` / the waveform layer.
 
-DM858E readings are JSON messages and do not use the DHO804 binary waveform path.
+Create one uPlot instance for the mounted scope waveform view and update it imperatively. Use uPlot mode 2 so channels can carry independent X/Y arrays. Do not auto-range channel Y scales from waveform values.
 
-## WebSocket message ownership
+DHO804 live samples remain latest-oriented and disposable. Deep-capture source data remains server-side; the browser retains metadata and display-sized viewport windows only.
 
-The shared client owns:
+## Scope interactions
 
-- transport connection/reconnect
-- protocol hello/version validation
-- desired instrument subscriptions
-- request IDs and request/result correlation
-- dispatch of DHO804 lifecycle into the scope store
-- a DMM lifecycle/data listener boundary used by the DMM route/store
-- shared transport-state listeners
-- binary DHO804 waveform decoding/dispatch
+Continuous scope interactions remain optimistic. During a drag, presentation updates locally and `InteractionUpdate` is sent without waiting for acknowledgement. At interaction end, `InteractionCommit` completes through normal request correlation and authoritative server state reconciles the result.
 
-Components should use typed client methods rather than constructing numeric protocol discriminants manually.
+The server owns the browser-session lease for long-lived scope interactions. Browser route subscription is not a physical-runtime lease.
 
-Raw SCPI calls require an explicit `SupportedInstrument`; there is no default scope target.
+The waveform shell remains the interaction coordinate system for horizontal position, channel-offset markers and trigger-level markers. Established full-shell drag equations and clamped-marker behavior remain unchanged by Stream E.
 
-## DHO804 connection model
+## Measurements and deep capture
 
-The existing scope store may retain its scope-specific discriminated union:
+Scope measurements remain dynamic request/result data, not `ScopeState`. Only displayed scope measurements are polled, with overlapping measurement requests suppressed.
 
-```ts
-export enum BrowserConnectionKind {
-  Connecting = 1,
-  TransportDisconnected = 2,
-  ScopeDisconnected = 3,
-  ScopeConnected = 4,
-}
+Deep capture remains an explicit scope operation:
+
+- capture is retained server-side;
+- browser receives capture metadata;
+- browser requests display-sized viewports;
+- `WaveformController` owns viewport cache/display behavior;
+- Run/Single or authoritative resumed acquisition retires stale deep-capture presentation.
+
+## Raw SCPI
+
+Raw SCPI is explicitly instrument-targeted:
+
+```text
+AppConnection.executeScpi(instrument, command)
 ```
 
-This remains useful for the existing DHO804 UI, but new cross-instrument code should use the shared transport-state boundary rather than treating the scope store as global application state.
+There is no implicit scope target. `AppConnection` owns request correlation only; server-side scope/DMM adapters own instrument dispatch.
 
-Required connected scope fields stay non-optional.
+## Presentation rules
 
-## uPlot ownership
+Both routes combine shared transport state with instrument-domain state when deciding what to render. A stale prior reading or connected state must not look live after browser transport loss.
 
-Create one uPlot instance for the mounted DHO804 waveform view and update it imperatively.
-
-Use uPlot mode 2 so each channel can carry independent X/Y arrays. Keep fixed series slots for CH1-CH4 and use empty arrays for channels without current display data.
-
-## Scope-like scales
-
-The DHO804 has 10 horizontal and 8 vertical divisions.
-
-For normal YT/Main display:
-
-```ts
-xMin = horizontal.position - 5 * horizontal.scale;
-xMax = horizontal.position + 5 * horizontal.scale;
-```
-
-Per-channel Y range:
-
-```ts
-yMin = -channel.offset - 4 * channel.scale;
-yMax = -channel.offset + 4 * channel.scale;
-```
-
-Do not auto-range channel Y scales from waveform values.
-
-## DHO804 interactive fast path
-
-Continuous pointer interaction must not wait for a scope round trip.
-
-During a drag:
-
-1. update local visual state immediately
-2. send `InteractionUpdate`
-3. allow server-side scheduler coalescing
-4. keep rendering without waiting for acknowledgement
-
-At interaction end:
-
-1. send `InteractionCommit`
-2. keep the final optimistic value visible
-3. reconcile from authoritative scope state/readback
-
-The server gives each long-lived interactive sequence one browser-session owner while it is active. Another browser cannot commit or resume that interaction, and unsubscribe/disconnect releases the owner so live waveform acquisition cannot remain paused indefinitely. Atomic controls outside an active interaction remain global; the last accepted write wins.
-
-Initial continuous controls include channel offset, trigger level and horizontal position.
-
-The acquisition Run/Stop button colour reflects the current scope state, not the next action: active acquisition is green and stopped acquisition is red, while the button label remains the action that will be taken when clicked.
-
-Do not add arbitrary client-side rate limiting without measurement.
-
-## Direct waveform interactions
-
-Use HTML/React overlay handles around the uPlot area where practical.
-
-Initial mappings:
-
-- waveform-overlay background horizontal drag -> horizontal position
-- per-channel ground marker drag -> channel offset
-- Edge trigger-level marker drag -> trigger level
-
-The waveform interaction coordinate system is deliberately the **full waveform shell**, independent of uPlot's internal plot bounding box. Numeric axes and graticule layout may change the inner uPlot bbox, but they must not change established drag sensitivity, marker placement or the pointer-active area. Background horizontal drag is available across the waveform overlay; channel markers remain on the shell's left edge and the trigger marker remains on the shell's right edge.
-
-Keep pixel/domain conversion in tested functions.
-
-For waveform shell width `W`:
-
-```ts
-newHorizontalPosition =
-  startPosition - dx * (10 * horizontalScale) / W;
-```
-
-Vertical channel/trigger marker positions use the full waveform shell height and are clamped to its visible top/bottom edge when their true reference position is outside the shell. Drag math starts from that displayed marker coordinate.
-
-For waveform shell height `H`, channel scale `s`, displayed channel marker coordinate `startMarkerY`, and pointer movement `dy`:
-
-```ts
-newChannelOffset =
-  4 * s - (startMarkerY + dy) * (8 * s) / H;
-```
-
-When the marker is already in range, this is algebraically equivalent to `startOffset - dy * (8 * s) / H`. When the marker is clamped at an edge, the first actual drag movement rebases the offset onto the visible eight-division scale so a trace that is many divisions offscreen can be pulled back into view in one gesture. A click/release with zero movement preserves the original offset.
-
-For an Edge trigger marker using source-channel offset `sourceOffset` and source scale `s`:
-
-```ts
-newTriggerLevel =
-  -sourceOffset + 4 * s - (startMarkerY + dy) * (8 * s) / H;
-```
-
-The same clamped-marker rebasing rule applies to trigger level; zero pointer movement preserves the starting trigger level.
-
-## DHO804 binary waveform handling
-
-The browser binary frame contains waveform kind, channel, sequence, capture metadata, X mapping, unit and indexed Float32 amplitudes.
-
-For each payload point:
-
-```ts
-x = xOrigin + (sampleIndex - xReference) * xIncrement;
-```
-
-Keep only the newest useful live frame per channel. Ignore stale sequence numbers and do not queue waveform history.
-
-## Authoritative instrument state
-
-Physical instruments remain authoritative.
-
-For the DHO804, the browser may be optimistic during interaction but complete server `ScopeState` snapshots replace authoritative scope state.
-
-For the DM858E, the same rule applies to discrete controls: local presentation may be optimistic, but later complete `DmmState` from the backend wins.
-
-Do not create a generic partial-patch merge layer for both instruments.
-
-## DHO804 measurements
-
-Measurements are dynamic request/result data, not members of `ScopeState`.
-
-Request only displayed measurements, initially around 1 Hz with no overlapping request. Format amplitude results using the source channel unit and frequency/time using SI prefixes.
-
-## DHO804 deep capture
-
-The browser does not hold the complete RAW acquisition.
-
-After successful capture it receives metadata, requests display-sized source ranges, caches overscanned decoded windows and requests replacements as the viewport approaches cache edges.
-
-Panning/zooming a retained capture never re-reads the DHO804.
-
-See `waveforms.md` and `waveform-protocol.md`.
-
-## DM858E frontend boundary
-
-The meter UI lives under `src/web/dmm/**` and `src/web/components/dmm/**`.
-
-The current foundation provides:
-
-- `/dm858e` React Router route and mount/unmount publication lifecycle
-- shared transport state
-- DMM lifecycle/data listener boundary
-- typed DMM state/control/reading contracts
-- instrument subscription messages
-- instrument-targeted raw SCPI
-
-Keep those boundaries; do not redesign the global router or WebSocket lifecycle while changing DMM presentation.
+The shared instrument header continues to own application-level controls such as navigation and browser-local screenshot copying. Screenshot capture remains browser-local and adds no external package/service dependency.
 
 ## Performance rules
 
-- keep one application WebSocket across route changes
-- waveform samples bypass React state
-- reuse one uPlot instance while the scope view is mounted
-- keep interaction optimistic
-- do not block pointer handling on WebSocket/SCPI round trips
-- keep live/deep waveform caches bounded/latest-oriented
-- do not retain stale DMM connected/readout presentation after transport loss
-- measure before adding throttles or rendering machinery
+- keep one application WebSocket across route changes;
+- keep WebSocket transport state in one application store;
+- keep scope/DMM domain stores separate;
+- keep waveform samples outside React/Zustand and outside generic transport semantics;
+- reuse one uPlot instance while the scope view is mounted;
+- keep continuous interactions optimistic;
+- keep live/deep waveform caches bounded/latest-oriented;
+- do not retain stale DMM or scope connected presentation after transport loss;
+- do not add a generic instrument store, plugin layer or client-side event bus;
+- measure before adding throttles or rendering machinery.
