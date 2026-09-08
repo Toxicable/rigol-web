@@ -28,6 +28,8 @@ import {
 } from "../server/instruments/instrument-registry.js";
 import type { ScopeApplicationService } from "../server/scope/scope-service.js";
 import type { DeepCaptureInfo, DeepViewportRequest } from "../server/waveform/deep-capture-service.js";
+import { DmmWebSocketAdapter } from "../server/websocket/dmm-websocket-adapter.js";
+import { ScopeWebSocketAdapter } from "../server/websocket/scope-websocket-adapter.js";
 import { WebSocketGateway } from "../server/websocket/websocket-gateway.js";
 import { bindDmmRoute } from "./dmm/dmm-route-binding.js";
 import { bindScopeRoute } from "./scope-route-binding.js";
@@ -66,6 +68,7 @@ class ScopeServiceStub implements ScopeApplicationService {
   public async updateInteraction(_control: InteractiveControl): Promise<void> { throw new Error("unused"); }
   public async commitInteraction(_control: InteractiveControl): Promise<void> { throw new Error("unused"); }
   public async performAcquisitionAction(_action: AcquisitionAction): Promise<void> { throw new Error("unused"); }
+  public async sleep(): Promise<void> { throw new Error("unused"); }
   public async readMeasurements(_measurements: NonEmptyArray<MeasurementSpec>): Promise<MeasurementValue[]> { throw new Error("unused"); }
   public async setMeasurements(_measurements: MeasurementSpec[]): Promise<void> { throw new Error("unused"); }
   public async executeRawScpi(_command: string): Promise<string> { throw new Error("unused"); }
@@ -168,10 +171,12 @@ async function createHarness(): Promise<Harness> {
       subscriberAdded: dmmLifecycle.subscriberAdded,
     },
   });
+  const scopeService = new ScopeServiceStub();
+  const dmmService = new DmmServiceStub();
   const gateway = new WebSocketGateway(httpServer, {
     instruments,
-    scopeService: new ScopeServiceStub(),
-    dmmService: new DmmServiceStub(),
+    scopeAdapter: new ScopeWebSocketAdapter(scopeService),
+    dmmAdapter: new DmmWebSocketAdapter(dmmService),
   });
 
   httpServer.listen(0, "127.0.0.1");
