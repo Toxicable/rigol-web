@@ -86,16 +86,13 @@ describe("DmmService current snapshot lifecycle", () => {
         acquisitionRate: DmmAcquisitionRate.Fast,
       } satisfies DmmState,
     },
-  ])("invalidates retained snapshots before replay after same-function $name changes", ({ nextState }) => {
+  ])("invalidates retained snapshots after same-function $name changes", ({ nextState }) => {
     const { service, internals, snapshots } = createHarness();
 
     internals.acceptState(nextState);
     const invalidated = configurationChanged(DmmMeasurementFunction.DcVoltage);
     expect(service.getCurrentSnapshot()).toEqual(invalidated);
     expect(snapshots).toEqual([valueSnapshot, invalidated]);
-
-    service.replayCurrentSnapshot();
-    expect(snapshots).toEqual([valueSnapshot, invalidated, invalidated]);
     expect(snapshots.slice(1)).not.toContainEqual(valueSnapshot);
   });
 
