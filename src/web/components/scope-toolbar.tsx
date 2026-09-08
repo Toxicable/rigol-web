@@ -1,9 +1,6 @@
-import { useState } from "react";
-
 import { ScopeRunState, TimebaseMode } from "../../shared/scope-types.js";
-import { AcquisitionAction } from "../../shared/websocket-protocol.js";
 import { AppTransportKind, useAppTransportStore } from "../app-transport-store.js";
-import type { ScopeBinding } from "../scope-binding.js";
+import type { ScopeActions } from "../scope-actions.js";
 import { BrowserConnectionKind, useScopeStore } from "../scope-store.js";
 import { InstrumentHeader } from "./instrument-header.js";
 
@@ -16,37 +13,17 @@ const RUN_STATE_LABELS: Record<ScopeRunState, string> = {
 };
 
 interface ScopeToolbarProps {
-  client: ScopeBinding;
+  actions: ScopeActions;
 }
 
-function surfaceError(error: unknown): void {
-  useScopeStore.getState().setError(
-    error instanceof Error ? error.message : String(error),
-  );
-}
-
-export function ScopeToolbar({ client }: ScopeToolbarProps) {
+export function ScopeToolbar({ actions }: ScopeToolbarProps) {
   const transport = useAppTransportStore((state) => state.transport);
   const connection = useScopeStore((state) => state.connection);
+  const sleepPending = useScopeStore((state) => state.sleepPending);
   const lastError = useScopeStore((state) => state.lastError);
-  const [sleepPending, setSleepPending] = useState(false);
   const connected =
     transport.kind === AppTransportKind.Connected &&
     connection.kind === BrowserConnectionKind.ScopeConnected;
-
-  const runSleep = async () => {
-    if (sleepPending) {
-      return;
-    }
-    setSleepPending(true);
-    try {
-      await client.sleep();
-    } catch (error) {
-      surfaceError(error);
-    } finally {
-      setSleepPending(false);
-    }
-  };
 
   if (!connected) {
     let reason = "Waiting for DHO804";
@@ -70,17 +47,6 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
   const scope = connection.scope;
   const stopped = scope.runState === ScopeRunState.Stopped;
   const singleDisabled = scope.horizontal.mode === TimebaseMode.Roll;
-  const command = (action: AcquisitionAction) => {
-    void client.acquisition(action).catch(surfaceError);
-  };
-
-  const deepCapture = async () => {
-    try {
-      await client.deepCapture();
-    } catch (error) {
-      surfaceError(error);
-    }
-  };
 
   return (
     <InstrumentHeader>
@@ -90,7 +56,9 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
           <button
             type="button"
             className={stopped ? "acquisition-state-button is-stopped" : "acquisition-state-button is-running"}
-            onClick={() => command(stopped ? AcquisitionAction.Run : AcquisitionAction.Stop)}
+            onClick={() => {
+              void (stopped ? actions.run() : actions.stop());
+            }}
           >
             {stopped ? "Run" : "Stop"}
           </button>
@@ -98,18 +66,28 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
             type="button"
             disabled={singleDisabled}
             title={singleDisabled ? "Single acquisition is unavailable in Roll mode" : undefined}
-            onClick={() => command(AcquisitionAction.Single)}
+            onClick={() => {
+              void actions.single();
+            }}
           >
             Single
           </button>
           <button
             type="button"
             disabled={!stopped}
-            onClick={() => void deepCapture()}
+            onClick={() => {
+              void actions.deepCapture();
+            }}
           >
             Deep Capture
           </button>
-          <button type="button" disabled={sleepPending} onClick={() => void runSleep()}>
+          <button
+            type="button"
+            disabled={sleepPending}
+            onClick={() => {
+              void actions.sleep();
+            }}
+          >
             Sleep
           </button>
         </div>
