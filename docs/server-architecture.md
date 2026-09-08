@@ -328,6 +328,6 @@ Tests live beside the files they exercise.
 - `ScopeWebSocketAdapter` owns DHO804 wire mapping and waveform browser delivery semantics.
 - `DmmWebSocketAdapter` owns DM858E wire mapping.
 - `InstrumentRegistry` still owns subscription-driven physical activation until Stream D.
-- `ScopeService` / `DmmService` own application semantics and do not depend on WebSocket types.
+- `ScopeService` / `DmmService` own application semantics and do not depend on the WebSocket gateway/adapter layer.
 - `Dho804Driver` / `Dm858eDriver` own device protocol semantics.
 - `ScpiScheduler` owns serialized transport access for one instrument session.
