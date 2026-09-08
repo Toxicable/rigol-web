@@ -25,17 +25,17 @@ The browser keeps one application-level WebSocket alive while navigating between
 
 The WebSocket client is created above the route elements, so navigation between `/` and `/dm858e` does not recreate it.
 
-Each route owns its instrument subscription:
+Each route owns its instrument publication subscription:
 
 ```text
-Scope route mount     -> subscribe DHO804
-Scope route unmount   -> unsubscribe DHO804
+Scope route mount     -> subscribe DHO804 publications
+Scope route unmount   -> unsubscribe DHO804 publications
 
-DM858E route mount    -> subscribe DM858E
-DM858E route unmount  -> unsubscribe DM858E
+DM858E route mount    -> subscribe DM858E publications
+DM858E route unmount  -> unsubscribe DM858E publications
 ```
 
-The server reference-counts subscriptions across browser sessions, so one tab leaving a route does not stop an instrument still used by another tab.
+These subscriptions do not own physical runtime lifetime. The server starts and maintains both configured runtimes independently of browser routes, so route changes, the last unsubscribe, and browser disconnect do not stop either instrument runtime.
 
 Production static serving must return `index.html` for the known application routes so direct navigation/refresh works with `BrowserRouter`, while missing asset paths still return normal 404s.
 
@@ -101,9 +101,9 @@ Do not insert DM858E state into this store.
 
 ### DM858E
 
-Workstream D creates a separate DMM store using the shared contracts from `dmm-types.ts` and `websocket-protocol.ts`.
+The separate DMM store uses the shared contracts from `dmm-types.ts` and `websocket-protocol.ts`.
 
-It should own:
+It owns:
 
 - DM858E connection lifecycle
 - complete authoritative `DmmState`
@@ -206,6 +206,8 @@ At interaction end:
 2. keep the final optimistic value visible
 3. reconcile from authoritative scope state/readback
 
+The server gives each long-lived interactive sequence one browser-session owner while it is active. Another browser cannot commit or resume that interaction, and unsubscribe/disconnect releases the owner so live waveform acquisition cannot remain paused indefinitely. Atomic controls outside an active interaction remain global; the last accepted write wins.
+
 Initial continuous controls include channel offset, trigger level and horizontal position.
 
 The acquisition Run/Stop button colour reflects the current scope state, not the next action: active acquisition is green and stopped acquisition is red, while the button label remains the action that will be taken when clicked.
@@ -271,7 +273,7 @@ Physical instruments remain authoritative.
 
 For the DHO804, the browser may be optimistic during interaction but complete server `ScopeState` snapshots replace authoritative scope state.
 
-For the DM858E, workstream D should follow the same principle for discrete controls: local presentation may be optimistic, but later complete `DmmState` from the backend wins.
+For the DM858E, the same rule applies to discrete controls: local presentation may be optimistic, but later complete `DmmState` from the backend wins.
 
 Do not create a generic partial-patch merge layer for both instruments.
 
@@ -291,20 +293,20 @@ Panning/zooming a retained capture never re-reads the DHO804.
 
 See `waveforms.md` and `waveform-protocol.md`.
 
-## DM858E frontend handoff
+## DM858E frontend boundary
 
-Workstream D owns the finished meter UI under `src/web/dmm/**` and `src/web/components/dmm/**`.
+The meter UI lives under `src/web/dmm/**` and `src/web/components/dmm/**`.
 
-The foundation already provides:
+The current foundation provides:
 
-- `/dm858e` React Router route and mount/unmount lifecycle
+- `/dm858e` React Router route and mount/unmount publication lifecycle
 - shared transport state
 - DMM lifecycle/data listener boundary
 - typed DMM state/control/reading contracts
 - instrument subscription messages
 - instrument-targeted raw SCPI
 
-Workstream D should build on those boundaries, not redesign the global router or WebSocket lifecycle.
+Keep those boundaries; do not redesign the global router or WebSocket lifecycle while changing DMM presentation.
 
 ## Performance rules
 
