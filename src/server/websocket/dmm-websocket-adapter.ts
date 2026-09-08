@@ -122,19 +122,20 @@ export class DmmWebSocketAdapter implements WebSocketInstrumentAdapter {
     }
   }
 
-  public sendLifecycle(session: WebSocketSession): void {
-    this.requireHost().sendJson(session, this.lifecycleMessage(this.connection));
-  }
-
-  public sendDisconnected(session: WebSocketSession, reason: string): void {
-    this.requireHost().sendJson(session, {
-      type: MessageType.DmmDisconnected,
-      reason,
-    });
+  public sendInitialPublications(session: WebSocketSession): void {
+    const host = this.requireHost();
+    host.sendJson(session, this.lifecycleMessage(this.connection));
+    const snapshot = this.dmmService.getCurrentSnapshot();
+    if (snapshot !== null) {
+      host.sendJson(session, {
+        type: MessageType.DmmSnapshot,
+        snapshot,
+      });
+    }
   }
 
   public sessionUnsubscribed(_session: WebSocketSession): void {
-    // DMM has no per-browser transport state in this stream.
+    // DMM has no per-browser transport state.
   }
 
   public transportAvailable(_session: WebSocketSession): void {
