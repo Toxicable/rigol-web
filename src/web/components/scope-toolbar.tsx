@@ -2,8 +2,9 @@ import { useState } from "react";
 
 import { ScopeRunState, TimebaseMode } from "../../shared/scope-types.js";
 import { AcquisitionAction } from "../../shared/websocket-protocol.js";
+import { AppTransportKind, useAppTransportStore } from "../app-transport-store.js";
+import type { ScopeBinding } from "../scope-binding.js";
 import { BrowserConnectionKind, useScopeStore } from "../scope-store.js";
-import type { ScopeWebSocketClient } from "../websocket-client.js";
 import { InstrumentHeader } from "./instrument-header.js";
 
 const RUN_STATE_LABELS: Record<ScopeRunState, string> = {
@@ -15,7 +16,7 @@ const RUN_STATE_LABELS: Record<ScopeRunState, string> = {
 };
 
 interface ScopeToolbarProps {
-  client: ScopeWebSocketClient;
+  client: ScopeBinding;
 }
 
 function surfaceError(error: unknown): void {
@@ -25,10 +26,13 @@ function surfaceError(error: unknown): void {
 }
 
 export function ScopeToolbar({ client }: ScopeToolbarProps) {
+  const transport = useAppTransportStore((state) => state.transport);
   const connection = useScopeStore((state) => state.connection);
   const lastError = useScopeStore((state) => state.lastError);
   const [sleepPending, setSleepPending] = useState(false);
-  const connected = connection.kind === BrowserConnectionKind.ScopeConnected;
+  const connected =
+    transport.kind === AppTransportKind.Connected &&
+    connection.kind === BrowserConnectionKind.ScopeConnected;
 
   const runSleep = async () => {
     if (sleepPending) {
@@ -45,7 +49,14 @@ export function ScopeToolbar({ client }: ScopeToolbarProps) {
   };
 
   if (!connected) {
-    const reason = "reason" in connection ? connection.reason : "Connecting";
+    let reason = "Waiting for DHO804";
+    if (transport.kind === AppTransportKind.Connecting) {
+      reason = "Connecting";
+    } else if (transport.kind === AppTransportKind.Disconnected) {
+      reason = transport.reason;
+    } else if (connection.kind === BrowserConnectionKind.ScopeDisconnected) {
+      reason = connection.reason;
+    }
     return (
       <InstrumentHeader>
         <div className="scope-toolbar-content">
