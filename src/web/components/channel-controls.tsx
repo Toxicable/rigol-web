@@ -6,8 +6,8 @@ import {
 } from "../../shared/scope-types.js";
 import { ControlKind, type ControlChange } from "../../shared/websocket-protocol.js";
 import { channelUnitSymbol, formatAmplitude } from "../format-value.js";
+import type { ScopeBinding } from "../scope-binding.js";
 import { useScopeStore } from "../scope-store.js";
-import type { ScopeWebSocketClient } from "../websocket-client.js";
 import { EditableNumberInput } from "./editable-number.js";
 
 const COUPLING_LABELS: Record<ChannelCoupling, string> = {
@@ -18,7 +18,7 @@ const COUPLING_LABELS: Record<ChannelCoupling, string> = {
 
 interface ChannelControlsProps {
   channels: readonly ChannelState[];
-  client: ScopeWebSocketClient;
+  client: ScopeBinding;
 }
 
 export function ChannelControls({ channels, client }: ChannelControlsProps) {
