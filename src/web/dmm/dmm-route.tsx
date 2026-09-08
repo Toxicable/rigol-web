@@ -1,14 +1,13 @@
 import { useEffect, useState } from "react";
 
 import type {
-  DmmControlChange,
+  DmmAcquisitionRate,
+  DmmMeasurementFunction,
+  DmmRange,
   DmmReadingSnapshot,
 } from "../../shared/dmm-types.js";
 import { AppTransportKind, type AppTransportState, useAppTransportStore } from "../app-transport-store.js";
-import {
-  DmmControls,
-  dmmControlMatchesState,
-} from "../components/dmm/dmm-controls.js";
+import { DmmControls } from "../components/dmm/dmm-controls.js";
 import {
   DEFAULT_DMM_TREND_HORIZONTAL,
   DmmHorizontalControls,
@@ -17,6 +16,7 @@ import { DmmReading } from "../components/dmm/dmm-reading.js";
 import { DmmToolbar } from "../components/dmm/dmm-toolbar.js";
 import { DmmTrend } from "../components/dmm/dmm-trend.js";
 import "./dmm.css";
+import type { DmmActions } from "./dmm-actions.js";
 import type { DmmBinding } from "./dmm-binding.js";
 import { bindDmmRoute } from "./dmm-route-binding.js";
 import {
@@ -27,6 +27,7 @@ import {
 
 interface DmmRouteProps {
   binding: DmmBinding;
+  actions: DmmActions;
 }
 
 interface DmmRouteViewProps {
@@ -35,36 +36,12 @@ interface DmmRouteViewProps {
   latestReading: DmmReadingSnapshot | null;
   pending: boolean;
   controlError: string | null;
-  onControl(control: DmmControlChange): void;
+  onFunction(value: DmmMeasurementFunction): void;
+  onRange(value: DmmRange): void;
+  onAcquisitionRate(value: DmmAcquisitionRate): void;
 }
 
-export type DmmControlClient = Pick<DmmBinding, "setDmmControl">;
-
-export async function applyDmmControl(
-  client: DmmControlClient,
-  control: DmmControlChange,
-): Promise<void> {
-  const store = useDmmStore.getState();
-  if (
-    store.connection.kind === DmmBrowserConnectionKind.Connected &&
-    dmmControlMatchesState(store.connection.state, control)
-  ) {
-    return;
-  }
-
-  const ownership = store.beginControl(control);
-  try {
-    await client.setDmmControl(control);
-    useDmmStore.getState().finishControl(ownership);
-  } catch (error) {
-    useDmmStore.getState().failControl(
-      ownership,
-      error instanceof Error ? error.message : String(error),
-    );
-  }
-}
-
-export function DmmRoute({ binding }: DmmRouteProps) {
+export function DmmRoute({ binding, actions }: DmmRouteProps) {
   const transport = useAppTransportStore((state) => state.transport);
   const connection = useDmmStore((state) => state.connection);
   const latestReading = useDmmStore((state) => state.latestReading);
@@ -80,7 +57,15 @@ export function DmmRoute({ binding }: DmmRouteProps) {
       latestReading={latestReading}
       pending={pendingControl !== null}
       controlError={controlError}
-      onControl={(control) => void applyDmmControl(binding, control)}
+      onFunction={(value) => {
+        void actions.setFunction(value);
+      }}
+      onRange={(value) => {
+        void actions.setRange(value);
+      }}
+      onAcquisitionRate={(value) => {
+        void actions.setAcquisitionRate(value);
+      }}
     />
   );
 }
@@ -91,7 +76,9 @@ export function DmmRouteView({
   latestReading,
   pending,
   controlError,
-  onControl,
+  onFunction,
+  onRange,
+  onAcquisitionRate,
 }: DmmRouteViewProps) {
   const measurementFunction = connection.kind === DmmBrowserConnectionKind.Connected
     ? connection.state.function
@@ -108,7 +95,7 @@ export function DmmRouteView({
 
   return (
     <section className="dmm-route">
-      <DmmToolbar connection={connection} />
+      <DmmToolbar transport={transport} connection={connection} />
 
       {connected ? (
         <>
@@ -126,7 +113,9 @@ export function DmmRouteView({
               <DmmControls
                 state={connection.state}
                 pending={pending}
-                onControl={onControl}
+                onFunction={onFunction}
+                onRange={onRange}
+                onAcquisitionRate={onAcquisitionRate}
               />
               <DmmHorizontalControls
                 horizontal={trendHorizontal}
