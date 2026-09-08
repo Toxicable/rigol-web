@@ -35,10 +35,12 @@ export class ScopeActions {
   private pendingInteraction: InteractiveControl | null = null;
   private interactionTimer: ReturnType<typeof setTimeout> | null = null;
   private measurementInFlight = false;
+  private sleepGeneration = 0;
 
   public constructor(private readonly binding: ScopeActionBinding) {}
 
   public dispose(): void {
+    this.sleepGeneration += 1;
     if (this.interactionTimer !== null) {
       window.clearTimeout(this.interactionTimer);
       this.interactionTimer = null;
@@ -158,13 +160,17 @@ export class ScopeActions {
       return;
     }
 
+    const generation = this.sleepGeneration + 1;
+    this.sleepGeneration = generation;
     useScopeStore.setState({ sleepPending: true });
     try {
       await this.binding.sleep();
     } catch (error) {
       this.surfaceError(error);
     } finally {
-      useScopeStore.setState({ sleepPending: false });
+      if (this.sleepGeneration === generation) {
+        useScopeStore.setState({ sleepPending: false });
+      }
     }
   }
 
