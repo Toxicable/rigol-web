@@ -4,6 +4,7 @@ import type {
   DmmControlChange,
   DmmReadingSnapshot,
 } from "../../shared/dmm-types.js";
+import { AppTransportKind, type AppTransportState, useAppTransportStore } from "../app-transport-store.js";
 import {
   DmmControls,
   dmmControlMatchesState,
@@ -15,8 +16,8 @@ import {
 import { DmmReading } from "../components/dmm/dmm-reading.js";
 import { DmmToolbar } from "../components/dmm/dmm-toolbar.js";
 import { DmmTrend } from "../components/dmm/dmm-trend.js";
-import type { ScopeWebSocketClient } from "../websocket-client.js";
 import "./dmm.css";
+import type { DmmBinding } from "./dmm-binding.js";
 import { bindDmmRoute } from "./dmm-route-binding.js";
 import {
   DmmBrowserConnectionKind,
@@ -25,10 +26,11 @@ import {
 } from "./dmm-store.js";
 
 interface DmmRouteProps {
-  client: ScopeWebSocketClient;
+  binding: DmmBinding;
 }
 
 interface DmmRouteViewProps {
+  transport: AppTransportState;
   connection: DmmBrowserConnection;
   latestReading: DmmReadingSnapshot | null;
   pending: boolean;
@@ -36,7 +38,7 @@ interface DmmRouteViewProps {
   onControl(control: DmmControlChange): void;
 }
 
-export type DmmControlClient = Pick<ScopeWebSocketClient, "setDmmControl">;
+export type DmmControlClient = Pick<DmmBinding, "setDmmControl">;
 
 export async function applyDmmControl(
   client: DmmControlClient,
@@ -62,26 +64,29 @@ export async function applyDmmControl(
   }
 }
 
-export function DmmRoute({ client }: DmmRouteProps) {
+export function DmmRoute({ binding }: DmmRouteProps) {
+  const transport = useAppTransportStore((state) => state.transport);
   const connection = useDmmStore((state) => state.connection);
   const latestReading = useDmmStore((state) => state.latestReading);
   const pendingControl = useDmmStore((state) => state.pendingControl);
   const controlError = useDmmStore((state) => state.controlError);
 
-  useEffect(() => bindDmmRoute(client), [client]);
+  useEffect(() => bindDmmRoute(binding), [binding]);
 
   return (
     <DmmRouteView
+      transport={transport}
       connection={connection}
       latestReading={latestReading}
       pending={pendingControl !== null}
       controlError={controlError}
-      onControl={(control) => void applyDmmControl(client, control)}
+      onControl={(control) => void applyDmmControl(binding, control)}
     />
   );
 }
 
 export function DmmRouteView({
+  transport,
   connection,
   latestReading,
   pending,
@@ -97,11 +102,15 @@ export function DmmRouteView({
     setTrendHorizontal((current) => ({ ...current, position: 0 }));
   }, [measurementFunction]);
 
+  const connected =
+    transport.kind === AppTransportKind.Connected &&
+    connection.kind === DmmBrowserConnectionKind.Connected;
+
   return (
     <section className="dmm-route">
       <DmmToolbar connection={connection} />
 
-      {connection.kind === DmmBrowserConnectionKind.Connected ? (
+      {connected ? (
         <>
           <div className="dmm-layout">
             <div className="dmm-measurement-column">
@@ -135,7 +144,7 @@ export function DmmRouteView({
         <section className="empty-state dmm-route-shell">
           <div>
             <h1>DM858E</h1>
-            <p>{connectionDetail(connection)}</p>
+            <p>{connectionDetail(transport, connection)}</p>
           </div>
         </section>
       )}
@@ -143,14 +152,22 @@ export function DmmRouteView({
   );
 }
 
-function connectionDetail(connection: DmmBrowserConnection): string {
-  switch (connection.kind) {
-    case DmmBrowserConnectionKind.Connecting:
+function connectionDetail(
+  transport: AppTransportState,
+  connection: DmmBrowserConnection,
+): string {
+  switch (transport.kind) {
+    case AppTransportKind.Connecting:
       return "Connecting to Rigol Web.";
+    case AppTransportKind.Disconnected:
+      return `Rigol Web transport disconnected: ${transport.reason}`;
+    case AppTransportKind.Connected:
+      break;
+  }
+
+  switch (connection.kind) {
     case DmmBrowserConnectionKind.AwaitingInstrument:
       return "Waiting for the DM858E runtime.";
-    case DmmBrowserConnectionKind.TransportDisconnected:
-      return `Rigol Web transport disconnected: ${connection.reason}`;
     case DmmBrowserConnectionKind.InstrumentDisconnected:
       return connection.reason;
     case DmmBrowserConnectionKind.Connected:
