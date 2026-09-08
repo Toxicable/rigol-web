@@ -13,7 +13,6 @@ import {
   PROTOCOL_VERSION,
   type ServerJsonMessage,
 } from "../../shared/websocket-protocol.js";
-import { InstrumentRegistry } from "../instruments/instrument-registry.js";
 import type {
   BinarySendCallback,
   WebSocketAdapterHost,
@@ -30,7 +29,6 @@ import {
 const MAX_BUFFERED_BYTES = 256 * 1024;
 
 export interface WebSocketGatewayOptions {
-  instruments: InstrumentRegistry;
   scopeAdapter: WebSocketInstrumentAdapter;
   dmmAdapter: WebSocketInstrumentAdapter;
 }
@@ -100,14 +98,12 @@ function errorMessage(error: unknown): string {
 /**
  * Common WebSocket session/protocol broker.
  *
- * Instrument command validation, service dispatch, lifecycle projection and
- * waveform behaviour live in the explicit scope/DMM adapters supplied by the
- * server composition root.
+ * Browser subscriptions control publication/fanout only. Physical instrument
+ * lifetime is server-owned and does not depend on browser sessions.
  */
 export class WebSocketGateway implements WebSocketAdapterHost {
   private readonly webSocketServer: WebSocketServer;
   private readonly clients = new Map<WebSocket, ClientState>();
-  private readonly instruments: InstrumentRegistry;
   private readonly adapters: readonly WebSocketInstrumentAdapter[];
   private readonly adaptersByInstrument: ReadonlyMap<
     SupportedInstrument,
@@ -119,7 +115,6 @@ export class WebSocketGateway implements WebSocketAdapterHost {
     server: HttpServer,
     options: WebSocketGatewayOptions,
   ) {
-    this.instruments = options.instruments;
     requireAdapterInstrument(
       options.scopeAdapter,
       SupportedInstrument.Dho804,
@@ -154,20 +149,13 @@ export class WebSocketGateway implements WebSocketAdapterHost {
   }
 
   public async close(): Promise<void> {
-    for (const adapter of this.adapters) {
-      adapter.detach();
+    for (const client of this.clients.values()) {
+      this.releaseClientSubscriptions(client);
+      client.socket.close(1001, "Server shutting down");
     }
 
-    await Promise.all(
-      [...this.clients.values()].map((client) => this.instruments.releaseSession(client)),
-    );
-
-    for (const client of this.clients.values()) {
-      for (const instrument of client.subscriptions) {
-        this.adapterForInstrument(instrument).sessionUnsubscribed(client);
-      }
-      client.subscriptions.clear();
-      client.socket.close(1001, "Server shutting down");
+    for (const adapter of this.adapters) {
+      adapter.detach();
     }
 
     await new Promise<void>((resolve, reject) => {
@@ -309,14 +297,8 @@ export class WebSocketGateway implements WebSocketAdapterHost {
         reason: reason.toString("utf8"),
         bufferedBytes: socket.bufferedAmount,
       });
-      for (const instrument of client.subscriptions) {
-        this.adapterForInstrument(instrument).sessionUnsubscribed(client);
-      }
-      client.subscriptions.clear();
+      this.releaseClientSubscriptions(client);
       this.clients.delete(socket);
-      void this.instruments.releaseSession(client).catch((error: unknown) => {
-        console.error("Failed to release browser instrument subscriptions", error);
-      });
     });
 
     socket.on("error", (error) => {
@@ -403,10 +385,10 @@ export class WebSocketGateway implements WebSocketAdapterHost {
       if (commonMessage !== null) {
         switch (commonMessage.type) {
           case MessageType.InstrumentSubscribe:
-            await this.subscribeClient(client, commonMessage.instrument);
+            this.subscribeClient(client, commonMessage.instrument);
             return;
           case MessageType.InstrumentUnsubscribe:
-            await this.unsubscribeClient(client, commonMessage.instrument);
+            this.unsubscribeClient(client, commonMessage.instrument);
             return;
           case MessageType.ProtocolHelloAck:
             return;
@@ -420,38 +402,26 @@ export class WebSocketGateway implements WebSocketAdapterHost {
       }
       throw new Error("Unknown client message type");
     } catch (error) {
-      if (
-        commonMessage?.type === MessageType.InstrumentSubscribe ||
-        commonMessage?.type === MessageType.InstrumentUnsubscribe
-      ) {
-        this.adapterForInstrument(commonMessage.instrument).sendDisconnected(
-          client,
-          errorMessage(error),
-        );
-        return;
-      }
-
       const requestId = tryReadRequestId(rawMessage);
       if (requestId === undefined) {
-        client.socket.close(1008, "Invalid client message");
+        client.socket.close(1011, "WebSocket request failed");
         return;
       }
       this.sendFailure(client, requestId, error);
     }
   }
 
-  private async subscribeClient(
+  private subscribeClient(
     client: ClientState,
     instrument: SupportedInstrument,
-  ): Promise<void> {
+  ): void {
     if (client.subscriptions.has(instrument)) {
       return;
     }
 
     client.subscriptions.add(instrument);
-    this.adapterForInstrument(instrument).sendLifecycle(client);
     try {
-      await this.instruments.subscribe(client, instrument);
+      this.adapterForInstrument(instrument).sendInitialPublications(client);
     } catch (error) {
       client.subscriptions.delete(instrument);
       this.adapterForInstrument(instrument).sessionUnsubscribed(client);
@@ -459,16 +429,22 @@ export class WebSocketGateway implements WebSocketAdapterHost {
     }
   }
 
-  private async unsubscribeClient(
+  private unsubscribeClient(
     client: ClientState,
     instrument: SupportedInstrument,
-  ): Promise<void> {
+  ): void {
     if (!client.subscriptions.delete(instrument)) {
       return;
     }
 
     this.adapterForInstrument(instrument).sessionUnsubscribed(client);
-    await this.instruments.unsubscribe(client, instrument);
+  }
+
+  private releaseClientSubscriptions(client: ClientState): void {
+    for (const instrument of client.subscriptions) {
+      this.adapterForInstrument(instrument).sessionUnsubscribed(client);
+    }
+    client.subscriptions.clear();
   }
 
   private adapterForInstrument(
