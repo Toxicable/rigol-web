@@ -1,8 +1,8 @@
 import { TimebaseMode, type ScopeState } from "../../shared/scope-types.js";
 import { ControlKind } from "../../shared/websocket-protocol.js";
 import { formatSampleRate, formatSamples, formatSeconds } from "../format-value.js";
+import type { ScopeBinding } from "../scope-binding.js";
 import { DeepCaptureKind, useScopeStore } from "../scope-store.js";
-import type { ScopeWebSocketClient } from "../websocket-client.js";
 import { EditableNumberInput } from "./editable-number.js";
 
 const MODE_LABELS: Record<TimebaseMode, string> = {
@@ -32,7 +32,7 @@ function nearestTimebaseIndex(value: number): number {
 
 interface HorizontalControlsProps {
   scope: ScopeState;
-  client: ScopeWebSocketClient;
+  client: ScopeBinding;
 }
 
 export function HorizontalControls({ scope, client }: HorizontalControlsProps) {
