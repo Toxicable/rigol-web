@@ -26,6 +26,12 @@ export interface WebSocketAdapterHost {
   ): void;
 }
 
+export interface WebSocketApplicationAdapter {
+  attach(host: WebSocketAdapterHost): void;
+  detach(): void;
+  tryDispatch(session: WebSocketSession, message: Record<string, unknown>): Promise<boolean>;
+}
+
 export interface WebSocketInstrumentAdapter {
   readonly instrument: SupportedInstrument;
   attach(host: WebSocketAdapterHost): void;

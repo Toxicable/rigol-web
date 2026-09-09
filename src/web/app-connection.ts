@@ -3,6 +3,10 @@ import {
   MessageType,
   PROTOCOL_VERSION,
   type AcquisitionActionMessage,
+  type AcquisitionOperationGetMessage,
+  type AcquisitionOperationListMessage,
+  type AcquisitionOperationStartMessage,
+  type AcquisitionOperationStopMessage,
   type ClientMessage,
   type CommandFailedMessage,
   type ControlSetMessage,
@@ -55,7 +59,11 @@ export type RequestMessage =
   | MeasurementReadMessage
   | MeasurementSetMessage
   | DmmControlSetMessage
-  | WaveformViewportRequestMessage;
+  | WaveformViewportRequestMessage
+  | AcquisitionOperationStartMessage
+  | AcquisitionOperationStopMessage
+  | AcquisitionOperationGetMessage
+  | AcquisitionOperationListMessage;
 
 interface PendingRequest {
   resolve: (message: ServerJsonMessage) => void;
@@ -98,6 +106,8 @@ function asServerMessage(value: unknown): ServerJsonMessage {
     case MessageType.ScpiResult:
     case MessageType.MeasurementResult:
     case MessageType.DeepCaptureReady:
+    case MessageType.AcquisitionOperationResult:
+    case MessageType.AcquisitionOperationListResult:
       return value as ServerJsonMessage;
     default:
       throw new Error(`Unsupported server message type ${type}`);

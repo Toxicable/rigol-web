@@ -2,9 +2,17 @@
 
 ## Overview
 
-Rigol Web uses one persistent WebSocket connection between each browser tab and the server.
+Rigol Web uses one persistent WebSocket connection per browser tab. The protocol is application-specific, not generic RPC.
 
-Protocol version 6 supports exactly two instrument identities:
+Current protocol version:
+
+```ts
+export const PROTOCOL_VERSION = 7;
+```
+
+Version 7 is a hard cut. It adds server-owned acquisition-operation lifecycle requests/results. Browser and server bundles must agree exactly during the hello handshake; no compatibility shim is provided.
+
+Supported SCPI instrument identities remain:
 
 ```ts
 export enum SupportedInstrument {
@@ -13,48 +21,18 @@ export enum SupportedInstrument {
 }
 ```
 
-The protocol is application-specific, not a generic RPC or plugin protocol.
-
-Use:
-
-- JSON for protocol handshake, subscriptions, lifecycle, state, DMM snapshots, control, results and errors;
-- binary frames only for DHO804 waveform sample payloads.
-
-Protocol discriminants and fixed values use numeric TypeScript enums. Object field names remain descriptive.
-
-## Protocol version
-
-```ts
-export const PROTOCOL_VERSION = 6;
-```
-
-Version 6 is a hard-cut change because DHO804 Sleep is now a typed WebSocket application command (`ScopeSleep`) rather than an HTTP endpoint. Browser/server bundles must agree on the new request discriminant and command-completion semantics; older bundles fail the hello version check instead of mixing control planes.
-
-Version 4 introduced authoritative DMM numeric `resolution` in latest-reading snapshots. Version 3 introduced the latest-reading snapshot contract, explicit non-applicable DMM controls and function-bound DMM controls. Version 2 introduced instrument subscriptions, explicit raw-SCPI targets and DM858E lifecycle/control messages. Version 5 was the production protocol immediately before Stream B; the checked-in protocol-constant test had lagged that source version and is corrected alongside the version-6 hard cut.
-
-Do not renumber existing message values when changing names or adding messages unless a deliberate protocol break requires it.
+Use JSON for handshake, subscriptions, lifecycle/state, controls, acquisition-operation metadata, results and errors. Binary frames remain DHO804 waveform payloads only.
 
 ## Application-level hello
 
-The server sends a version hello immediately after accepting `/ws`:
+Immediately after `/ws` connection:
 
-```ts
-interface ProtocolHelloMessage {
-  type: MessageType.ProtocolHello; // 25
-  protocolVersion: number;
-}
+```text
+server -> ProtocolHello { protocolVersion: 7 }
+browser -> ProtocolHelloAck { protocolVersion: 7 }
 ```
 
-The browser must require exact equality with `PROTOCOL_VERSION` and reply:
-
-```ts
-interface ProtocolHelloAckMessage {
-  type: MessageType.ProtocolHelloAck; // 26
-  protocolVersion: number;
-}
-```
-
-The server rejects non-handshake application messages until a valid acknowledgement arrives. A mismatch closes the socket clearly.
+The server rejects application traffic before a matching acknowledgement. A version mismatch closes the connection.
 
 ## Message types
 
@@ -92,156 +70,113 @@ export enum MessageType {
   DmmSnapshot = 43,
 
   DmmControlSet = 50,
+
+  AcquisitionOperationStart = 60,
+  AcquisitionOperationStop = 61,
+  AcquisitionOperationGet = 62,
+  AcquisitionOperationList = 63,
+  AcquisitionOperationResult = 64,
+  AcquisitionOperationListResult = 65,
 }
 ```
+
+Existing numeric values stay stable when adding messages.
 
 ## Instrument subscriptions
 
-After the hello handshake the browser explicitly subscribes to the instrument owned by its current route:
+After handshake, route bindings explicitly subscribe/unsubscribe to DHO804 or DM858E publications.
+
+Subscriptions control browser publication fanout only. They do not start/stop physical runtimes and do not own acquisition-operation lifetime.
+
+Scope and DMM commands require the corresponding instrument subscription. Raw SCPI requires a subscription to its explicit target.
+
+Acquisition-operation start/stop/get/list requests are application-level and do **not** require an instrument subscription.
+
+## Server-owned acquisition operations
+
+Protocol version 7 adds:
 
 ```ts
-interface InstrumentSubscribeMessage {
-  type: MessageType.InstrumentSubscribe;
-  instrument: SupportedInstrument;
+interface AcquisitionOperationStartMessage {
+  type: MessageType.AcquisitionOperationStart; // 60
+  requestId: number;
+  label: string;
 }
 
-interface InstrumentUnsubscribeMessage {
-  type: MessageType.InstrumentUnsubscribe;
-  instrument: SupportedInstrument;
+interface AcquisitionOperationStopMessage {
+  type: MessageType.AcquisitionOperationStop; // 61
+  requestId: number;
+  operationId: number;
+}
+
+interface AcquisitionOperationGetMessage {
+  type: MessageType.AcquisitionOperationGet; // 62
+  requestId: number;
+  operationId: number;
+}
+
+interface AcquisitionOperationListMessage {
+  type: MessageType.AcquisitionOperationList; // 63
+  requestId: number;
 }
 ```
 
-These messages do not use request IDs. The observable result is the corresponding instrument lifecycle stream.
+Success returns either:
 
-Server behaviour:
+```ts
+interface AcquisitionOperationResultMessage {
+  type: MessageType.AcquisitionOperationResult; // 64
+  requestId: number;
+  operation: AcquisitionOperation;
+}
 
-- only subscribed browser sessions receive that instrument's lifecycle/state/data;
-- scope commands, including `ScopeSleep`, require a DHO804 subscription;
-- DMM commands require a DM858E subscription;
-- `ScpiExecute` requires a subscription to its explicit target;
-- closing the browser WebSocket releases all subscriptions owned by that session.
+interface AcquisitionOperationListResultMessage {
+  type: MessageType.AcquisitionOperationListResult; // 65
+  requestId: number;
+  operations: AcquisitionOperation[];
+}
+```
 
-Multiple tabs may subscribe to the same instrument and share its one active server runtime.
+`AcquisitionOperation` carries ID, label, initiator, start timestamp, state and progress. Progress reports monotonic `receivedItems`, `sourceLostItems` and `lastSequence`.
+
+A browser initiator includes the requesting server-side WebSocket session ID. This metadata does not make the operation session-owned. Closing that socket does not implicitly stop the operation.
+
+Errors use normal `CommandFailed` request framing.
 
 ## Scope lifecycle
 
-DHO804 lifecycle remains separate from DMM lifecycle:
+DHO804 lifecycle messages remain distinct:
 
 ```ts
 type ScopeLifecycleMessage =
-  | {
-      type: MessageType.ScopeConnected;
-      protocolVersion: number;
-      info: ScopeInfo;
-      state: ScopeState;
-    }
-  | {
-      type: MessageType.ScopeState;
-      state: ScopeState;
-    }
-  | {
-      type: MessageType.ScopeDisconnected;
-      reason: string;
-    };
+  | { type: MessageType.ScopeConnected; protocolVersion: number; info: ScopeInfo; state: ScopeState }
+  | { type: MessageType.ScopeState; state: ScopeState }
+  | { type: MessageType.ScopeDisconnected; reason: string };
 ```
 
-`ScopeConnected` is not published until DHO804 identity is verified and a complete initial `ScopeState` has been read. The server sends complete authoritative `ScopeState` snapshots rather than partial patches.
+`ScopeConnected` is not published until identity is verified and complete authoritative scope state is available.
 
-During deliberate Sleep suspension the service publishes a disconnected scope lifecycle while preserving browser subscriptions. When the physical SCPI endpoint is observed offline and later online, the runtime resumes and normal connection lifecycle publication continues.
+## DMM lifecycle and snapshots
 
-## DMM lifecycle and latest-reading snapshots
-
-Shared DMM domain types live in `src/shared/dmm-types.ts`.
+DM858E lifecycle messages remain distinct:
 
 ```ts
 type DmmLifecycleMessage =
-  | {
-      type: MessageType.DmmConnected;
-      protocolVersion: number;
-      info: DmmInfo;
-      state: DmmState;
-    }
-  | {
-      type: MessageType.DmmState;
-      state: DmmState;
-    }
-  | {
-      type: MessageType.DmmDisconnected;
-      reason: string;
-    }
-  | {
-      type: MessageType.DmmSnapshot;
-      snapshot: DmmReadingSnapshot;
-    };
+  | { type: MessageType.DmmConnected; protocolVersion: number; info: DmmInfo; state: DmmState }
+  | { type: MessageType.DmmState; state: DmmState }
+  | { type: MessageType.DmmDisconnected; reason: string }
+  | { type: MessageType.DmmSnapshot; snapshot: DmmReadingSnapshot };
 ```
 
-`DmmState` is authoritative configuration/control state. Range and acquisition rate explicitly represent non-applicability:
+`DmmSnapshot` is current display state, not a uniquely identified physical sample event. It has no sequence number and must not be used as a logging/statistics stream.
 
-```ts
-interface DmmState {
-  function: DmmMeasurementFunction;
-  range: DmmRange | null;
-  acquisitionRate: DmmAcquisitionRate | null;
-}
-```
+## DHO804 controls and interactions
 
-A `null` field means the selected function does not expose that control. It is not Auto, not a retained prior value, and must not be shown as an active authoritative control value.
+Scope controls use the typed `ControlChange` union and numeric `ControlKind` values 1-9.
 
-`DmmSnapshot` is the current display snapshot. It deliberately has **no sequence number** and is not a sample event:
+Discrete controls use `ControlSet`. Continuous interaction updates are disposable and carry no request ID; the final `InteractionCommit` carries a request ID.
 
-```ts
-type DmmReadingSnapshot =
-  | {
-      kind: DmmReadingKind.Value;
-      function: DmmMeasurementFunction;
-      value: number;
-      resolution: number;
-      unit: DmmUnit;
-    }
-  | {
-      kind: DmmReadingKind.Overload;
-      function: DmmMeasurementFunction;
-      unit: DmmUnit;
-    }
-  | {
-      kind: DmmReadingKind.Unavailable;
-      function: DmmMeasurementFunction;
-      unit: DmmUnit;
-      reason: DmmReadingUnavailableReason;
-    };
-```
-
-For `Value`, `resolution` is a positive finite measurement quantum authoritative for that observation. It is not a display hint or a digit-count estimate. The browser rounds the numeric value to this quantum before engineering-prefix formatting and must not infer a finer precision from `DmmState`. This is required for fixed ranges such as 100 V Fast (`0.1 V` resolution) and for Auto range where `DmmState.range` intentionally remains `{ mode: Auto }` and does not expose the effective physical range.
-
-If the backend cannot establish an authoritative numeric resolution for the stable observation, it sends `Unavailable/ResolutionUnavailable` rather than a numeric `Value` with guessed precision.
-
-Snapshot polling must not be used to derive sample count, statistics or a measurement timeline. A future sample-stream contract requires a verified one-event-per-physical-measurement acquisition boundary.
-
-`Unavailable` explicitly replaces a prior valid display when the backend knows no current usable value is available. The DM858E backend uses `NoData` for the documented bare `DATA:LAST?` no-data sentinel, `UnclassifiedSentinel` when a sentinel-sized response has no documented overload meaning, `ConfigurationChanged` when the observation/configuration context is stale, and `ResolutionUnavailable` when a safe numeric display quantum is not available.
-
-## DHO804 controls
-
-Scope control kinds remain numeric:
-
-```ts
-export enum ControlKind {
-  ChannelEnabled = 1,
-  ChannelScale = 2,
-  ChannelOffset = 3,
-  HorizontalScale = 4,
-  HorizontalPosition = 5,
-  TriggerLevel = 6,
-  TriggerType = 7,
-  TriggerSource = 8,
-  TriggerSlope = 9,
-}
-```
-
-Use the typed `ControlChange` union from shared code rather than arbitrary property paths.
-
-Discrete changes use `ControlSetMessage`. Continuous interaction updates are disposable and carry no request ID; final interaction commits carry a request ID.
-
-## DHO804 acquisition actions
+DHO804 acquisition actions remain:
 
 ```ts
 export enum AcquisitionAction {
@@ -251,92 +186,19 @@ export enum AcquisitionAction {
 }
 ```
 
-These actions are DHO804-only and require a DHO804 subscription.
+These are scope instrument actions and are unrelated to the server-owned acquisition-operation lifecycle added in version 7.
 
-## DHO804 Sleep
+## Scope Sleep
 
-Sleep is a normal request/completion application command:
-
-```ts
-interface ScopeSleepMessage {
-  type: MessageType.ScopeSleep; // 19
-  requestId: number;
-}
-```
-
-A successful request receives `CommandCompleted`. If runtime suspension, ADB dispatch or other synchronous Sleep orchestration fails, the request receives `CommandFailed` with the error text. The browser must not call a REST/HTTP power endpoint.
-
-Successful command completion means the final native Sleep tap has been dispatched successfully after an immediate ADB reachability check. The scope can tear down ADB before that child process reports a normal exit, so the server deliberately does not wait for post-tap process completion.
-
-Physical wake is not a browser command. The scope is woken with its front-panel power key; the server-side scope service watches the configured SCPI endpoint for offline-then-online transition and resumes the physical runtime session.
+`ScopeSleep` remains a typed request with request ID. Success returns `CommandCompleted`; failure returns `CommandFailed`.
 
 ## DMM controls
 
-```ts
-export enum DmmControlKind {
-  Function = 1,
-  Range = 2,
-  AcquisitionRate = 3,
-}
-```
+DMM controls use `DmmControlSet` and the typed `DmmControlChange` union. Function-dependent range/rate controls carry the function under which they were created so stale writes can be rejected rather than reinterpreted.
 
-The browser sends:
+## Measurements, raw SCPI and deep capture
 
-```ts
-interface DmmControlSetMessage {
-  type: MessageType.DmmControlSet;
-  requestId: number;
-  control: DmmControlChange;
-}
-```
-
-Function-dependent controls carry the function under which the UI created the value:
-
-```ts
-type DmmControlChange =
-  | {
-      kind: DmmControlKind.Function;
-      value: DmmMeasurementFunction;
-    }
-  | {
-      kind: DmmControlKind.Range;
-      function: DmmMeasurementFunction;
-      value: DmmRange;
-    }
-  | {
-      kind: DmmControlKind.AcquisitionRate;
-      function: DmmMeasurementFunction;
-      value: DmmAcquisitionRate;
-    };
-```
-
-The backend validates that expected function against authoritative physical state before writing. A stale request fails rather than being reinterpreted under a newly selected function.
-
-The exact DM858E SCPI mapping belongs to the backend driver; the wire protocol carries typed domain values, not Rigol response strings.
-
-## DHO804 measurements
-
-Measurements remain explicit request/result data outside `ScopeState`:
-
-```ts
-interface MeasurementReadMessage {
-  type: MessageType.MeasurementRead;
-  requestId: number;
-  measurements: NonEmptyArray<MeasurementSpec>;
-}
-
-interface MeasurementResultMessage {
-  type: MessageType.MeasurementResult;
-  requestId: number;
-  values: MeasurementValue[];
-}
-```
-
-Requests must be non-empty. Values are returned in request order. Any failed requested measurement fails the request rather than returning a partial optional result.
-
-`MeasurementSetMessage` uses message type 18 and the same request/completion framing for measurement-selection mutation.
-
-## Raw SCPI
+DHO804 measurements use typed request/result messages.
 
 Raw SCPI is explicitly instrument-targeted:
 
@@ -347,132 +209,69 @@ interface ScpiExecuteMessage {
   instrument: SupportedInstrument;
   command: string;
 }
-
-interface ScpiResultMessage {
-  type: MessageType.ScpiResult;
-  requestId: number;
-  response: string;
-}
 ```
 
-There is no implicit DHO804 default. The gateway routes the request through the selected instrument's normal scheduler/runtime serialization.
+Deep-capture and viewport messages retain the existing DHO804-specific retained-capture model.
 
-Program-message validation and command/query classification are shared generic SCPI infrastructure; instrument drivers do not maintain private query scanners.
+## Request completion
 
-For a successful command with no text response, `response` is the empty string. If a raw query produces a binary block while the console only supports text, the transport must consume the complete block safely before reporting a clear console failure.
+Messages with request IDs receive a typed result, `CommandCompleted`, or `CommandFailed`.
 
-## DHO804 deep capture
-
-```ts
-interface DeepCaptureRequestMessage {
-  type: MessageType.DeepCaptureRequest;
-  requestId: number;
-}
-```
-
-On success `DeepCaptureReadyMessage` returns a positive `captureId` and a non-empty channel list describing sample count and X-axis scaling.
-
-## DHO804 deep viewport requests
-
-Viewport ranges are zero-based and half-open. A successful request returns a `WaveformKind.DeepViewport` binary frame described in `waveform-protocol.md`. A newer request supersedes an older pending viewport for the same channel.
-
-## Command completion
-
-Messages with request IDs receive either a typed result, completion or failure:
-
-```ts
-type CommandResult =
-  | {
-      type: MessageType.CommandCompleted;
-      requestId: number;
-    }
-  | {
-      type: MessageType.CommandFailed;
-      requestId: number;
-      error: string;
-    };
-```
-
-Use typed result messages for measurements, deep-capture completion and raw SCPI responses.
+The browser `AppConnection` owns request ID allocation/correlation. Acquisition-operation result/list messages participate in that same correlation path.
 
 ## DHO804 binary waveforms
 
-Binary waveform frames are separate from `ServerJsonMessage` and use the fixed format in `waveform-protocol.md`.
+Binary waveform frames remain outside `ServerJsonMessage` and use `waveform-protocol.md`.
 
-```ts
-export enum WaveformKind {
-  Live = 1,
-  DeepViewport = 2,
-}
-```
+Live waveform frames are disposable/latest-oriented under backpressure. That behavior must not be reused for loss-sensitive raw acquisition streams such as PPK2.
 
-Live frames are sent only to DHO804-subscribed sessions and are disposable under backpressure.
+## Client/server unions
 
-## Client and server unions
-
-Conceptually:
+Conceptually, version 7 extends the existing unions with:
 
 ```ts
 type ClientMessage =
-  | ProtocolHelloAckMessage
-  | InstrumentSubscribeMessage
-  | InstrumentUnsubscribeMessage
-  | ControlSetMessage
-  | InteractionUpdateMessage
-  | InteractionCommitMessage
-  | AcquisitionActionMessage
-  | ScopeSleepMessage
-  | DeepCaptureRequestMessage
-  | WaveformViewportRequestMessage
-  | ScpiExecuteMessage
-  | MeasurementReadMessage
-  | MeasurementSetMessage
-  | DmmControlSetMessage;
+  | /* existing messages */
+  | AcquisitionOperationStartMessage
+  | AcquisitionOperationStopMessage
+  | AcquisitionOperationGetMessage
+  | AcquisitionOperationListMessage;
 
 type ServerJsonMessage =
-  | ProtocolHelloMessage
-  | ScopeLifecycleMessage
-  | DmmLifecycleMessage
-  | CommandResult
-  | ScpiResultMessage
-  | MeasurementResultMessage
-  | DeepCaptureReadyMessage;
+  | /* existing messages */
+  | AcquisitionOperationResultMessage
+  | AcquisitionOperationListResultMessage;
 ```
 
 ## JSON validation
 
-Validate WebSocket JSON structurally before application dispatch.
-
 Reject at least:
 
-- unknown message types;
 - application traffic before handshake;
-- mismatched protocol version;
+- protocol-version mismatch;
+- unknown message type;
 - unsupported instrument identity;
-- missing required fields;
-- non-finite numeric controls;
-- out-of-range enum values;
-- request IDs that are not non-negative integers;
-- invalid viewport ranges;
-- empty measurement requests;
-- invalid DMM fixed ranges;
-- function-dependent DMM controls missing a valid expected function.
+- invalid/missing request IDs;
+- invalid acquisition operation IDs;
+- empty or overlong acquisition labels;
+- malformed/non-finite control values;
+- invalid viewport/measurement/control payloads.
 
-Malformed data must not become partially populated application objects.
+Malformed data must not become partially populated domain objects.
 
-## Backpressure
+## Backpressure and loss
 
-JSON lifecycle/control/error traffic is more important than stale DHO804 live waveform frames. Do not allow a slow browser to create an unbounded waveform queue. Prefer latest-frame replacement while preserving JSON traffic.
+JSON lifecycle/control/error traffic takes priority over stale DHO804 live display frames. Scope live frames may be replaced while a browser is backpressured.
+
+Server-owned raw acquisitions use a different contract: source sequence/loss must remain detectable, and raw data must not be silently discarded merely to keep a graph current.
 
 ## Non-goals
 
 Do not add without a concrete requirement:
 
-- generic RPC;
-- GraphQL;
+- generic RPC/GraphQL;
 - REST control endpoints;
-- arbitrary instrument discovery/selection;
+- arbitrary instrument discovery;
 - generic plugin protocols;
-- per-feature subscriptions inside one instrument;
-- partial-patch protocols for `ScopeState` or `DmmState`;
-- exclusive browser ownership/locking of an instrument.
+- universal sample payloads;
+- browser subscription as a physical-runtime or acquisition-operation lease.

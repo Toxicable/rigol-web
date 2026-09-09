@@ -16,6 +16,7 @@ import {
 import type {
   BinarySendCallback,
   WebSocketAdapterHost,
+  WebSocketApplicationAdapter,
   WebSocketInstrumentAdapter,
   WebSocketSession,
 } from "./websocket-adapter.js";
@@ -29,6 +30,7 @@ import {
 const MAX_BUFFERED_BYTES = 256 * 1024;
 
 export interface WebSocketGatewayOptions {
+  acquisitionAdapter: WebSocketApplicationAdapter;
   scopeAdapter: WebSocketInstrumentAdapter;
   dmmAdapter: WebSocketInstrumentAdapter;
 }
@@ -99,11 +101,13 @@ function errorMessage(error: unknown): string {
  * Common WebSocket session/protocol broker.
  *
  * Browser subscriptions control publication/fanout only. Physical instrument
- * lifetime is server-owned and does not depend on browser sessions.
+ * and acquisition-operation lifetimes are server-owned and do not depend on
+ * browser sessions.
  */
 export class WebSocketGateway implements WebSocketAdapterHost {
   private readonly webSocketServer: WebSocketServer;
   private readonly clients = new Map<WebSocket, ClientState>();
+  private readonly acquisitionAdapter: WebSocketApplicationAdapter;
   private readonly adapters: readonly WebSocketInstrumentAdapter[];
   private readonly adaptersByInstrument: ReadonlyMap<
     SupportedInstrument,
@@ -125,6 +129,7 @@ export class WebSocketGateway implements WebSocketAdapterHost {
       SupportedInstrument.Dm858e,
       "dmmAdapter",
     );
+    this.acquisitionAdapter = options.acquisitionAdapter;
     this.adapters = [options.scopeAdapter, options.dmmAdapter];
     this.adaptersByInstrument = new Map<
       SupportedInstrument,
@@ -134,6 +139,7 @@ export class WebSocketGateway implements WebSocketAdapterHost {
       [SupportedInstrument.Dm858e, options.dmmAdapter],
     ]);
 
+    this.acquisitionAdapter.attach(this);
     for (const adapter of this.adapters) {
       adapter.attach(this);
     }
@@ -154,6 +160,7 @@ export class WebSocketGateway implements WebSocketAdapterHost {
       client.socket.close(1001, "Server shutting down");
     }
 
+    this.acquisitionAdapter.detach();
     for (const adapter of this.adapters) {
       adapter.detach();
     }
@@ -395,6 +402,9 @@ export class WebSocketGateway implements WebSocketAdapterHost {
         }
       }
 
+      if (await this.acquisitionAdapter.tryDispatch(client, rawMessage)) {
+        return;
+      }
       for (const adapter of this.adapters) {
         if (await adapter.tryDispatch(client, rawMessage)) {
           return;

@@ -11,8 +11,8 @@ import {
 } from "./websocket-protocol";
 
 describe("websocket protocol constants", () => {
-  it("uses the hard-cut scope Sleep protocol version", () => {
-    expect(PROTOCOL_VERSION).toBe(6);
+  it("uses the acquisition-operation protocol version", () => {
+    expect(PROTOCOL_VERSION).toBe(7);
   });
 
   it("keeps existing message type values stable and assigns instrument ranges", () => {
@@ -48,6 +48,15 @@ describe("websocket protocol constants", () => {
       MessageType.DmmSnapshot,
       MessageType.DmmControlSet,
     ]).toEqual([25, 26, 30, 31, 40, 41, 42, 43, 50]);
+
+    expect([
+      MessageType.AcquisitionOperationStart,
+      MessageType.AcquisitionOperationStop,
+      MessageType.AcquisitionOperationGet,
+      MessageType.AcquisitionOperationList,
+      MessageType.AcquisitionOperationResult,
+      MessageType.AcquisitionOperationListResult,
+    ]).toEqual([60, 61, 62, 63, 64, 65]);
   });
 
   it("keeps instrument identities explicit and stable", () => {

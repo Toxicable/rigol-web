@@ -1,9 +1,11 @@
 import { createServer } from "node:http";
 
+import { AcquisitionService } from "./acquisition/acquisition-service.js";
 import { DmmService } from "./dmm/dmm-service.js";
 import { createHttpRequestHandler } from "./http-handler.js";
 import { InstrumentRegistry } from "./instruments/instrument-registry.js";
 import { ScopeService } from "./scope/scope-service.js";
+import { AcquisitionWebSocketAdapter } from "./websocket/acquisition-websocket-adapter.js";
 import { DmmWebSocketAdapter } from "./websocket/dmm-websocket-adapter.js";
 import { ScopeWebSocketAdapter } from "./websocket/scope-websocket-adapter.js";
 import { WebSocketGateway } from "./websocket/websocket-gateway.js";
@@ -63,6 +65,7 @@ const scopeService = new ScopeService({
   adbPort: readScopeAdbPort(),
 });
 const dmmService = new DmmService(dmmEndpoint);
+const acquisitionService = new AcquisitionService();
 
 const instruments = new InstrumentRegistry({
   dho804: scopeService.runtime,
@@ -70,9 +73,11 @@ const instruments = new InstrumentRegistry({
 });
 
 const server = createServer(createHttpRequestHandler());
+const acquisitionAdapter = new AcquisitionWebSocketAdapter(acquisitionService);
 const scopeAdapter = new ScopeWebSocketAdapter(scopeService);
 const dmmAdapter = new DmmWebSocketAdapter(dmmService);
 const gateway = new WebSocketGateway(server, {
+  acquisitionAdapter,
   scopeAdapter,
   dmmAdapter,
 });
@@ -98,6 +103,7 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   console.log(`Rigol Web shutting down on ${signal}`);
   scopeService.close();
+  acquisitionService.close();
 
   try {
     await gateway.close();
