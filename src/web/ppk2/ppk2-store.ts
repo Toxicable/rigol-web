@@ -1,5 +1,6 @@
 import { create } from "zustand";
 
+import type { AcquisitionOperation } from "../../shared/acquisition-types.js";
 import type {
   Ppk2CaptureStats,
   Ppk2Info,
@@ -38,6 +39,7 @@ export interface Ppk2StoreState {
   setInstrumentDisconnected(reason: string): void;
   setConnected(info: Ppk2Info): void;
   replaceStats(stats: Ppk2CaptureStats): void;
+  replaceOperation(operation: AcquisitionOperation): void;
   appendLive(update: Ppk2LiveUpdate): void;
   replaceViewport(viewport: Ppk2Viewport): void;
   beginRequest(kind: Ppk2RequestKind): Ppk2RequestOwnership;
@@ -100,6 +102,15 @@ export const usePpk2Store = create<Ppk2StoreState>((set) => ({
     const operationChanged = operationId(current.stats) !== operationId(stats);
     return {
       stats,
+      liveBuckets: operationChanged ? [] : current.liveBuckets,
+      viewport: operationChanged ? null : current.viewport,
+    };
+  }),
+
+  replaceOperation: (operation) => set((current) => {
+    const operationChanged = operationId(current.stats) !== operation.id;
+    return {
+      stats: { ...current.stats, operation },
       liveBuckets: operationChanged ? [] : current.liveBuckets,
       viewport: operationChanged ? null : current.viewport,
     };
