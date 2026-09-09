@@ -5,8 +5,8 @@ import {
   MeasurementKind,
 } from "../../shared/scope-types.js";
 import { LocalMeasurementAccumulator } from "../local-measurements.js";
+import type { ScopeActions } from "../scope-actions.js";
 import { MeasurementSource, useScopeStore } from "../scope-store.js";
-import type { ScopeWebSocketClient } from "../websocket-client.js";
 import type { WaveformController } from "../waveform/waveform-controller.js";
 
 const KIND_LABELS: Record<MeasurementKind, string> = {
@@ -41,15 +41,13 @@ const MEASUREMENT_GROUPS = [
 ] as const;
 
 interface MeasurementPanelProps {
-  client: ScopeWebSocketClient;
+  actions: ScopeActions;
   controller: WaveformController;
 }
 
-export function MeasurementPanel({ client, controller }: MeasurementPanelProps) {
+export function MeasurementPanel({ actions, controller }: MeasurementPanelProps) {
   const source = useScopeStore((state) => state.measurementSource);
-  const setSource = useScopeStore((state) => state.setMeasurementSource);
   const specs = useScopeStore((state) => state.measurementSpecs);
-  const setSpecs = useScopeStore((state) => state.setMeasurementSpecs);
   const [channel, setChannel] = useState(Channel.Ch1);
   const [kind, setKind] = useState(MeasurementKind.Vpp);
   const [localMeasurements] = useState(() => new LocalMeasurementAccumulator());
@@ -58,26 +56,8 @@ export function MeasurementPanel({ client, controller }: MeasurementPanelProps) 
     if (source !== MeasurementSource.Scope) {
       return;
     }
-    return client.startMeasurementPolling(() => useScopeStore.getState().measurementSpecs);
-  }, [client, source]);
-
-  useEffect(() => {
-    if (source !== MeasurementSource.Scope) {
-      return;
-    }
-    void client.setMeasurements(specs).catch((error: unknown) => {
-      useScopeStore.getState().setError(error instanceof Error ? error.message : String(error));
-    });
-  }, [client, source, specs]);
-
-  useEffect(() => {
-    if (source !== MeasurementSource.Local) {
-      return;
-    }
-    void client.setMeasurements([]).catch((error: unknown) => {
-      useScopeStore.getState().setError(error instanceof Error ? error.message : String(error));
-    });
-  }, [client, source]);
+    return actions.startMeasurementPolling();
+  }, [actions, source]);
 
   useEffect(() => {
     localMeasurements.reset();
@@ -98,7 +78,7 @@ export function MeasurementPanel({ client, controller }: MeasurementPanelProps) 
     if (specs.some((spec) => spec.channel === channel && spec.kind === kind)) {
       return;
     }
-    setSpecs([...specs, { channel, kind }]);
+    actions.setMeasurementSpecs([...specs, { channel, kind }]);
   };
 
   return (
@@ -109,7 +89,7 @@ export function MeasurementPanel({ client, controller }: MeasurementPanelProps) 
           aria-label="Measurement source"
           value={source}
           onChange={(event: ChangeEvent<HTMLSelectElement>) =>
-            setSource(Number(event.target.value) as MeasurementSource)
+            actions.setMeasurementSource(Number(event.target.value) as MeasurementSource)
           }
         >
           <option value={MeasurementSource.Scope}>Source: Scope</option>
@@ -137,7 +117,9 @@ export function MeasurementPanel({ client, controller }: MeasurementPanelProps) 
               <button
                 type="button"
                 className="text-button"
-                onClick={() => setSpecs(specs.filter((_, candidate) => candidate !== index))}
+                onClick={() => actions.setMeasurementSpecs(
+                  specs.filter((_, candidate) => candidate !== index),
+                )}
               >
                 Remove
               </button>

@@ -43,7 +43,12 @@ function scope(position = 0): ScopeState {
       probeRatio: 1,
     })) as ScopeState["channels"],
     horizontal: { mode: TimebaseMode.Main, scale: 0.001, position },
-    acquisition: { type: AcquisitionType.Normal, averages: 1, memoryDepth: 1_000_000, sampleRate: 1e9 },
+    acquisition: {
+      type: AcquisitionType.Normal,
+      averages: 1,
+      memoryDepth: 1_000_000,
+      sampleRate: 1e9,
+    },
     runState: ScopeRunState.Running,
     trigger: {
       type: TriggerType.Edge,
@@ -83,25 +88,32 @@ function measurement(current: number): MeasurementValue {
 describe("scope store", () => {
   beforeEach(() => {
     useScopeStore.setState({
-      connection: { kind: BrowserConnectionKind.Connecting },
+      connection: { kind: BrowserConnectionKind.AwaitingInstrument },
       measurementSource: MeasurementSource.Scope,
       measurementSpecs: [],
       measurementValues: [],
       deepCapture: { kind: DeepCaptureKind.None },
+      sleepPending: false,
       lastError: null,
     });
   });
 
-  it("uses explicit numeric connection variants", () => {
-    useScopeStore.getState().setTransportDisconnected("lost");
-    expect(useScopeStore.getState().connection).toEqual({
-      kind: BrowserConnectionKind.TransportDisconnected,
-      reason: "lost",
-    });
+  it("keeps instrument lifecycle separate from application transport state", () => {
     useScopeStore.getState().setScopeDisconnected("scope offline");
-    expect(useScopeStore.getState().connection.kind).toBe(BrowserConnectionKind.ScopeDisconnected);
+    expect(useScopeStore.getState().connection).toEqual({
+      kind: BrowserConnectionKind.ScopeDisconnected,
+      reason: "scope offline",
+    });
+
+    useScopeStore.getState().setAwaitingInstrument();
+    expect(useScopeStore.getState().connection.kind).toBe(
+      BrowserConnectionKind.AwaitingInstrument,
+    );
+
     useScopeStore.getState().setScopeConnected(INFO, scope());
-    expect(useScopeStore.getState().connection.kind).toBe(BrowserConnectionKind.ScopeConnected);
+    expect(useScopeStore.getState().connection.kind).toBe(
+      BrowserConnectionKind.ScopeConnected,
+    );
   });
 
   it("replaces authoritative scope snapshots as a whole", () => {
@@ -110,12 +122,12 @@ describe("scope store", () => {
     replacement.channels[0] = { ...replacement.channels[0], scale: 5 };
     useScopeStore.getState().replaceScope(replacement);
     const connection = useScopeStore.getState().connection;
-    expect(connection.kind).toBe(BrowserConnectionKind.ScopeConnected);
-    if (connection.kind === BrowserConnectionKind.ScopeConnected) {
-      expect(connection.scope).toBe(replacement);
-      expect(connection.scope.horizontal.position).toBe(2);
-      expect(connection.scope.channels[0].scale).toBe(5);
+    if (connection.kind !== BrowserConnectionKind.ScopeConnected) {
+      throw new Error("expected connected scope");
     }
+    expect(connection.scope).toBe(replacement);
+    expect(connection.scope.horizontal.position).toBe(2);
+    expect(connection.scope.channels[0].scale).toBe(5);
   });
 
   it("applies semantic optimistic control changes", () => {
@@ -160,16 +172,8 @@ describe("scope store", () => {
     useScopeStore.getState().setScopeConnected(INFO, scope(0.25));
     useScopeStore.getState().setDeepReady(9, [DEEP_CHANNEL]);
 
-    let deepCapture = useScopeStore.getState().deepCapture;
-    expect(deepCapture.kind).toBe(DeepCaptureKind.Ready);
-    if (deepCapture.kind !== DeepCaptureKind.Ready) {
-      throw new Error("expected ready deep capture");
-    }
-    expect(deepCapture.position).toBe(0.25);
-    expect(deepCapture.scale).toBe(0.001);
-
     useScopeStore.getState().setDeepHorizontal(0.5, 0.0005);
-    deepCapture = useScopeStore.getState().deepCapture;
+    const deepCapture = useScopeStore.getState().deepCapture;
     if (deepCapture.kind !== DeepCaptureKind.Ready) {
       throw new Error("expected ready deep capture");
     }
@@ -184,19 +188,22 @@ describe("scope store", () => {
     expect(connection.scope.horizontal.scale).toBe(0.001);
   });
 
-  it("retires deep capture metadata at scope-session boundaries", () => {
+  it("retires transient operation state at scope-session boundaries", () => {
     useScopeStore.getState().setScopeConnected(INFO, scope());
     useScopeStore.getState().setDeepReady(9, [DEEP_CHANNEL]);
-    expect(useScopeStore.getState().deepCapture.kind).toBe(DeepCaptureKind.Ready);
+    useScopeStore.setState({ sleepPending: true });
 
-    useScopeStore.getState().setTransportDisconnected("lost");
+    useScopeStore.getState().setAwaitingInstrument();
     expect(useScopeStore.getState().deepCapture).toEqual({ kind: DeepCaptureKind.None });
+    expect(useScopeStore.getState().sleepPending).toBe(false);
 
     useScopeStore.getState().setScopeConnected(INFO, scope());
     useScopeStore.getState().setDeepReady(10, [
       { ...DEEP_CHANNEL, channel: Channel.Ch2 },
     ]);
+    useScopeStore.setState({ sleepPending: true });
     useScopeStore.getState().setScopeConnected(INFO, scope());
     expect(useScopeStore.getState().deepCapture).toEqual({ kind: DeepCaptureKind.None });
+    expect(useScopeStore.getState().sleepPending).toBe(false);
   });
 });

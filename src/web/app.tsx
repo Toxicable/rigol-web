@@ -1,40 +1,65 @@
 import { useEffect, useMemo, useRef } from "react";
 import { Route, Routes } from "react-router-dom";
 
+import { AppConnection } from "./app-connection.js";
+import { DmmActions } from "./dmm/dmm-actions.js";
+import { DmmBinding } from "./dmm/dmm-binding.js";
 import { DmmRoute } from "./dmm/dmm-route.js";
+import { ScopeActions } from "./scope-actions.js";
+import { ScopeBinding } from "./scope-binding.js";
 import { ScopeRoute } from "./scope-route.js";
-import { ScopeWebSocketClient } from "./websocket-client.js";
 import { WaveformController } from "./waveform/waveform-controller.js";
 
 export function App() {
-  const clientRef = useRef<ScopeWebSocketClient | null>(null);
+  const scopeBindingRef = useRef<ScopeBinding | null>(null);
+  const connection = useMemo(() => new AppConnection(), []);
   const controller = useMemo(
     () =>
       new WaveformController((request) => {
-        const currentClient = clientRef.current;
-        if (currentClient === null) {
-          throw new Error("Waveform viewport requested before WebSocket client initialization");
+        const binding = scopeBindingRef.current;
+        if (binding === null) {
+          throw new Error("Waveform viewport requested before scope binding initialization");
         }
-        return currentClient.requestViewport(request);
+        return binding.requestViewport(request);
       }),
     [],
   );
-  const client = useMemo(() => {
-    const created = new ScopeWebSocketClient(controller);
-    clientRef.current = created;
+  const scopeBinding = useMemo(() => {
+    const created = new ScopeBinding(connection, controller);
+    scopeBindingRef.current = created;
     return created;
-  }, [controller]);
+  }, [connection, controller]);
+  const dmmBinding = useMemo(() => new DmmBinding(connection), [connection]);
+  const scopeActions = useMemo(() => new ScopeActions(scopeBinding), [scopeBinding]);
+  const dmmActions = useMemo(() => new DmmActions(dmmBinding), [dmmBinding]);
 
   useEffect(() => {
-    client.connect();
-    return () => client.dispose();
-  }, [client]);
+    connection.connect();
+    return () => {
+      scopeActions.dispose();
+      scopeBinding.dispose();
+      dmmBinding.dispose();
+      connection.dispose();
+    };
+  }, [connection, dmmBinding, scopeActions, scopeBinding]);
 
   return (
     <main className="app-shell">
       <Routes>
-        <Route path="/" element={<ScopeRoute client={client} controller={controller} />} />
-        <Route path="/dm858e" element={<DmmRoute client={client} />} />
+        <Route
+          path="/"
+          element={(
+            <ScopeRoute
+              binding={scopeBinding}
+              actions={scopeActions}
+              controller={controller}
+            />
+          )}
+        />
+        <Route
+          path="/dm858e"
+          element={<DmmRoute binding={dmmBinding} actions={dmmActions} />}
+        />
       </Routes>
     </main>
   );

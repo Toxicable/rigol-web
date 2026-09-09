@@ -16,15 +16,13 @@ import {
 } from "../shared/websocket-protocol.js";
 
 export enum BrowserConnectionKind {
-  Connecting = 1,
-  TransportDisconnected = 2,
-  ScopeDisconnected = 3,
-  ScopeConnected = 4,
+  AwaitingInstrument = 1,
+  ScopeDisconnected = 2,
+  ScopeConnected = 3,
 }
 
 export type BrowserConnection =
-  | { kind: BrowserConnectionKind.Connecting }
-  | { kind: BrowserConnectionKind.TransportDisconnected; reason: string }
+  | { kind: BrowserConnectionKind.AwaitingInstrument }
   | { kind: BrowserConnectionKind.ScopeDisconnected; reason: string }
   | {
       kind: BrowserConnectionKind.ScopeConnected;
@@ -60,9 +58,9 @@ export interface ScopeStoreState {
   measurementSpecs: MeasurementSpec[];
   measurementValues: MeasurementValue[];
   deepCapture: DeepCaptureState;
+  sleepPending: boolean;
   lastError: string | null;
-  setConnecting(): void;
-  setTransportDisconnected(reason: string): void;
+  setAwaitingInstrument(): void;
   setScopeDisconnected(reason: string): void;
   setScopeConnected(info: ScopeInfo, scope: ScopeState): void;
   replaceScope(scope: ScopeState): void;
@@ -122,8 +120,6 @@ export function applyControlToScope(
       };
 
     case ControlKind.TriggerType:
-      // Edge needs source/slope/level fields that do not exist on non-Edge state.
-      // Keep the current complete snapshot until the server returns authoritative Edge state.
       return scope;
 
     case ControlKind.TriggerLevel:
@@ -149,25 +145,20 @@ export function applyControlToScope(
 const noDeepCapture = (): DeepCaptureState => ({ kind: DeepCaptureKind.None });
 
 export const useScopeStore = create<ScopeStoreState>((set) => ({
-  connection: { kind: BrowserConnectionKind.Connecting },
+  connection: { kind: BrowserConnectionKind.AwaitingInstrument },
   measurementSource: MeasurementSource.Scope,
   measurementSpecs: [],
   measurementValues: [],
   deepCapture: noDeepCapture(),
+  sleepPending: false,
   lastError: null,
 
-  setConnecting: () =>
+  setAwaitingInstrument: () =>
     set({
-      connection: { kind: BrowserConnectionKind.Connecting },
+      connection: { kind: BrowserConnectionKind.AwaitingInstrument },
       deepCapture: noDeepCapture(),
       measurementValues: [],
-    }),
-
-  setTransportDisconnected: (reason) =>
-    set({
-      connection: { kind: BrowserConnectionKind.TransportDisconnected, reason },
-      deepCapture: noDeepCapture(),
-      measurementValues: [],
+      sleepPending: false,
     }),
 
   setScopeDisconnected: (reason) =>
@@ -175,6 +166,7 @@ export const useScopeStore = create<ScopeStoreState>((set) => ({
       connection: { kind: BrowserConnectionKind.ScopeDisconnected, reason },
       deepCapture: noDeepCapture(),
       measurementValues: [],
+      sleepPending: false,
     }),
 
   setScopeConnected: (info, scope) =>
@@ -182,6 +174,7 @@ export const useScopeStore = create<ScopeStoreState>((set) => ({
       connection: { kind: BrowserConnectionKind.ScopeConnected, info, scope },
       deepCapture: noDeepCapture(),
       measurementValues: [],
+      sleepPending: false,
       lastError: null,
     }),
 

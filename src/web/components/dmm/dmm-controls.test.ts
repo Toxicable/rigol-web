@@ -4,18 +4,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   DmmAcquisitionRate,
-  DmmControlKind,
   DmmMeasurementFunction,
   DmmRangeMode,
   type DmmState,
 } from "../../../shared/dmm-types.js";
-import {
-  DmmControls,
-  dmmControlMatchesState,
-  functionControlForSelection,
-  rangeControlForState,
-  rateControlForState,
-} from "./dmm-controls.js";
+import { DmmControls } from "./dmm-controls.js";
 
 const dcVoltageState: DmmState = {
   function: DmmMeasurementFunction.DcVoltage,
@@ -29,65 +22,18 @@ const continuityState: DmmState = {
   acquisitionRate: null,
 };
 
+const callbacks = {
+  onFunction: () => undefined,
+  onRange: () => undefined,
+  onAcquisitionRate: () => undefined,
+};
+
 describe("DMM controls", () => {
-  it("creates direct function-selection controls", () => {
-    expect(functionControlForSelection(DmmMeasurementFunction.Resistance4Wire)).toEqual({
-      kind: DmmControlKind.Function,
-      value: DmmMeasurementFunction.Resistance4Wire,
-    });
-  });
-
-  it("binds range requests to the authoritative current function", () => {
-    expect(rangeControlForState(dcVoltageState, {
-      mode: DmmRangeMode.Fixed,
-      value: 10,
-    })).toEqual({
-      kind: DmmControlKind.Range,
-      function: DmmMeasurementFunction.DcVoltage,
-      value: { mode: DmmRangeMode.Fixed, value: 10 },
-    });
-  });
-
-  it("binds rate requests to the authoritative current function", () => {
-    expect(rateControlForState(dcVoltageState, DmmAcquisitionRate.Fast)).toEqual({
-      kind: DmmControlKind.AcquisitionRate,
-      function: DmmMeasurementFunction.DcVoltage,
-      value: DmmAcquisitionRate.Fast,
-    });
-  });
-
-  it("recognizes already-active controls as redundant", () => {
-    expect(dmmControlMatchesState(
-      dcVoltageState,
-      functionControlForSelection(DmmMeasurementFunction.DcVoltage),
-    )).toBe(true);
-    expect(dmmControlMatchesState(
-      dcVoltageState,
-      rangeControlForState(dcVoltageState, { mode: DmmRangeMode.Auto }),
-    )).toBe(true);
-    expect(dmmControlMatchesState(
-      dcVoltageState,
-      rateControlForState(dcVoltageState, DmmAcquisitionRate.Slow),
-    )).toBe(true);
-
-    expect(dmmControlMatchesState(
-      dcVoltageState,
-      functionControlForSelection(DmmMeasurementFunction.AcVoltage),
-    )).toBe(false);
-  });
-
-  it("rejects controls that are not applicable to the current state", () => {
-    expect(() => rangeControlForState(continuityState, { mode: DmmRangeMode.Auto }))
-      .toThrow("does not expose range control");
-    expect(() => rateControlForState(continuityState, DmmAcquisitionRate.Fast))
-      .toThrow("does not expose acquisition-rate control");
-  });
-
-  it("does not render active range or rate controls when state marks them not applicable", () => {
+  it("does not render range or rate controls when state marks them not applicable", () => {
     const markup = renderToStaticMarkup(createElement(DmmControls, {
       state: continuityState,
       pending: false,
-      onControl: () => undefined,
+      ...callbacks,
     }));
 
     expect(markup).toContain("Cont");
@@ -99,7 +45,7 @@ describe("DMM controls", () => {
     const markup = renderToStaticMarkup(createElement(DmmControls, {
       state: dcVoltageState,
       pending: false,
-      onControl: () => undefined,
+      ...callbacks,
     }));
 
     expect(markup).toContain(">Range<");
@@ -109,15 +55,22 @@ describe("DMM controls", () => {
     expect(markup).toContain("Fast · 4.5 digit");
   });
 
-  it("disables the currently active choices so they cannot write the same setting again", () => {
-    const markup = renderToStaticMarkup(createElement(DmmControls, {
+  it("disables active choices and all controls while an action is pending", () => {
+    const activeMarkup = renderToStaticMarkup(createElement(DmmControls, {
       state: dcVoltageState,
       pending: false,
-      onControl: () => undefined,
+      ...callbacks,
     }));
+    expect(activeMarkup).toMatch(/aria-pressed="true" disabled=""[^>]*title="DC voltage"/);
+    expect(activeMarkup).toMatch(/aria-pressed="true" disabled=""[^>]*>Auto<\/button>/);
+    expect(activeMarkup).toMatch(/aria-pressed="true" disabled=""[^>]*>Slow · 5\.5 digit<\/button>/);
 
-    expect(markup).toMatch(/aria-pressed="true" disabled=""[^>]*title="DC voltage"/);
-    expect(markup).toMatch(/aria-pressed="true" disabled=""[^>]*>Auto<\/button>/);
-    expect(markup).toMatch(/aria-pressed="true" disabled=""[^>]*>Slow · 5\.5 digit<\/button>/);
+    const pendingMarkup = renderToStaticMarkup(createElement(DmmControls, {
+      state: dcVoltageState,
+      pending: true,
+      ...callbacks,
+    }));
+    expect(pendingMarkup).toContain("Applying…");
+    expect((pendingMarkup.match(/disabled=""/g) ?? []).length).toBeGreaterThan(3);
   });
 });

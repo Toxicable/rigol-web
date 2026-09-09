@@ -1,8 +1,7 @@
 import { TimebaseMode, type ScopeState } from "../../shared/scope-types.js";
-import { ControlKind } from "../../shared/websocket-protocol.js";
 import { formatSampleRate, formatSamples, formatSeconds } from "../format-value.js";
+import type { ScopeActions } from "../scope-actions.js";
 import { DeepCaptureKind, useScopeStore } from "../scope-store.js";
-import type { ScopeWebSocketClient } from "../websocket-client.js";
 import { EditableNumberInput } from "./editable-number.js";
 
 const MODE_LABELS: Record<TimebaseMode, string> = {
@@ -32,46 +31,21 @@ function nearestTimebaseIndex(value: number): number {
 
 interface HorizontalControlsProps {
   scope: ScopeState;
-  client: ScopeWebSocketClient;
+  actions: ScopeActions;
 }
 
-export function HorizontalControls({ scope, client }: HorizontalControlsProps) {
+export function HorizontalControls({ scope, actions }: HorizontalControlsProps) {
   const deepCapture = useScopeStore((state) => state.deepCapture);
   const isDeep = deepCapture.kind === DeepCaptureKind.Ready;
   const displayedScale = isDeep ? deepCapture.scale : scope.horizontal.scale;
   const displayedPosition = isDeep ? deepCapture.position : scope.horizontal.position;
   const timebaseIndex = nearestTimebaseIndex(displayedScale);
 
-  const setNumber = (
-    kind: ControlKind.HorizontalScale | ControlKind.HorizontalPosition,
-    value: number,
-  ): void => {
-    if (!Number.isFinite(value) || (kind === ControlKind.HorizontalScale && value <= 0)) {
-      return;
-    }
-
-    if (deepCapture.kind === DeepCaptureKind.Ready) {
-      useScopeStore.getState().setDeepHorizontal(
-        kind === ControlKind.HorizontalPosition ? value : deepCapture.position,
-        kind === ControlKind.HorizontalScale ? value : deepCapture.scale,
-      );
-      return;
-    }
-
-    const control = { kind, value } as const;
-    useScopeStore.getState().applyOptimisticControl(control);
-    void client.setControl(control).catch((error: unknown) => {
-      useScopeStore.getState().setError(
-        error instanceof Error ? error.message : String(error),
-      );
-    });
-  };
-
   const commitTimebaseStep = (index: number): void => {
     const clamped = Math.max(0, Math.min(TIMEBASE_STEPS.length - 1, index));
     const value = TIMEBASE_STEPS[clamped];
     if (value !== undefined) {
-      setNumber(ControlKind.HorizontalScale, value);
+      void actions.setHorizontalScale(value);
     }
   };
 
@@ -107,7 +81,9 @@ export function HorizontalControls({ scope, client }: HorizontalControlsProps) {
             value={displayedScale}
             validate={(value) => value > 0}
             ariaLabel="Time per division"
-            onCommit={(value) => setNumber(ControlKind.HorizontalScale, value)}
+            onCommit={(value) => {
+              void actions.setHorizontalScale(value);
+            }}
           />
           <span>{formatSeconds(displayedScale)}</span>
         </label>
@@ -116,7 +92,9 @@ export function HorizontalControls({ scope, client }: HorizontalControlsProps) {
           <EditableNumberInput
             value={displayedPosition}
             ariaLabel="Horizontal position"
-            onCommit={(value) => setNumber(ControlKind.HorizontalPosition, value)}
+            onCommit={(value) => {
+              void actions.setHorizontalPosition(value);
+            }}
           />
           <span>{formatSeconds(displayedPosition)}</span>
         </label>

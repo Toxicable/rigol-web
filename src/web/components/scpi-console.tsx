@@ -1,7 +1,7 @@
 import { useState, type ChangeEvent, type KeyboardEvent } from "react";
 
 import type { SupportedInstrument } from "../../shared/instrument-types.js";
-import type { ScopeWebSocketClient } from "../websocket-client.js";
+import type { AppConnection } from "../app-connection.js";
 
 interface ScpiEntry {
   id: number;
@@ -11,7 +11,7 @@ interface ScpiEntry {
 }
 
 interface ScpiConsoleProps {
-  client: ScopeWebSocketClient;
+  client: AppConnection;
   instrument: SupportedInstrument;
   placeholder?: string;
 }

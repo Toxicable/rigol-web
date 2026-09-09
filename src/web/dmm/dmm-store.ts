@@ -10,17 +10,13 @@ import {
 } from "../../shared/dmm-types.js";
 
 export enum DmmBrowserConnectionKind {
-  Connecting = 1,
-  AwaitingInstrument = 2,
-  TransportDisconnected = 3,
-  InstrumentDisconnected = 4,
-  Connected = 5,
+  AwaitingInstrument = 1,
+  InstrumentDisconnected = 2,
+  Connected = 3,
 }
 
 export type DmmBrowserConnection =
-  | { kind: DmmBrowserConnectionKind.Connecting }
   | { kind: DmmBrowserConnectionKind.AwaitingInstrument }
-  | { kind: DmmBrowserConnectionKind.TransportDisconnected; reason: string }
   | { kind: DmmBrowserConnectionKind.InstrumentDisconnected; reason: string }
   | {
       kind: DmmBrowserConnectionKind.Connected;
@@ -43,9 +39,7 @@ export interface DmmStoreState {
   pendingControl: DmmPendingControl | null;
   controlError: string | null;
   controlGeneration: number;
-  setConnecting(): void;
   setAwaitingInstrument(): void;
-  setTransportDisconnected(reason: string): void;
   setInstrumentDisconnected(reason: string): void;
   setConnected(info: DmmInfo, state: DmmState): void;
   replaceState(state: DmmState): void;
@@ -87,33 +81,15 @@ function ownsPendingControl(
 }
 
 export const useDmmStore = create<DmmStoreState>((set, get) => ({
-  connection: { kind: DmmBrowserConnectionKind.Connecting },
+  connection: { kind: DmmBrowserConnectionKind.AwaitingInstrument },
   latestReading: null,
   pendingControl: null,
   controlError: null,
   controlGeneration: 0,
 
-  setConnecting: () =>
-    set((current) => ({
-      connection: { kind: DmmBrowserConnectionKind.Connecting },
-      latestReading: null,
-      pendingControl: null,
-      controlError: null,
-      controlGeneration: current.controlGeneration + 1,
-    })),
-
   setAwaitingInstrument: () =>
     set((current) => ({
       connection: { kind: DmmBrowserConnectionKind.AwaitingInstrument },
-      latestReading: null,
-      pendingControl: null,
-      controlError: null,
-      controlGeneration: current.controlGeneration + 1,
-    })),
-
-  setTransportDisconnected: (reason) =>
-    set((current) => ({
-      connection: { kind: DmmBrowserConnectionKind.TransportDisconnected, reason },
       latestReading: null,
       pendingControl: null,
       controlError: null,

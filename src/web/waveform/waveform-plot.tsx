@@ -9,15 +9,14 @@ import {
   type ChannelState,
   type ScopeState,
 } from "../../shared/scope-types.js";
-import { ControlKind, type InteractiveControl } from "../../shared/websocket-protocol.js";
 import { formatAmplitude } from "../format-value.js";
 import {
   channelOffsetFromMarkerDrag,
   horizontalPositionFromDrag,
   triggerLevelFromMarkerDrag,
 } from "../interaction-math.js";
+import type { ScopeActions } from "../scope-actions.js";
 import { DeepCaptureKind, useScopeStore } from "../scope-store.js";
-import type { ScopeWebSocketClient } from "../websocket-client.js";
 import {
   divisionSplits,
   formatTimeAxisValues,
@@ -33,7 +32,7 @@ import {
 interface WaveformPlotProps {
   scope: ScopeState;
   controller: WaveformController;
-  client: ScopeWebSocketClient;
+  actions: ScopeActions;
 }
 
 interface PlotLayout {
@@ -45,7 +44,6 @@ interface PlotLayout {
   plotHeight: number;
 }
 
-const INTERACTION_UPDATE_INTERVAL_MS = 50;
 const AXIS_FONT = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const CHANNEL_STROKES: Record<Channel, string> = {
   [Channel.Ch1]: "#f4d03f",
@@ -91,6 +89,11 @@ type DragState =
       scale: number;
       height: number;
     };
+
+type InteractionIntent =
+  | { kind: "horizontal"; value: number }
+  | { kind: "channel"; channel: Channel; value: number }
+  | { kind: "trigger"; value: number };
 
 const CHANNELS = [Channel.Ch1, Channel.Ch2, Channel.Ch3, Channel.Ch4] as const;
 
@@ -167,9 +170,6 @@ function triggerMarkerPlacement(
   if (source === undefined) {
     return null;
   }
-  // Scope state can briefly contain an uninitialized scale while the first
-  // instrument state packet is arriving. Do not pass a zero/invalid domain to
-  // the marker geometry helper during that transition.
   if (
     !validMarkerLayout(layout) ||
     !Number.isFinite(source.scale) ||
@@ -211,12 +211,10 @@ function markerDirectionGlyph(placement: WaveformMarkerPlacement): string | null
   }
 }
 
-export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
+export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const plotRef = useRef<uPlot | null>(null);
   const dragRef = useRef<DragState | null>(null);
-  const pendingInteractionRef = useRef<InteractiveControl | null>(null);
-  const interactionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [layout, setLayout] = useState<PlotLayout>({
     width: 1,
     height: 1,
@@ -226,10 +224,6 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
     plotHeight: 1,
   });
   const [draggingTrigger, setDraggingTrigger] = useState(false);
-  const applyOptimisticControl = useScopeStore(
-    (state) => state.applyOptimisticControl,
-  );
-  const setDeepHorizontal = useScopeStore((state) => state.setDeepHorizontal);
   const deepCapture = useScopeStore((state) => state.deepCapture);
   const isDeep =
     deepCapture.kind === DeepCaptureKind.Ready &&
@@ -345,7 +339,7 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
       plot.destroy();
       plotRef.current = null;
     };
-  }, [axisConfigSignature, controller]);
+  }, [axisConfigSignature, controller, horizontalUnit]);
 
   useEffect(() => {
     const plot = plotRef.current;
@@ -466,9 +460,9 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
     setDraggingTrigger(true);
   };
 
-  const controlForPointer = (
+  const intentForPointer = (
     event: PointerEvent<HTMLDivElement>,
-  ): InteractiveControl | null => {
+  ): InteractionIntent | null => {
     const drag = dragRef.current;
     if (drag === null || drag.pointerId !== event.pointerId) {
       return null;
@@ -476,10 +470,9 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
 
     switch (drag.kind) {
       case "deep-horizontal":
-        return null;
       case "live-horizontal":
         return {
-          kind: ControlKind.HorizontalPosition,
+          kind: "horizontal",
           value: horizontalPositionFromDrag(
             drag.startPosition,
             event.clientX - drag.startX,
@@ -489,7 +482,7 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
         };
       case "channel":
         return {
-          kind: ControlKind.ChannelOffset,
+          kind: "channel",
           channel: drag.channel,
           value: channelOffsetFromMarkerDrag(
             drag.startOffset,
@@ -501,7 +494,7 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
         };
       case "trigger":
         return {
-          kind: ControlKind.TriggerLevel,
+          kind: "trigger",
           value: triggerLevelFromMarkerDrag(
             drag.startLevel,
             drag.startMarkerY,
@@ -514,57 +507,36 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
     }
   };
 
-  const updateDeepPan = (event: PointerEvent<HTMLDivElement>): boolean => {
-    const drag = dragRef.current;
-    if (drag?.kind !== "deep-horizontal" || drag.pointerId !== event.pointerId) {
-      return false;
+  const previewIntent = (intent: InteractionIntent): void => {
+    switch (intent.kind) {
+      case "horizontal":
+        actions.previewHorizontalPosition(intent.value);
+        return;
+      case "channel":
+        actions.previewChannelOffset(intent.channel, intent.value);
+        return;
+      case "trigger":
+        actions.previewTriggerLevel(intent.value);
+        return;
     }
-
-    const position = horizontalPositionFromDrag(
-      drag.startPosition,
-      event.clientX - drag.startX,
-      drag.width,
-      drag.scale,
-    );
-    setDeepHorizontal(position, drag.scale);
-    return true;
   };
 
-  const queueInteractionUpdate = (control: InteractiveControl): void => {
-    pendingInteractionRef.current = control;
-    if (interactionTimerRef.current !== null) {
-      return;
+  const commitIntent = (intent: InteractionIntent): Promise<void> => {
+    switch (intent.kind) {
+      case "horizontal":
+        return actions.commitHorizontalPosition(intent.value);
+      case "channel":
+        return actions.commitChannelOffset(intent.channel, intent.value);
+      case "trigger":
+        return actions.commitTriggerLevel(intent.value);
     }
-
-    interactionTimerRef.current = setTimeout(() => {
-      interactionTimerRef.current = null;
-      const pending = pendingInteractionRef.current;
-      pendingInteractionRef.current = null;
-      if (pending !== null) {
-        client.interactionUpdate(pending);
-      }
-    }, INTERACTION_UPDATE_INTERVAL_MS);
-  };
-
-  const flushInteractionUpdate = (): void => {
-    if (interactionTimerRef.current !== null) {
-      clearTimeout(interactionTimerRef.current);
-      interactionTimerRef.current = null;
-    }
-    pendingInteractionRef.current = null;
   };
 
   const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
-    if (updateDeepPan(event)) {
-      return;
+    const intent = intentForPointer(event);
+    if (intent !== null) {
+      previewIntent(intent);
     }
-
-    const control = controlForPointer(event);
-    if (control === null) {
-      return;
-    }
-    applyOptimisticControl(control);
-    queueInteractionUpdate(control);
   };
 
   const finishPointer = (event: PointerEvent<HTMLDivElement>) => {
@@ -573,23 +545,11 @@ export function WaveformPlot({ scope, controller, client }: WaveformPlotProps) {
       setDraggingTrigger(false);
     }
 
-    if (updateDeepPan(event)) {
-      dragRef.current = null;
-      return;
-    }
-
-    const control = controlForPointer(event);
-    flushInteractionUpdate();
+    const intent = intentForPointer(event);
     dragRef.current = null;
-    if (control === null) {
-      return;
+    if (intent !== null) {
+      void commitIntent(intent);
     }
-    applyOptimisticControl(control);
-    void client.interactionCommit(control).catch((error: unknown) => {
-      useScopeStore.getState().setError(
-        error instanceof Error ? error.message : String(error),
-      );
-    });
   };
 
   const triggerPlacement = triggerMarkerPlacement(scope, layout);

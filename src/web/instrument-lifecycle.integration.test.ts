@@ -7,8 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket as NodeWebSocket, type RawData } from "ws";
 
 import type { DmmControlChange, DmmReadingSnapshot, DmmState } from "../shared/dmm-types.js";
-import { SupportedInstrument } from "../shared/instrument-types.js";
-import type { MeasurementSpec, MeasurementValue, ScopeState } from "../shared/scope-types.js";
+import type { MeasurementSpec, MeasurementValue } from "../shared/scope-types.js";
 import type {
   AcquisitionAction,
   ControlChange,
@@ -28,20 +27,20 @@ import {
 } from "../server/instruments/instrument-registry.js";
 import type { ScopeApplicationService } from "../server/scope/scope-service.js";
 import type { DeepCaptureInfo, DeepViewportRequest } from "../server/waveform/deep-capture-service.js";
+import { DmmWebSocketAdapter } from "../server/websocket/dmm-websocket-adapter.js";
+import { ScopeWebSocketAdapter } from "../server/websocket/scope-websocket-adapter.js";
 import { WebSocketGateway } from "../server/websocket/websocket-gateway.js";
+import { AppConnection, type WebSocketLike } from "./app-connection.js";
+import { DmmBinding } from "./dmm/dmm-binding.js";
 import { bindDmmRoute } from "./dmm/dmm-route-binding.js";
+import { ScopeBinding } from "./scope-binding.js";
 import { bindScopeRoute } from "./scope-route-binding.js";
-import {
-  ScopeWebSocketClient,
-  type WebSocketLike,
-} from "./websocket-client.js";
 import { WaveformController } from "./waveform/waveform-controller.js";
 
 interface LifecycleSpy {
   runtime: InstrumentRuntime;
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
-  subscriberAdded: ReturnType<typeof vi.fn>;
 }
 
 function lifecycle(): LifecycleSpy {
@@ -51,7 +50,6 @@ function lifecycle(): LifecycleSpy {
     runtime: { start, stop },
     start,
     stop,
-    subscriberAdded: vi.fn(async () => undefined),
   };
 }
 
@@ -66,6 +64,7 @@ class ScopeServiceStub implements ScopeApplicationService {
   public async updateInteraction(_control: InteractiveControl): Promise<void> { throw new Error("unused"); }
   public async commitInteraction(_control: InteractiveControl): Promise<void> { throw new Error("unused"); }
   public async performAcquisitionAction(_action: AcquisitionAction): Promise<void> { throw new Error("unused"); }
+  public async sleep(): Promise<void> { throw new Error("unused"); }
   public async readMeasurements(_measurements: NonEmptyArray<MeasurementSpec>): Promise<MeasurementValue[]> { throw new Error("unused"); }
   public async setMeasurements(_measurements: MeasurementSpec[]): Promise<void> { throw new Error("unused"); }
   public async executeRawScpi(_command: string): Promise<string> { throw new Error("unused"); }
@@ -119,14 +118,22 @@ class NodeSocketAdapter implements WebSocketLike {
   public terminate(): void { this.socket.terminate(); }
 }
 
+interface BrowserClient {
+  connection: AppConnection;
+  scopeBinding: ScopeBinding;
+  dmmBinding: DmmBinding;
+  dispose(): void;
+}
+
 interface Harness {
   httpServer: HttpServer;
   gateway: WebSocketGateway;
+  instruments: InstrumentRegistry;
   scopeLifecycle: LifecycleSpy;
   dmmLifecycle: LifecycleSpy;
-  clients: ScopeWebSocketClient[];
+  clients: BrowserClient[];
   adapters: NodeSocketAdapter[];
-  createClient(): ScopeWebSocketClient;
+  createClient(): BrowserClient;
 }
 
 let active: Harness | undefined;
@@ -144,6 +151,7 @@ afterEach(async () => {
   if (active !== undefined) {
     for (const client of active.clients) client.dispose();
     await active.gateway.close();
+    await active.instruments.stopAll();
     await new Promise<void>((resolve, reject) => {
       active?.httpServer.close((error) => error === undefined ? resolve() : reject(error));
     });
@@ -157,38 +165,33 @@ async function createHarness(): Promise<Harness> {
   const scopeLifecycle = lifecycle();
   const dmmLifecycle = lifecycle();
   const instruments = new InstrumentRegistry({
-    dho804: {
-      endpoint: { host: "scope.test", port: 5555 },
-      runtime: scopeLifecycle.runtime,
-      subscriberAdded: scopeLifecycle.subscriberAdded,
-    },
-    dm858e: {
-      endpoint: { host: "dmm.test", port: 5556 },
-      runtime: dmmLifecycle.runtime,
-      subscriberAdded: dmmLifecycle.subscriberAdded,
-    },
+    dho804: scopeLifecycle.runtime,
+    dm858e: dmmLifecycle.runtime,
   });
+  await instruments.startAll();
+
+  const scopeService = new ScopeServiceStub();
+  const dmmService = new DmmServiceStub();
   const gateway = new WebSocketGateway(httpServer, {
-    instruments,
-    scopeService: new ScopeServiceStub(),
-    dmmService: new DmmServiceStub(),
+    scopeAdapter: new ScopeWebSocketAdapter(scopeService),
+    dmmAdapter: new DmmWebSocketAdapter(dmmService),
   });
 
   httpServer.listen(0, "127.0.0.1");
   await once(httpServer, "listening");
   const port = (httpServer.address() as AddressInfo).port;
-  const clients: ScopeWebSocketClient[] = [];
+  const clients: BrowserClient[] = [];
   const adapters: NodeSocketAdapter[] = [];
   const harness: Harness = {
     httpServer,
     gateway,
+    instruments,
     scopeLifecycle,
     dmmLifecycle,
     clients,
     adapters,
     createClient: () => {
-      const client = new ScopeWebSocketClient(
-        new WaveformController(() => 0),
+      const connection = new AppConnection(
         (url) => {
           const adapter = new NodeSocketAdapter(url);
           adapters.push(adapter);
@@ -196,8 +199,23 @@ async function createHarness(): Promise<Harness> {
         },
         () => `ws://127.0.0.1:${port}/ws`,
       );
+      const scopeBinding = new ScopeBinding(
+        connection,
+        new WaveformController(() => 0),
+      );
+      const dmmBinding = new DmmBinding(connection);
+      const client: BrowserClient = {
+        connection,
+        scopeBinding,
+        dmmBinding,
+        dispose: () => {
+          scopeBinding.dispose();
+          dmmBinding.dispose();
+          connection.dispose();
+        },
+      };
       clients.push(client);
-      client.connect();
+      connection.connect();
       return client;
     },
   };
@@ -205,93 +223,79 @@ async function createHarness(): Promise<Harness> {
   return harness;
 }
 
-function runningDelta(spy: LifecycleSpy): number {
-  return spy.start.mock.calls.length - spy.stop.mock.calls.length;
+async function settle(): Promise<void> {
+  await new Promise((resolve) => globalThis.setTimeout(resolve, 20));
 }
 
-describe("route lifecycle through browser WebSocket and gateway", () => {
-  it("switches scope to DMM to scope through the actual route binders", async () => {
+describe("server-owned instrument lifetime through browser routes", () => {
+  it("starts both runtimes before any browser subscribes and route switching does not restart them", async () => {
     const harness = await createHarness();
+    expect(harness.scopeLifecycle.start).toHaveBeenCalledOnce();
+    expect(harness.dmmLifecycle.start).toHaveBeenCalledOnce();
+
     const client = harness.createClient();
-    const leaveScope = bindScopeRoute(client);
-    await vi.waitFor(() => expect(harness.scopeLifecycle.subscriberAdded).toHaveBeenCalledOnce());
-
+    const leaveScope = bindScopeRoute(client.scopeBinding);
+    await settle();
     leaveScope();
-    const leaveDmm = bindDmmRoute(client);
-    await vi.waitFor(() => {
-      expect(harness.scopeLifecycle.stop).toHaveBeenCalledOnce();
-      expect(harness.dmmLifecycle.subscriberAdded).toHaveBeenCalledOnce();
-    });
-
+    const leaveDmm = bindDmmRoute(client.dmmBinding);
+    await settle();
     leaveDmm();
-    const leaveScopeAgain = bindScopeRoute(client);
-    await vi.waitFor(() => {
-      expect(harness.dmmLifecycle.stop).toHaveBeenCalledOnce();
-      expect(harness.scopeLifecycle.subscriberAdded).toHaveBeenCalledTimes(2);
-      expect(runningDelta(harness.scopeLifecycle)).toBe(1);
-      expect(runningDelta(harness.dmmLifecycle)).toBe(0);
-    });
+    const leaveScopeAgain = bindScopeRoute(client.scopeBinding);
+    await settle();
+
+    expect(harness.scopeLifecycle.start).toHaveBeenCalledOnce();
+    expect(harness.dmmLifecycle.start).toHaveBeenCalledOnce();
+    expect(harness.scopeLifecycle.stop).not.toHaveBeenCalled();
+    expect(harness.dmmLifecycle.stop).not.toHaveBeenCalled();
     leaveScopeAgain();
   });
 
-  it("keeps one shared scope runtime alive until the last tab leaves", async () => {
+  it("does not stop the scope runtime when the last subscribed tab leaves", async () => {
     const harness = await createHarness();
     const first = harness.createClient();
     const second = harness.createClient();
-    const leaveFirst = bindScopeRoute(first);
-    const leaveSecond = bindScopeRoute(second);
-    await vi.waitFor(() => {
-      expect(harness.scopeLifecycle.start).toHaveBeenCalledOnce();
-      expect(harness.scopeLifecycle.subscriberAdded).toHaveBeenCalledTimes(2);
-    });
+    const leaveFirst = bindScopeRoute(first.scopeBinding);
+    const leaveSecond = bindScopeRoute(second.scopeBinding);
+    await settle();
+
     leaveFirst();
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 20));
-    expect(harness.scopeLifecycle.stop).not.toHaveBeenCalled();
     leaveSecond();
-    await vi.waitFor(() => expect(harness.scopeLifecycle.stop).toHaveBeenCalledOnce());
+    await settle();
+
+    expect(harness.scopeLifecycle.start).toHaveBeenCalledOnce();
+    expect(harness.scopeLifecycle.stop).not.toHaveBeenCalled();
   });
 
-  it("keeps scope and DMM tabs independent and releases a runtime on socket close", async () => {
+  it("does not stop either runtime when browser sockets close", async () => {
     const harness = await createHarness();
     const scopeClient = harness.createClient();
     const dmmClient = harness.createClient();
-    bindScopeRoute(scopeClient);
-    bindDmmRoute(dmmClient);
-    await vi.waitFor(() => {
-      expect(harness.scopeLifecycle.subscriberAdded).toHaveBeenCalledOnce();
-      expect(harness.dmmLifecycle.subscriberAdded).toHaveBeenCalledOnce();
-    });
+    bindScopeRoute(scopeClient.scopeBinding);
+    bindDmmRoute(dmmClient.dmmBinding);
+    await settle();
+
     scopeClient.dispose();
-    await vi.waitFor(() => expect(harness.scopeLifecycle.stop).toHaveBeenCalledOnce());
-    expect(harness.dmmLifecycle.stop).not.toHaveBeenCalled();
-    expect(runningDelta(harness.dmmLifecycle)).toBe(1);
     dmmClient.dispose();
-    await vi.waitFor(() => expect(harness.dmmLifecycle.stop).toHaveBeenCalledOnce());
+    await settle();
+
+    expect(harness.scopeLifecycle.stop).not.toHaveBeenCalled();
+    expect(harness.dmmLifecycle.stop).not.toHaveBeenCalled();
   });
 
-  it("reconnects with only the final desired subscription after rapid switching", async () => {
+  it("reconnects browser transport without restarting physical runtimes", async () => {
     const harness = await createHarness();
     const client = harness.createClient();
-    const leaveScope = bindScopeRoute(client);
-    await vi.waitFor(() => expect(harness.scopeLifecycle.subscriberAdded).toHaveBeenCalledOnce());
-    leaveScope();
-    const leaveDmm = bindDmmRoute(client);
-    leaveDmm();
-    const leaveFinalScope = bindScopeRoute(client);
-    await vi.waitFor(() => {
-      expect(runningDelta(harness.scopeLifecycle)).toBe(1);
-      expect(runningDelta(harness.dmmLifecycle)).toBe(0);
-    });
-    const subscribersBeforeDrop = harness.scopeLifecycle.subscriberAdded.mock.calls.length;
-    const stopsBeforeDrop = harness.scopeLifecycle.stop.mock.calls.length;
+    const leaveScope = bindScopeRoute(client.scopeBinding);
+    await vi.waitFor(() => expect(harness.adapters.length).toBe(1));
+
     harness.adapters.at(-1)?.terminate();
     await vi.waitFor(() => expect(harness.adapters.length).toBeGreaterThanOrEqual(2));
-    await vi.waitFor(() => expect(harness.scopeLifecycle.stop.mock.calls.length).toBeGreaterThan(stopsBeforeDrop));
-    await vi.waitFor(() => {
-      expect(harness.scopeLifecycle.subscriberAdded.mock.calls.length).toBeGreaterThan(subscribersBeforeDrop);
-      expect(runningDelta(harness.scopeLifecycle)).toBe(1);
-      expect(runningDelta(harness.dmmLifecycle)).toBe(0);
-    });
-    leaveFinalScope();
+    await settle();
+
+    expect(harness.scopeLifecycle.start).toHaveBeenCalledOnce();
+    expect(harness.dmmLifecycle.start).toHaveBeenCalledOnce();
+    expect(harness.scopeLifecycle.stop).not.toHaveBeenCalled();
+    expect(harness.dmmLifecycle.stop).not.toHaveBeenCalled();
+    leaveScope();
   });
 });

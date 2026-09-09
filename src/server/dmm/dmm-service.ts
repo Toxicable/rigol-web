@@ -83,12 +83,6 @@ export class DmmService implements DmmApplicationService {
     return () => this.snapshotListeners.delete(listener);
   }
 
-  public replayCurrentSnapshot(): void {
-    if (this.currentSnapshot !== null) {
-      this.publishSnapshot(this.currentSnapshot);
-    }
-  }
-
   public async setControl(control: DmmControlChange): Promise<void> {
     const session = this.runtime.requireSession();
     await this.serializeMutation(session, async () => {
