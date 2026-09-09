@@ -1,4 +1,4 @@
-import { SupportedInstrument } from "../shared/instrument-types.js";
+import { SupportedInstrument, type ScpiInstrument } from "../shared/instrument-types.js";
 import {
   MessageType,
   PROTOCOL_VERSION,
@@ -264,7 +264,7 @@ export class AppConnection {
   }
 
   public async executeScpi(
-    instrument: SupportedInstrument,
+    instrument: ScpiInstrument,
     command: string,
   ): Promise<string> {
     const response = await this.request((requestId): ScpiExecuteMessage => ({
