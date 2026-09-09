@@ -1,6 +1,11 @@
 import { Buffer } from "node:buffer";
 
-import { PPK2_SAMPLE_BYTES, PPK2_COUNTER_MODULUS, Ppk2CurrentConverter, type Ppk2RawSample } from "./ppk2-protocol.js";
+import {
+  PPK2_COUNTER_MODULUS,
+  PPK2_SAMPLE_BYTES,
+  Ppk2CurrentConverter,
+  type Ppk2RawSample,
+} from "./ppk2-protocol.js";
 
 export interface SequencedPpk2Sample extends Ppk2RawSample {
   sequence: number;
@@ -16,6 +21,10 @@ export interface Ppk2DecodedBatch {
  * signals:
  * - bridge byte-offset gaps (exact across network/buffer loss), and
  * - native PPK2 6-bit counter gaps while bridge bytes remain contiguous.
+ *
+ * A bridge gap is recoverable only when both sides of the gap preserve the
+ * measurement's four-byte sample boundary. Otherwise sample identity becomes
+ * ambiguous and the acquisition fails instead of guessing a resynchronization.
  */
 export class Ppk2StreamDecoder {
   private sourceSessionId: number | null = null;
@@ -67,37 +76,36 @@ export class Ppk2StreamDecoder {
     }
 
     let lostSamples = 0;
-    let usablePayload = payload;
-    let usableOffset = streamOffset;
     if (streamOffset > this.expectedStreamOffset) {
-      lostSamples += countSamplesIntersectingGap(
-        this.measurementBaseOffset,
-        this.expectedStreamOffset,
-        streamOffset,
-      );
-      this.buffer = Buffer.alloc(0);
-      this.expectedCounter = null;
-
-      const relative = streamOffset - this.measurementBaseOffset;
-      const prefixBytes = (PPK2_SAMPLE_BYTES - (relative % PPK2_SAMPLE_BYTES)) % PPK2_SAMPLE_BYTES;
-      if (prefixBytes >= payload.length) {
-        this.expectedStreamOffset = streamOffset + payload.length;
-        return { samples: [], lostSamples };
+      const missingBytes = streamOffset - this.expectedStreamOffset;
+      const expectedRelative = this.expectedStreamOffset - this.measurementBaseOffset;
+      const resumedRelative = streamOffset - this.measurementBaseOffset;
+      if (
+        missingBytes % PPK2_SAMPLE_BYTES !== 0 ||
+        expectedRelative % PPK2_SAMPLE_BYTES !== 0 ||
+        resumedRelative % PPK2_SAMPLE_BYTES !== 0
+      ) {
+        throw new Error(
+          "PPK2 bridge byte loss crossed an uncertain sample boundary",
+        );
       }
-      usablePayload = payload.subarray(prefixBytes);
-      usableOffset = streamOffset + prefixBytes;
+
+      lostSamples += missingBytes / PPK2_SAMPLE_BYTES;
+      this.buffer = Buffer.alloc(0);
+      this.bufferStartOffset = streamOffset;
+      this.expectedCounter = null;
     }
 
     this.expectedStreamOffset = streamOffset + payload.length;
     if (this.buffer.length === 0) {
-      this.bufferStartOffset = usableOffset;
-      this.buffer = Buffer.from(usablePayload);
+      this.bufferStartOffset = streamOffset;
+      this.buffer = Buffer.from(payload);
     } else {
       const expectedBufferAppendOffset = this.bufferStartOffset + this.buffer.length;
-      if (usableOffset !== expectedBufferAppendOffset) {
+      if (streamOffset !== expectedBufferAppendOffset) {
         throw new Error("PPK2 decoder byte-buffer continuity invariant failed");
       }
-      this.buffer = Buffer.concat([this.buffer, usablePayload]);
+      this.buffer = Buffer.concat([this.buffer, payload]);
     }
 
     const samples: SequencedPpk2Sample[] = [];
@@ -133,16 +141,6 @@ export class Ppk2StreamDecoder {
     }
     return { samples, lostSamples };
   }
-}
-
-function countSamplesIntersectingGap(baseOffset: number, startOffset: number, endOffset: number): number {
-  if (endOffset <= startOffset) return 0;
-  const relativeStart = startOffset - baseOffset;
-  const relativeEnd = endOffset - baseOffset;
-  if (relativeEnd <= 0) return 0;
-  const first = Math.max(0, Math.floor(relativeStart / PPK2_SAMPLE_BYTES));
-  const endExclusive = Math.ceil(relativeEnd / PPK2_SAMPLE_BYTES);
-  return Math.max(0, endExclusive - first);
 }
 
 function requirePositiveInteger(value: number, name: string): void {
