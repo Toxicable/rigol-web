@@ -52,6 +52,11 @@ export interface Ppk2DisplayBucket {
   logicAnd: number;
 }
 
+export interface Ppk2LiveUpdate {
+  operationId: number;
+  buckets: readonly Ppk2DisplayBucket[];
+}
+
 export interface Ppk2Viewport {
   operationId: number;
   requestedFirstSequence: number;
