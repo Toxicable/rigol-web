@@ -29,6 +29,11 @@ import type { ScopeApplicationService } from "../scope/scope-service.js";
 import { AcquisitionWebSocketAdapter } from "./acquisition-websocket-adapter.js";
 import { DmmWebSocketAdapter } from "./dmm-websocket-adapter.js";
 import { ScopeWebSocketAdapter } from "./scope-websocket-adapter.js";
+import type {
+  WebSocketAdapterHost,
+  WebSocketInstrumentAdapter,
+  WebSocketSession,
+} from "./websocket-adapter.js";
 import { WebSocketGateway } from "./websocket-gateway.js";
 
 const dmmInfo: DmmInfo = {
@@ -75,6 +80,19 @@ class UnusedScopeService implements ScopeApplicationService {
   public async requestViewport(): Promise<Uint8Array> { throw new Error("unused"); }
   public async pauseLiveWaveform(): Promise<void> {}
   public resumeLiveWaveform(): void {}
+}
+
+class NoopPpk2Adapter implements WebSocketInstrumentAdapter {
+  public readonly instrument = SupportedInstrument.Ppk2;
+  public attach(_host: WebSocketAdapterHost): void {}
+  public detach(): void {}
+  public async tryDispatch(
+    _session: WebSocketSession,
+    _message: Record<string, unknown>,
+  ): Promise<boolean> { return false; }
+  public sendInitialPublications(_session: WebSocketSession): void {}
+  public sessionUnsubscribed(_session: WebSocketSession): void {}
+  public transportAvailable(_session: WebSocketSession): void {}
 }
 
 function waitForJson(socket: WebSocket, predicate: (message: ServerJsonMessage) => boolean): Promise<ServerJsonMessage> {
@@ -128,6 +146,7 @@ function createHarness(server: HttpServer) {
     acquisitionAdapter: new AcquisitionWebSocketAdapter(acquisitionService),
     scopeAdapter: new ScopeWebSocketAdapter(new UnusedScopeService()),
     dmmAdapter: new DmmWebSocketAdapter(service),
+    ppk2Adapter: new NoopPpk2Adapter(),
   });
   return { service, internals, acquisitionService, gateway };
 }
