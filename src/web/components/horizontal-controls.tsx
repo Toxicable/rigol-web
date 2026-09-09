@@ -1,3 +1,5 @@
+import type { ChangeEvent } from "react";
+
 import { TimebaseMode, type ScopeState } from "../../shared/scope-types.js";
 import { formatSampleRate, formatSamples, formatSeconds } from "../format-value.js";
 import type { ScopeActions } from "../scope-actions.js";
@@ -9,6 +11,7 @@ const MODE_LABELS: Record<TimebaseMode, string> = {
   [TimebaseMode.Roll]: "Roll",
   [TimebaseMode.Xy]: "XY",
 };
+const MODES = [TimebaseMode.Main, TimebaseMode.Roll, TimebaseMode.Xy] as const;
 
 const TIMEBASE_STEPS = Array.from({ length: 33 }, (_, index) => {
   const exponent = Math.floor(index / 3) - 9;
@@ -44,13 +47,7 @@ export function HorizontalControls({ scope, actions }: HorizontalControlsProps) 
   const commitTimebaseStep = (index: number): void => {
     const clamped = Math.max(0, Math.min(TIMEBASE_STEPS.length - 1, index));
     const value = TIMEBASE_STEPS[clamped];
-    if (value !== undefined) {
-      void actions.setHorizontalScale(value);
-    }
-  };
-
-  const stepTimebase = (direction: -1 | 1): void => {
-    commitTimebaseStep(timebaseIndex + direction);
+    if (value !== undefined) void actions.setHorizontalScale(value);
   };
 
   return (
@@ -58,32 +55,27 @@ export function HorizontalControls({ scope, actions }: HorizontalControlsProps) 
       <h2>Horizontal</h2>
       <div className="control-row">
         <label>
+          Mode
+          <select
+            value={scope.horizontal.mode}
+            onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+              void actions.setHorizontalMode(Number(event.target.value) as TimebaseMode);
+            }}
+          >
+            {MODES.map((mode) => <option value={mode} key={mode}>{MODE_LABELS[mode]}</option>)}
+          </select>
+        </label>
+        <label>
           Time/div
           <div className="timebase-control">
-            <button
-              type="button"
-              className="step-button"
-              onClick={() => stepTimebase(-1)}
-              aria-label="Decrease time per division"
-            >
-              −
-            </button>
-            <button
-              type="button"
-              className="step-button"
-              onClick={() => stepTimebase(1)}
-              aria-label="Increase time per division"
-            >
-              +
-            </button>
+            <button type="button" className="step-button" onClick={() => commitTimebaseStep(timebaseIndex - 1)} aria-label="Decrease time per division">−</button>
+            <button type="button" className="step-button" onClick={() => commitTimebaseStep(timebaseIndex + 1)} aria-label="Increase time per division">+</button>
           </div>
           <EditableNumberInput
             value={displayedScale}
             validate={(value) => value > 0}
             ariaLabel="Time per division"
-            onCommit={(value) => {
-              void actions.setHorizontalScale(value);
-            }}
+            onCommit={(value) => { void actions.setHorizontalScale(value); }}
           />
           <span>{formatSeconds(displayedScale)}</span>
         </label>
@@ -92,15 +84,12 @@ export function HorizontalControls({ scope, actions }: HorizontalControlsProps) 
           <EditableNumberInput
             value={displayedPosition}
             ariaLabel="Horizontal position"
-            onCommit={(value) => {
-              void actions.setHorizontalPosition(value);
-            }}
+            onCommit={(value) => { void actions.setHorizontalPosition(value); }}
           />
           <span>{formatSeconds(displayedPosition)}</span>
         </label>
       </div>
       <dl className="compact-details horizontal-details">
-        <div><dt>Mode</dt><dd>{MODE_LABELS[scope.horizontal.mode]}</dd></div>
         <div><dt>Sample rate</dt><dd>{formatSampleRate(scope.acquisition.sampleRate)}</dd></div>
         <div><dt>Memory</dt><dd>{formatSamples(scope.acquisition.memoryDepth)}</dd></div>
       </dl>

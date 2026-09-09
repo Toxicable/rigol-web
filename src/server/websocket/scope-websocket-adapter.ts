@@ -1,8 +1,13 @@
 import { SupportedInstrument } from "../../shared/instrument-types.js";
 import {
+  AcquisitionType,
   Channel,
+  ChannelCoupling,
   EdgeSlope,
   MeasurementKind,
+  TimebaseMode,
+  TriggerCoupling,
+  TriggerSweep,
   TriggerType,
   type MeasurementSpec,
 } from "../../shared/scope-types.js";
@@ -86,10 +91,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
         if (this.connection.kind === ScopeConnectionKind.Connected) {
           this.connection = { ...this.connection, state };
         }
-        host.broadcastJson(this.instrument, {
-          type: MessageType.ScopeState,
-          state,
-        });
+        host.broadcastJson(this.instrument, { type: MessageType.ScopeState, state });
       }),
       this.scopeService.subscribeWaveform((frame) => {
         this.broadcastWaveform(frame);
@@ -99,9 +101,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
 
   public detach(): void {
     this.releaseInteractionOwner();
-    for (const unsubscribe of this.unsubscribeServices) {
-      unsubscribe();
-    }
+    for (const unsubscribe of this.unsubscribeServices) unsubscribe();
     this.unsubscribeServices = [];
     this.host = null;
   }
@@ -119,10 +119,9 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
         const revision = this.connectedRevision();
         const pausesLive =
           control.kind === ControlKind.HorizontalScale ||
-          control.kind === ControlKind.HorizontalPosition;
-        if (pausesLive) {
-          await this.scopeService.pauseLiveWaveform();
-        }
+          control.kind === ControlKind.HorizontalPosition ||
+          control.kind === ControlKind.HorizontalMode;
+        if (pausesLive) await this.scopeService.pauseLiveWaveform();
         console.info("Scope control requested", {
           kind: control.kind,
           value: control.value,
@@ -201,11 +200,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
         const revision = this.connectedRevision();
         const values = await this.scopeService.readMeasurements(measurements);
         this.requireConnectionRevision(revision);
-        host.sendJson(session, {
-          type: MessageType.MeasurementResult,
-          requestId,
-          values,
-        });
+        host.sendJson(session, { type: MessageType.MeasurementResult, requestId, values });
         return true;
       }
 
@@ -223,23 +218,15 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
 
       case MessageType.ScpiExecute: {
         const instrument = readInstrument(message.instrument);
-        if (instrument !== this.instrument) {
-          return false;
-        }
-        if (typeof message.command !== "string") {
-          throw new Error("command must be a string");
-        }
+        if (instrument !== this.instrument) return false;
+        if (typeof message.command !== "string") throw new Error("command must be a string");
         const requestId = readRequestId(message.requestId);
         const host = this.requireHost();
         host.requireSubscribed(session, this.instrument);
         const revision = this.connectedRevision();
         const response = await this.scopeService.executeRawScpi(message.command);
         this.requireConnectionRevision(revision);
-        host.sendJson(session, {
-          type: MessageType.ScpiResult,
-          requestId,
-          response,
-        });
+        host.sendJson(session, { type: MessageType.ScpiResult, requestId, response });
         return true;
       }
 
@@ -289,12 +276,8 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
 
   private lifecycleMessage(connection: ScopeConnection): ServerJsonMessage {
     if (connection.kind === ScopeConnectionKind.Disconnected) {
-      return {
-        type: MessageType.ScopeDisconnected,
-        reason: connection.reason,
-      };
+      return { type: MessageType.ScopeDisconnected, reason: connection.reason };
     }
-
     return {
       type: MessageType.ScopeConnected,
       protocolVersion: PROTOCOL_VERSION,
@@ -324,33 +307,24 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
 
   private async acquireInteraction(session: WebSocketSession): Promise<void> {
     this.requireInteractionAvailable(session);
-    if (this.interactionOwner === session) {
-      return;
-    }
-
+    if (this.interactionOwner === session) return;
     this.interactionOwner = session;
     try {
       await this.scopeService.pauseLiveWaveform();
     } catch (error) {
-      if (this.interactionOwner === session) {
-        this.interactionOwner = null;
-      }
+      if (this.interactionOwner === session) this.interactionOwner = null;
       throw error;
     }
   }
 
   private releaseInteraction(session: WebSocketSession): void {
-    if (this.interactionOwner !== session) {
-      return;
-    }
+    if (this.interactionOwner !== session) return;
     this.interactionOwner = null;
     this.scopeService.resumeLiveWaveform();
   }
 
   private releaseInteractionOwner(): void {
-    if (this.interactionOwner === null) {
-      return;
-    }
+    if (this.interactionOwner === null) return;
     this.interactionOwner = null;
     this.scopeService.resumeLiveWaveform();
   }
@@ -360,7 +334,6 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
     if (header.kind !== WaveformKind.Live || header.captureId !== 0) {
       throw new Error("Scope waveform publication only accepts live waveform frames");
     }
-
     this.requireHost().forEachSubscribed(this.instrument, (session) => {
       this.queueLiveFrame(session, header.channel, frame);
     });
@@ -373,7 +346,6 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
     const state = this.clientState(session);
     const generation = (state.viewportGenerations.get(message.channel) ?? 0) + 1;
     state.viewportGenerations.set(message.channel, generation);
-
     const frame = await this.scopeService.requestViewport({
       captureId: message.captureId,
       channel: message.channel,
@@ -381,17 +353,11 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
       endSample: message.endSample,
       pixelWidth: message.pixelWidth,
     });
-
     const host = this.requireHost();
     if (state.viewportGenerations.get(message.channel) !== generation) {
-      host.sendFailure(
-        session,
-        message.requestId,
-        new Error("Viewport request superseded by a newer request"),
-      );
+      host.sendFailure(session, message.requestId, new Error("Viewport request superseded by a newer request"));
       return;
     }
-
     const header = readWaveformHeader(frame);
     if (
       header.kind !== WaveformKind.DeepViewport ||
@@ -400,35 +366,21 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
     ) {
       throw new Error("Viewport handler returned a mismatched waveform frame");
     }
-
     if (host.isBackpressured(session)) {
-      host.sendFailure(
-        session,
-        message.requestId,
-        new Error("Viewport response dropped because the client is backpressured"),
-      );
+      host.sendFailure(session, message.requestId, new Error("Viewport response dropped because the client is backpressured"));
       return;
     }
-
     host.sendBinary(session, frame);
   }
 
-  private queueLiveFrame(
-    session: WebSocketSession,
-    channel: Channel,
-    frame: Uint8Array,
-  ): void {
+  private queueLiveFrame(session: WebSocketSession, channel: Channel, frame: Uint8Array): void {
     const host = this.requireHost();
-    if (!host.isOpen(session)) {
-      return;
-    }
-
+    if (!host.isOpen(session)) return;
     const state = this.clientState(session);
     if (state.liveSendInFlight || host.isBackpressured(session)) {
       state.pendingLiveFrames.set(channel, frame);
       return;
     }
-
     state.pendingLiveFrames.delete(channel);
     this.sendLiveFrame(session, frame);
   }
@@ -445,20 +397,11 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
     const host = this.host;
     const state = this.clients.get(session);
     if (
-      host === null ||
-      state === undefined ||
-      state.liveSendInFlight ||
-      !host.isOpen(session) ||
-      host.isBackpressured(session)
-    ) {
-      return;
-    }
-
+      host === null || state === undefined || state.liveSendInFlight ||
+      !host.isOpen(session) || host.isBackpressured(session)
+    ) return;
     const pending = state.pendingLiveFrames.entries().next();
-    if (pending.done) {
-      return;
-    }
-
+    if (pending.done) return;
     const [channel, frame] = pending.value;
     state.pendingLiveFrames.delete(channel);
     this.sendLiveFrame(session, frame);
@@ -466,10 +409,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
 
   private clientState(session: WebSocketSession): ScopeClientState {
     const existing = this.clients.get(session);
-    if (existing !== undefined) {
-      return existing;
-    }
-
+    if (existing !== undefined) return existing;
     const created: ScopeClientState = {
       pendingLiveFrames: new Map(),
       liveSendInFlight: false,
@@ -480,9 +420,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
   }
 
   private requireHost(): WebSocketAdapterHost {
-    if (this.host === null) {
-      throw new Error("Scope WebSocket adapter is not attached");
-    }
+    if (this.host === null) throw new Error("Scope WebSocket adapter is not attached");
     return this.host;
   }
 }
@@ -499,6 +437,28 @@ function readChannel(value: unknown): Channel {
   }
 }
 
+function readChannelCoupling(value: unknown): ChannelCoupling {
+  switch (value) {
+    case ChannelCoupling.Ac:
+    case ChannelCoupling.Dc:
+    case ChannelCoupling.Ground:
+      return value;
+    default:
+      throw new Error("Invalid channel coupling");
+  }
+}
+
+function readTimebaseMode(value: unknown): TimebaseMode {
+  switch (value) {
+    case TimebaseMode.Main:
+    case TimebaseMode.Roll:
+    case TimebaseMode.Xy:
+      return value;
+    default:
+      throw new Error("Invalid horizontal mode");
+  }
+}
+
 function readEdgeSlope(value: unknown): EdgeSlope {
   switch (value) {
     case EdgeSlope.Rising:
@@ -507,6 +467,41 @@ function readEdgeSlope(value: unknown): EdgeSlope {
       return value;
     default:
       throw new Error("Invalid Edge slope");
+  }
+}
+
+function readTriggerSweep(value: unknown): TriggerSweep {
+  switch (value) {
+    case TriggerSweep.Auto:
+    case TriggerSweep.Normal:
+    case TriggerSweep.Single:
+      return value;
+    default:
+      throw new Error("Invalid trigger sweep");
+  }
+}
+
+function readTriggerCoupling(value: unknown): TriggerCoupling {
+  switch (value) {
+    case TriggerCoupling.Ac:
+    case TriggerCoupling.Dc:
+    case TriggerCoupling.LowFrequencyReject:
+    case TriggerCoupling.HighFrequencyReject:
+      return value;
+    default:
+      throw new Error("Invalid trigger coupling");
+  }
+}
+
+function readAcquisitionType(value: unknown): AcquisitionType {
+  switch (value) {
+    case AcquisitionType.Normal:
+    case AcquisitionType.Peak:
+    case AcquisitionType.Average:
+    case AcquisitionType.Ultra:
+      return value;
+    default:
+      throw new Error("Invalid acquisition type");
   }
 }
 
@@ -542,62 +537,44 @@ function readMeasurementKind(value: unknown): MeasurementKind {
 }
 
 function readControl(value: unknown): ControlChange {
-  if (!isRecord(value)) {
-    throw new Error("control must be an object");
-  }
-
+  if (!isRecord(value)) throw new Error("control must be an object");
   switch (value.kind) {
     case ControlKind.ChannelEnabled:
-      if (typeof value.value !== "boolean") {
-        throw new Error("Channel enabled value must be boolean");
-      }
-      return {
-        kind: ControlKind.ChannelEnabled,
-        channel: readChannel(value.channel),
-        value: value.value,
-      };
+      if (typeof value.value !== "boolean") throw new Error("Channel enabled value must be boolean");
+      return { kind: ControlKind.ChannelEnabled, channel: readChannel(value.channel), value: value.value };
     case ControlKind.ChannelScale:
-      return {
-        kind: ControlKind.ChannelScale,
-        channel: readChannel(value.channel),
-        value: readFiniteNumber(value.value, "Channel scale"),
-      };
+      return { kind: ControlKind.ChannelScale, channel: readChannel(value.channel), value: readFiniteNumber(value.value, "Channel scale") };
     case ControlKind.ChannelOffset:
-      return {
-        kind: ControlKind.ChannelOffset,
-        channel: readChannel(value.channel),
-        value: readFiniteNumber(value.value, "Channel offset"),
-      };
+      return { kind: ControlKind.ChannelOffset, channel: readChannel(value.channel), value: readFiniteNumber(value.value, "Channel offset") };
+    case ControlKind.ChannelCoupling:
+      return { kind: ControlKind.ChannelCoupling, channel: readChannel(value.channel), value: readChannelCoupling(value.value) };
+    case ControlKind.ChannelProbeRatio:
+      return { kind: ControlKind.ChannelProbeRatio, channel: readChannel(value.channel), value: readFiniteNumber(value.value, "Probe ratio") };
     case ControlKind.HorizontalScale:
-      return {
-        kind: ControlKind.HorizontalScale,
-        value: readFiniteNumber(value.value, "Horizontal scale"),
-      };
+      return { kind: ControlKind.HorizontalScale, value: readFiniteNumber(value.value, "Horizontal scale") };
     case ControlKind.HorizontalPosition:
-      return {
-        kind: ControlKind.HorizontalPosition,
-        value: readFiniteNumber(value.value, "Horizontal position"),
-      };
+      return { kind: ControlKind.HorizontalPosition, value: readFiniteNumber(value.value, "Horizontal position") };
+    case ControlKind.HorizontalMode:
+      return { kind: ControlKind.HorizontalMode, value: readTimebaseMode(value.value) };
+    case ControlKind.AcquisitionType:
+      return { kind: ControlKind.AcquisitionType, value: readAcquisitionType(value.value) };
+    case ControlKind.AcquisitionAverages:
+      return { kind: ControlKind.AcquisitionAverages, value: readPositiveInteger(value.value, "Acquisition averages") };
+    case ControlKind.AcquisitionMemoryDepth:
+      return { kind: ControlKind.AcquisitionMemoryDepth, value: readPositiveInteger(value.value, "Acquisition memory depth") };
     case ControlKind.TriggerLevel:
-      return {
-        kind: ControlKind.TriggerLevel,
-        value: readFiniteNumber(value.value, "Trigger level"),
-      };
+      return { kind: ControlKind.TriggerLevel, value: readFiniteNumber(value.value, "Trigger level") };
     case ControlKind.TriggerType:
-      if (value.value !== TriggerType.Edge) {
-        throw new Error("Only TriggerType.Edge is writable");
-      }
+      if (value.value !== TriggerType.Edge) throw new Error("Only TriggerType.Edge is writable");
       return { kind: ControlKind.TriggerType, value: TriggerType.Edge };
     case ControlKind.TriggerSource:
-      return {
-        kind: ControlKind.TriggerSource,
-        value: readChannel(value.value),
-      };
+      return { kind: ControlKind.TriggerSource, value: readChannel(value.value) };
     case ControlKind.TriggerSlope:
-      return {
-        kind: ControlKind.TriggerSlope,
-        value: readEdgeSlope(value.value),
-      };
+      return { kind: ControlKind.TriggerSlope, value: readEdgeSlope(value.value) };
+    case ControlKind.TriggerSweep:
+      return { kind: ControlKind.TriggerSweep, value: readTriggerSweep(value.value) };
+    case ControlKind.TriggerCoupling:
+      return { kind: ControlKind.TriggerCoupling, value: readTriggerCoupling(value.value) };
     default:
       throw new Error("Unknown control kind");
   }
@@ -625,18 +602,10 @@ function readMeasurements(value: unknown): NonEmptyArray<MeasurementSpec> {
 }
 
 function readMeasurementList(value: unknown): MeasurementSpec[] {
-  if (!Array.isArray(value)) {
-    throw new Error("measurements must be an array");
-  }
-
+  if (!Array.isArray(value)) throw new Error("measurements must be an array");
   return value.map((item): MeasurementSpec => {
-    if (!isRecord(item)) {
-      throw new Error("measurement must be an object");
-    }
-    return {
-      kind: readMeasurementKind(item.kind),
-      channel: readChannel(item.channel),
-    };
+    if (!isRecord(item)) throw new Error("measurement must be an object");
+    return { kind: readMeasurementKind(item.kind), channel: readChannel(item.channel) };
   });
 }
 
@@ -651,15 +620,10 @@ function readAcquisitionAction(value: unknown): AcquisitionAction {
   }
 }
 
-function readViewportRequest(
-  value: Record<string, unknown>,
-): WaveformViewportRequestMessage {
+function readViewportRequest(value: Record<string, unknown>): WaveformViewportRequestMessage {
   const startSample = readNonNegativeInteger(value.startSample, "startSample");
   const endSample = readPositiveInteger(value.endSample, "endSample");
-  if (endSample <= startSample) {
-    throw new Error("endSample must be greater than startSample");
-  }
-
+  if (endSample <= startSample) throw new Error("endSample must be greater than startSample");
   return {
     type: MessageType.WaveformViewportRequest,
     requestId: readRequestId(value.requestId),
@@ -675,15 +639,9 @@ function readWaveformHeader(frame: Uint8Array): WaveformHeader {
   if (frame.byteLength < WAVEFORM_HEADER_BYTES) {
     throw new Error("Waveform frame is shorter than its header");
   }
-
   const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
-  if (view.getUint32(0, true) !== WAVEFORM_MAGIC) {
-    throw new Error("Waveform frame has invalid magic");
-  }
-  if (view.getUint8(4) !== WAVEFORM_FRAME_VERSION) {
-    throw new Error("Waveform frame has unsupported version");
-  }
-
+  if (view.getUint32(0, true) !== WAVEFORM_MAGIC) throw new Error("Waveform frame has invalid magic");
+  if (view.getUint8(4) !== WAVEFORM_FRAME_VERSION) throw new Error("Waveform frame has unsupported version");
   const kind = view.getUint8(5);
   if (kind !== WaveformKind.Live && kind !== WaveformKind.DeepViewport) {
     throw new Error("Waveform frame has invalid kind");
@@ -692,10 +650,5 @@ function readWaveformHeader(frame: Uint8Array): WaveformHeader {
   if (view.getUint32(28, true) !== WAVEFORM_HEADER_BYTES) {
     throw new Error("Waveform frame has invalid header length");
   }
-
-  return {
-    kind,
-    channel,
-    captureId: view.getUint32(12, true),
-  };
+  return { kind, channel, captureId: view.getUint32(12, true) };
 }

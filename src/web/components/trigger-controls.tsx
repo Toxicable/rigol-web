@@ -29,25 +29,29 @@ const TYPE_LABELS: Record<TriggerType, string> = {
   [TriggerType.Spi]: "SPI",
   [TriggerType.Can]: "CAN",
 };
-
 const SWEEP_LABELS: Record<TriggerSweep, string> = {
   [TriggerSweep.Auto]: "Auto",
   [TriggerSweep.Normal]: "Normal",
   [TriggerSweep.Single]: "Single",
 };
-
 const SLOPE_LABELS: Record<EdgeSlope, string> = {
   [EdgeSlope.Rising]: "Rising",
   [EdgeSlope.Falling]: "Falling",
   [EdgeSlope.Either]: "Either",
 };
-
 const COUPLING_LABELS: Record<TriggerCoupling, string> = {
   [TriggerCoupling.Ac]: "AC",
   [TriggerCoupling.Dc]: "DC",
   [TriggerCoupling.LowFrequencyReject]: "LF reject",
   [TriggerCoupling.HighFrequencyReject]: "HF reject",
 };
+const SWEEPS = [TriggerSweep.Auto, TriggerSweep.Normal, TriggerSweep.Single] as const;
+const COUPLINGS = [
+  TriggerCoupling.Ac,
+  TriggerCoupling.Dc,
+  TriggerCoupling.LowFrequencyReject,
+  TriggerCoupling.HighFrequencyReject,
+] as const;
 
 interface TriggerControlsProps {
   scope: ScopeState;
@@ -55,20 +59,28 @@ interface TriggerControlsProps {
 }
 
 export function TriggerControls({ scope, actions }: TriggerControlsProps) {
+  const sweepSelect = (
+    <select
+      value={scope.trigger.sweep}
+      onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+        void actions.setTriggerSweep(Number(event.target.value) as TriggerSweep);
+      }}
+    >
+      {SWEEPS.map((sweep) => <option value={sweep} key={sweep}>{SWEEP_LABELS[sweep]}</option>)}
+    </select>
+  );
+
   if (scope.trigger.type !== TriggerType.Edge) {
     return (
       <section className="panel">
         <h2>Trigger</h2>
+        <div className="control-row">
+          <label>Sweep{sweepSelect}</label>
+        </div>
         <dl className="compact-details">
           <div><dt>Type</dt><dd>{TYPE_LABELS[scope.trigger.type]}</dd></div>
-          <div><dt>Sweep</dt><dd>{SWEEP_LABELS[scope.trigger.sweep]}</dd></div>
         </dl>
-        <button
-          type="button"
-          onClick={() => {
-            void actions.setTriggerType(TriggerType.Edge);
-          }}
-        >
+        <button type="button" onClick={() => { void actions.setTriggerType(TriggerType.Edge); }}>
           Switch to Edge
         </button>
       </section>
@@ -110,16 +122,26 @@ export function TriggerControls({ scope, actions }: TriggerControlsProps) {
           <EditableNumberInput
             value={scope.trigger.level}
             ariaLabel="Trigger level"
-            onCommit={(value) => {
-              void actions.setTriggerLevel(value);
-            }}
+            onCommit={(value) => { void actions.setTriggerLevel(value); }}
           />
+        </label>
+        <label>Sweep{sweepSelect}</label>
+        <label>
+          Coupling
+          <select
+            value={scope.trigger.coupling}
+            onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+              void actions.setTriggerCoupling(Number(event.target.value) as TriggerCoupling);
+            }}
+          >
+            {COUPLINGS.map((coupling) => (
+              <option value={coupling} key={coupling}>{COUPLING_LABELS[coupling]}</option>
+            ))}
+          </select>
         </label>
       </div>
       <dl className="compact-details horizontal-details">
         <div><dt>Type</dt><dd>Edge</dd></div>
-        <div><dt>Sweep</dt><dd>{SWEEP_LABELS[scope.trigger.sweep]}</dd></div>
-        <div><dt>Coupling</dt><dd>{COUPLING_LABELS[scope.trigger.coupling]}</dd></div>
       </dl>
     </section>
   );
