@@ -1,6 +1,7 @@
 import type { ChangeEvent } from "react";
 
 import {
+  ChannelBandwidthLimit,
   ChannelCoupling,
   type ChannelState,
 } from "../../shared/scope-types.js";
@@ -14,6 +15,11 @@ const COUPLING_LABELS: Record<ChannelCoupling, string> = {
   [ChannelCoupling.Ground]: "GND",
 };
 const COUPLINGS = [ChannelCoupling.Ac, ChannelCoupling.Dc, ChannelCoupling.Ground] as const;
+const BANDWIDTH_LABELS: Record<ChannelBandwidthLimit, string> = {
+  [ChannelBandwidthLimit.Off]: "Full",
+  [ChannelBandwidthLimit.Mhz20]: "20 MHz",
+};
+const BANDWIDTH_LIMITS = [ChannelBandwidthLimit.Off, ChannelBandwidthLimit.Mhz20] as const;
 const PROBE_RATIOS = [1, 10] as const;
 
 interface ChannelControlsProps {
@@ -76,6 +82,22 @@ export function ChannelControls({ channels, actions }: ChannelControlsProps) {
                 >
                   {COUPLINGS.map((coupling) => (
                     <option value={coupling} key={coupling}>{COUPLING_LABELS[coupling]}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                BW limit
+                <select
+                  value={channel.bandwidthLimit}
+                  onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+                    void actions.setChannelBandwidthLimit(
+                      channel.channel,
+                      Number(event.target.value) as ChannelBandwidthLimit,
+                    );
+                  }}
+                >
+                  {BANDWIDTH_LIMITS.map((limit) => (
+                    <option value={limit} key={limit}>{BANDWIDTH_LABELS[limit]}</option>
                   ))}
                 </select>
               </label>
