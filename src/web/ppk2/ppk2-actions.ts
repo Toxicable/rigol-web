@@ -10,8 +10,8 @@ export class Ppk2Actions {
   public async startCapture(): Promise<void> {
     const store = usePpk2Store.getState();
     const current = store.stats.operation;
-    if (current?.state === AcquisitionOperationState.Running) {
-      throw new Error(`PPK2 acquisition ${current.id} is already running`);
+    if (current?.state === AcquisitionOperationState.Running || store.pendingRequest !== null) {
+      return;
     }
 
     const ownership = store.beginRequest("start");
@@ -21,15 +21,18 @@ export class Ppk2Actions {
       usePpk2Store.getState().finishRequest(ownership);
     } catch (error) {
       usePpk2Store.getState().failRequest(ownership, errorMessage(error));
-      throw error;
     }
   }
 
   public async stopCapture(): Promise<void> {
     const store = usePpk2Store.getState();
     const operation = store.stats.operation;
-    if (operation === null || operation.state !== AcquisitionOperationState.Running) {
-      throw new Error("No running PPK2 acquisition to stop");
+    if (
+      operation === null ||
+      operation.state !== AcquisitionOperationState.Running ||
+      store.pendingRequest !== null
+    ) {
+      return;
     }
 
     const ownership = store.beginRequest("stop");
@@ -39,7 +42,6 @@ export class Ppk2Actions {
       usePpk2Store.getState().finishRequest(ownership);
     } catch (error) {
       usePpk2Store.getState().failRequest(ownership, errorMessage(error));
-      throw error;
     }
   }
 
@@ -47,8 +49,8 @@ export class Ppk2Actions {
     const store = usePpk2Store.getState();
     const operation = store.stats.operation;
     const latestSequence = store.stats.latestSequence;
-    if (operation === null || latestSequence === null) {
-      throw new Error("No retained PPK2 acquisition history is available");
+    if (operation === null || latestSequence === null || store.pendingRequest !== null) {
+      return;
     }
 
     const ownership = store.beginRequest("viewport");
@@ -63,7 +65,6 @@ export class Ppk2Actions {
       usePpk2Store.getState().finishRequest(ownership);
     } catch (error) {
       usePpk2Store.getState().failRequest(ownership, errorMessage(error));
-      throw error;
     }
   }
 }
