@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 
 import { AppTransportKind, useAppTransportStore } from "./app-transport-store.js";
+import { AcquisitionControls } from "./components/acquisition-controls.js";
 import { ChannelControls } from "./components/channel-controls.js";
 import { HorizontalControls } from "./components/horizontal-controls.js";
 import { MeasurementOverlay } from "./components/measurement-overlay.js";
@@ -52,11 +53,7 @@ export function ScopeRoute({ binding, actions, controller }: ScopeRouteProps) {
         <div className="scope-layout">
           <div className="waveform-column">
             <section className="waveform-panel">
-              <WaveformPlot
-                scope={connection.scope}
-                controller={controller}
-                actions={actions}
-              />
+              <WaveformPlot scope={connection.scope} controller={controller} actions={actions} />
               <MeasurementOverlay scope={connection.scope} />
             </section>
             <MeasurementPanel actions={actions} controller={controller} />
@@ -64,6 +61,7 @@ export function ScopeRoute({ binding, actions, controller }: ScopeRouteProps) {
           <aside className="control-stack">
             <ChannelControls channels={connection.scope.channels} actions={actions} />
             <HorizontalControls scope={connection.scope} actions={actions} />
+            <AcquisitionControls scope={connection.scope} actions={actions} />
             <TriggerControls scope={connection.scope} actions={actions} />
           </aside>
         </div>
