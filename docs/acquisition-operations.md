@@ -2,7 +2,7 @@
 
 ## Purpose
 
-RigolWeb has an explicit server-owned acquisition/recording operation model for long-running streams such as the upcoming PPK2 integration.
+Rigol Web has an explicit server-owned acquisition/recording operation model for long-running loss-sensitive streams. PPK2 is the first concrete producer using it.
 
 An acquisition operation is not a browser route, WebSocket subscription, or physical-instrument runtime lease. Its lifetime belongs to the server application and ends only by explicit stop, failure, or server shutdown.
 
@@ -21,7 +21,7 @@ An acquisition operation is not a browser route, WebSocket subscription, or phys
 
 Browser initiator metadata records the WebSocket session that requested the operation, but it is informational. Closing that session does not stop the operation.
 
-A running operation can therefore survive route unmount, instrument unsubscribe, browser close, and a later browser reconnect. Server shutdown calls `AcquisitionService.close()`, which stops remaining running operations.
+A running operation can survive route unmount, instrument unsubscribe, browser close, and later browser reconnect.
 
 ## Progress and loss
 
@@ -35,37 +35,59 @@ interface AcquisitionProgress {
 }
 ```
 
-Counts are absolute and monotonic. `sourceLostItems` represents loss in the producer/source stream, not data intentionally evicted from bounded retention.
+Counts are absolute and monotonic. `lastSequence` cannot move backward or become unknown after it has been established.
 
-A concrete streaming producer must normalize its native sequence representation into a monotonic sequence before updating the service. For PPK2, handling the device's wrapping sample counter belongs in the PPK2 decoder/runtime, not in the generic acquisition service.
+`sourceLostItems` represents loss in the producer/source stream, not data intentionally evicted from bounded retention.
+
+A concrete streaming producer normalizes its native sequence into monotonic sequence space before updating the service.
+
+For PPK2, `Ppk2StreamDecoder` combines bridge byte offsets and the native wrapping 6-bit device counter. Bridge gaps that do not preserve the four-byte measurement sample boundary fail rather than being guessed around.
 
 ## Bounded source storage
 
-`BoundedAcquisitionChunkStore<T>` is a source-agnostic retention utility. `T` is deliberately the concrete producer payload; RigolWeb does not define a universal scope/DMM/PPK2 sample structure.
+`BoundedAcquisitionChunkStore<T>` is a source-agnostic retention utility. `T` remains the concrete producer payload; Rigol Web does not define a universal scope/DMM/PPK2 sample structure.
 
-Each stored chunk carries:
+Each chunk carries:
 
 - first sequence;
 - item count;
 - byte length;
 - source-specific payload.
 
-Capacity is an explicit byte limit supplied by the concrete source. Stream G intentionally does not guess a PPK2 retention duration or memory budget.
+When appending would exceed the configured byte budget, oldest complete chunks are evicted until the store is within bounds. Retention eviction is tracked independently from source loss.
 
-When a new chunk exceeds the configured retained-byte budget, the oldest complete chunks are evicted until the store is within bounds. Retention eviction is tracked independently from producer/source loss.
+The store exposes bounded statistics, sequence-range reads, an `exportChunks()` boundary and explicit clear.
 
-The store exposes:
+A chunk larger than the configured capacity is rejected rather than truncated.
 
-- bounded storage statistics;
-- sequence-range reads returning intersecting chunks;
-- an `exportChunks()` boundary for source-specific export code;
-- explicit clear.
+## PPK2 concrete storage
 
-A single chunk larger than the configured capacity is rejected rather than silently truncating source data.
+PPK2 uses a fixed **64 MiB** payload capacity.
 
-## WebSocket API
+Each retained sample is 8 bytes of typed-array payload:
 
-Protocol version 7 adds application-level acquisition requests that do not require an instrument publication subscription:
+- `Float32` calibrated current;
+- `Uint32` original packed sample word.
+
+At 100 kSa/s that is 800,000 payload bytes/s, corresponding to about **83.9 seconds** of nominal retained payload before chunk/object overhead.
+
+The current PPK2 storage chunk size is 1,024 samples.
+
+PPK2 retention eviction does not increment the capture's source-loss count.
+
+## PPK2 operation ownership
+
+`Ppk2Service.startCapture()` creates the shared operation and starts physical PPK2 measurement. `stopCapture(operationId)` stops measurement and completes that operation.
+
+Physical bridge/PPK2 failure while a capture is active marks the operation failed.
+
+The PPK2 WebSocket adapter deliberately does nothing to the operation on route unsubscribe or browser socket close. The server runtime and operation continue.
+
+When a browser returns to `/ppk2`, the current operation and stats are replayed through PPK2 publications.
+
+## Generic WebSocket API
+
+The application-level generic acquisition requests remain:
 
 - `AcquisitionOperationStart` (60)
 - `AcquisitionOperationStop` (61)
@@ -74,20 +96,20 @@ Protocol version 7 adds application-level acquisition requests that do not requi
 - `AcquisitionOperationResult` (64)
 - `AcquisitionOperationListResult` (65)
 
-`AcquisitionWebSocketAdapter` is an application-level adapter attached directly to `WebSocketGateway`. It is intentionally separate from `ScopeWebSocketAdapter` and `DmmWebSocketAdapter` because operation lifetime is not an instrument publication concern.
+They do not require an instrument publication subscription.
+
+PPK2-specific start/stop requests use message types 74/75 because they must coordinate the PPK2 physical measurement stream through `Ppk2Service`. Successful requests still return `AcquisitionOperationResult` so operation identity/state remains the common envelope.
 
 ## Existing instrument semantics remain unchanged
 
-Stream G does not retrofit existing display paths into recordings:
-
 - DHO804 live waveform frames remain disposable/latest-oriented display data.
-- DHO804 deep captures remain their existing concrete retained representation.
-- DM858E latest snapshots remain display snapshots without unique physical sample identity and are not logging data.
+- DHO804 deep captures retain their concrete representation.
+- DM858E latest snapshots remain display snapshots without unique physical sample identity.
 
-The acquisition model exists so loss-sensitive sources such as PPK2 can preserve sequence/loss semantics without degrading those existing paths.
+PPK2 is the concrete loss-sensitive source that uses the acquisition store. Its raw acquisition never uses DHO804 latest-frame replacement semantics.
 
-## PPK2 handoff
+The only disposable PPK2 data is the already-decimated browser live-display publication. Dropping such a display summary under browser backpressure does not change server raw storage or source-loss accounting.
 
-The Toxicboards PPK2Wireless contract expects roughly 100,000 four-byte samples per second, about 400 kB/s before transport overhead. RigolWeb will own PPK2 decoding, calibration/metadata, sequence/loss accounting, statistics, charge integration, bounded retention, viewport/decimation and browser presentation.
+## Cost
 
-Stream H must choose an explicit PPK2 retention byte budget based on the desired retained duration/memory cost and connect the PPK2 producer to this operation/storage boundary. No additional hardware or software package cost is introduced by Stream G: **A$0**.
+Stream G/H acquisition infrastructure adds no paid service, package, or hardware requirement. Incremental cost: **A$0**.
