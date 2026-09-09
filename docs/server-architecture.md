@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The Rigol Web server coordinates two fixed SCPI instruments, browser clients, and server-owned long-running acquisition operations. It is deliberately concrete; shared infrastructure is kept only where there is real overlap.
+The Rigol Web server coordinates three fixed physical instrument runtimes, browser clients, and server-owned long-running acquisition operations. It remains deliberately concrete.
 
 ## Top-level structure
 
@@ -12,164 +12,163 @@ Browser WebSocket
       v
 WebSocketGateway
 (session/protocol broker)
-   /                 |                  \
-  v                  v                   v
-Acquisition          Scope               DMM
-WebSocketAdapter     WebSocketAdapter    WebSocketAdapter
-  |                  |                   |
-  v                  v                   v
-AcquisitionService   ScopeService        DmmService
-                     |                   |
-                     v                   v
-                     ScopeRuntime        DmmRuntime
-                       \                 /
-                        InstrumentRegistry
+  |-- AcquisitionWebSocketAdapter -> AcquisitionService
+  |-- ScopeWebSocketAdapter       -> ScopeService -> ScopeRuntime -> DHO804 / SCPI
+  |-- DmmWebSocketAdapter         -> DmmService   -> DmmRuntime   -> DM858E / SCPI
+  `-- Ppk2WebSocketAdapter        -> Ppk2Service  -> Ppk2Runtime  -> PPK2Bridge / TBP2 TCP
+                                         |
+                                         `-> bounded acquisition store
 ```
 
-The acquisition application service is intentionally outside `InstrumentRegistry`. Operation lifetime is not a physical-instrument runtime lifetime or browser publication subscription.
+`AcquisitionService` is intentionally outside `InstrumentRegistry`. Operation lifetime is not browser publication lifetime or physical runtime lifetime.
 
 ## Server-owned physical runtime lifetime
 
-`InstrumentRegistry` owns only process-lifetime start/stop for the exactly two configured physical runtimes:
+`InstrumentRegistry` owns process-lifetime start/stop for exactly three configured runtimes:
 
 - DHO804 scope runtime;
-- DM858E DMM runtime.
+- DM858E DMM runtime;
+- PPK2 bridge runtime.
 
-Both start at server startup and remain active across browser navigation, last unsubscribe, browser disconnect and browser reconnect. Server shutdown stops both.
+All start at server startup and remain active across browser navigation, last unsubscribe, browser disconnect and browser reconnect. Server shutdown stops all three.
 
-`ScopeRuntime` and `DmmRuntime` retain their own physical reconnect/recovery behaviour while running.
+`ScopeRuntime`, `DmmRuntime`, and `Ppk2Runtime` retain their own physical reconnect/recovery behavior while running.
 
 ## Server-owned acquisition lifetime
 
-`AcquisitionService` owns long-running acquisition/recording metadata and lifecycle:
+`AcquisitionService` owns long-running acquisition metadata/lifecycle:
 
 - positive operation ID;
 - label and initiator metadata;
-- start/stop/failure timestamps and state;
+- start/stop/failure timestamps/state;
 - monotonic received-item/source-loss progress;
 - bounded retention of terminal operation metadata.
 
-A browser-started operation is not session-owned merely because its initiator records a browser session ID. Closing that browser socket does not stop the operation. Explicit stop, explicit failure or server shutdown ends it.
+A browser-started operation is not session-owned merely because its initiator records a browser session ID. Closing the browser socket does not stop it.
 
-The service does not define a universal sample representation. Concrete producers own their payload/sample semantics.
+The service does not define a universal sample representation.
 
 ## Bounded acquisition storage
 
 `BoundedAcquisitionChunkStore<T>` is the reusable retention primitive for loss-sensitive streaming producers.
 
-The constructor requires an explicit byte capacity. Each appended source-specific chunk declares first sequence, item count and byte length. The store:
+The constructor requires an explicit byte capacity. Each append declares first sequence, item count, byte length and source-specific payload. The store:
 
 - rejects backward/overlapping sequence ranges;
-- records producer/source sequence gaps as `sourceLostItems`;
+- records producer/source sequence gaps;
 - evicts oldest complete chunks to enforce the byte cap;
-- records retention eviction separately from producer loss;
+- records retention eviction separately from source loss;
 - supports sequence-range reads;
-- exposes stored chunks through an export boundary.
+- exposes an export boundary.
 
-No default PPK2 retention budget is chosen in Stream G. Stream H must pick a concrete byte budget from the desired retained duration and memory cost.
+PPK2 chooses a concrete 64 MiB payload budget. Its retained payload is `Float32` calibrated current plus `Uint32` original sample word, 8 bytes/sample. At 100 kSa/s the nominal payload-retention window is about 83.9 seconds before object/chunk overhead.
 
 ## WebSocket session/protocol broker
 
-`WebSocketGateway` owns common browser transport/session behaviour:
+`WebSocketGateway` owns common browser transport/session behavior:
 
 - `/ws` accept/close;
 - protocol hello/version handshake;
 - browser session identity;
 - instrument publication subscriptions;
-- common JSON/binary sends;
-- common request completion/failure framing;
+- JSON/binary sends;
+- request completion/failure framing;
 - socket buffered-byte/backpressure state;
-- release of instrument adapter session/publication state on unsubscribe/close.
+- release of instrument adapter publication state on unsubscribe/close.
 
-It does not own scope, DMM or acquisition application semantics.
+It does not own instrument application semantics.
 
-After the handshake, app-level acquisition requests are offered first to `AcquisitionWebSocketAdapter`, then instrument-specific requests are routed through the two instrument adapters. Acquisition operations do not require an instrument subscription.
+After handshake, application-level acquisition requests are offered first to `AcquisitionWebSocketAdapter`, then requests are offered to the three fixed instrument adapters.
 
 ## AcquisitionWebSocketAdapter
 
-The fixed application-level adapter maps protocol-version-7 acquisition requests to `AcquisitionService`:
+Maps generic acquisition-operation start/stop/get/list messages to `AcquisitionService`.
 
-- start;
-- stop;
-- get;
-- list.
-
-It validates request/operation IDs and labels, records a browser initiator session ID on start, and returns typed operation results.
-
-It deliberately has no unsubscribe/disconnect cleanup hook because those events do not own acquisition lifetime.
+Browser initiator session ID is metadata only. This adapter deliberately has no disconnect cleanup that stops an operation.
 
 ## ScopeWebSocketAdapter
 
 Owns DHO804 browser-wire mapping:
 
-- scope lifecycle/state publications;
-- controls and interactions;
-- run/stop/single and Sleep;
-- measurements and raw SCPI;
-- deep capture/viewport requests;
-- binary waveform delivery and scope-specific backpressure;
-- browser-session ownership of long-lived scope interactions.
+- lifecycle/state;
+- controls/interactions;
+- Run/Stop/Single/Sleep;
+- measurements/raw SCPI;
+- deep capture/viewport;
+- binary waveform delivery/backpressure;
+- browser-session ownership of long-lived scope interaction.
 
-DHO live waveform data remains disposable/latest-oriented and is not automatically an acquisition recording.
+DHO804 live waveform data remains disposable display data.
 
 ## DmmWebSocketAdapter
 
-Owns DM858E browser-wire mapping:
+Owns DM858E lifecycle/state/snapshot publications, controls, raw SCPI, and retained latest-display snapshot replay.
 
-- DMM lifecycle/state/current-snapshot publications;
-- DMM controls;
-- DM858E raw SCPI;
-- replay of the retained display snapshot to a new subscriber.
+DM858E latest snapshots are not unique physical samples and are not a logging stream.
 
-DM858E latest snapshots do not have unique physical sample identity and are not a logging stream.
+## Ppk2WebSocketAdapter
+
+Owns PPK2 browser-wire mapping:
+
+- connected/disconnected lifecycle;
+- capture statistics;
+- decimated live display buckets;
+- PPK2 capture start/stop;
+- retained-history viewport reads.
+
+Capture start/stop/viewport requests require a PPK2 publication subscription. Capture lifetime itself does not depend on that subscription.
+
+Live PPK2 display updates are presentation-only summaries. The adapter checks per-browser WebSocket backpressure and may omit a decimated live update for a slow browser. It does not drop or renumber raw source samples; raw acquisition continues entirely in `Ppk2Service`.
+
+## PPK2 physical/runtime path
+
+```text
+PPK2Bridge TCP
+ -> Ppk2Runtime
+ -> TBP2 frame parser
+ -> metadata/calibration setup
+ -> Ppk2StreamDecoder
+ -> Ppk2Service
+```
+
+`Ppk2Runtime` owns TCP connection/reconnect, source-session identity, metadata retrieval, Ampere Meter configuration and measurement start/stop commands.
+
+The TBP2 header carries a monotonic source byte offset. `Ppk2StreamDecoder` combines that with the PPK2 native 6-bit wrapping sample counter. Bridge gaps are counted exactly only when both boundaries remain aligned to the measurement's four-byte sample grid. Uncertain alignment fails the acquisition.
+
+PPK2 does not use `ScpiTransport` or `ScpiScheduler`.
+
+## PPK2 service path
+
+`Ppk2Service` owns:
+
+- one active capture at a time;
+- shared `AcquisitionService` operation creation/stop/failure;
+- calibrated current processing;
+- source-loss progress updates;
+- 64 MiB bounded raw retention;
+- min/max/mean/RMS statistics;
+- charge integration;
+- live bucket aggregation;
+- retained viewport reduction.
+
+Current raw storage chunks contain 1,024 samples. Live display buckets aggregate 100 samples (1 ms), and 20 live buckets are normally emitted per service publication (~20 ms).
 
 ## Shared SCPI infrastructure
 
-Each physical instrument has its own `ScpiScheduler` and `ScpiTransport` instance.
+DHO804 and DM858E each have their own `ScpiScheduler` and `ScpiTransport` instance. They do not share a queue.
 
-`ScpiTransport` owns one TCP socket and text/binary framing. `ScpiScheduler` owns serialized physical access, priorities, transaction ownership, supersession/coalescing where explicitly requested, and failure of pending work when the transport becomes unusable.
-
-DHO804 and DM858E do not share a scheduler queue.
-
-## DHO804 path
-
-```text
-WebSocketGateway
- -> ScopeWebSocketAdapter
- -> ScopeService
- -> ScopeController / waveform services
- -> ScopeRuntime
- -> Dho804Driver
- -> ScpiScheduler
- -> ScpiTransport
-```
-
-`ScopeService` is the server application boundary for scope controls, acquisition actions, measurements, raw SCPI, waveform/deep-capture operations and Sleep.
-
-## DM858E path
-
-```text
-WebSocketGateway
- -> DmmWebSocketAdapter
- -> DmmService
- -> DmmRuntime
- -> Dm858eDriver
- -> ScpiScheduler
- -> ScpiTransport
-```
-
-`DmmService` owns mutation serialization, authoritative readback, stale function-dependent write rejection and current display-snapshot invalidation/deduplication.
+PPK2 is outside this infrastructure.
 
 ## Protocol compatibility
 
-WebSocket protocol version **7** uses the application-level hello:
+WebSocket protocol version **10** uses the application-level hello:
 
 ```text
-server: ProtocolHello(7)
-client: ProtocolHelloAck(7)
+server: ProtocolHello(10)
+client: ProtocolHelloAck(10)
 ```
 
-Version 7 is a hard cut adding acquisition-operation start/stop/get/list request/result messages. No compatibility shim is provided.
+Version 10 is a hard cut adding PPK2 instrument/lifecycle/stats/live/capture/viewport messages. Existing numeric values remain stable; no compatibility shim is provided.
 
 Instrument subscribe/unsubscribe remains publication state only and does not affect physical runtime or acquisition-operation lifetime.
 
@@ -177,20 +176,23 @@ Instrument subscribe/unsubscribe remains publication state only and does not aff
 
 Prefer deterministic visible failure over hidden fallback.
 
-For uncertain SCPI socket/framing integrity, fail affected work, reject stale queued work, close the uncertain session and recover through the already-running physical runtime without replaying stale commands.
+For uncertain SCPI framing/socket integrity, fail affected work, close the uncertain session and recover through the server-owned runtime without replaying stale commands.
 
-Loss-sensitive streaming producers must preserve/report sequence loss rather than silently using DHO live-waveform latest-frame replacement semantics.
+For PPK2, malformed framing, metadata loss, source-session change, replayed/backward offsets or uncertain sample alignment fail the current physical session/capture rather than guessing.
+
+Raw loss is reported. Retention eviction is reported separately by the bounded store. Decimated live-display omission under browser backpressure is not raw acquisition loss.
 
 ## Dependency direction
 
 ```text
 server composition
-  |-- InstrumentRegistry -> ScopeRuntime / DmmRuntime
+  |-- InstrumentRegistry -> ScopeRuntime / DmmRuntime / Ppk2Runtime
   |-- AcquisitionService
   `-- WebSocketGateway
         |-- AcquisitionWebSocketAdapter -> AcquisitionService
         |-- ScopeWebSocketAdapter -> ScopeService
-        `-- DmmWebSocketAdapter -> DmmService
+        |-- DmmWebSocketAdapter -> DmmService
+        `-- Ppk2WebSocketAdapter -> Ppk2Service -> AcquisitionService
 ```
 
 Ordinary constructors and explicit callbacks are sufficient. Do not add a generic event bus, DI framework or plugin manager.
@@ -202,6 +204,7 @@ src/
 |- shared/
 |  |- acquisition-types.ts
 |  |- instrument-types.ts
+|  |- ppk2-types.ts
 |  |- scope-types.ts
 |  |- dmm-types.ts
 |  |- websocket-protocol.ts
@@ -210,19 +213,18 @@ src/
 |- server/
 |  |- server.ts
 |  |- acquisition/
-|  |  |- acquisition-service.ts
-|  |  `- bounded-chunk-store.ts
 |  |- instruments/
 |  |- scope/
 |  |- dmm/
+|  |- ppk2/
 |  |- scpi/
 |  |- waveform/
 |  `- websocket/
 |     |- websocket-gateway.ts
-|     |- websocket-adapter.ts
 |     |- acquisition-websocket-adapter.ts
 |     |- scope-websocket-adapter.ts
-|     `- dmm-websocket-adapter.ts
+|     |- dmm-websocket-adapter.ts
+|     `- ppk2-websocket-adapter.ts
 |
 `- web/
 ```

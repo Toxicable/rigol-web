@@ -55,11 +55,18 @@ export function InstrumentHeader({ children }: InstrumentHeaderProps) {
               >
                 DM858E
               </NavLink>
+              <NavLink
+                to="/ppk2"
+                className={({ isActive }) => isActive ? "instrument-link active" : "instrument-link"}
+              >
+                PPK2
+              </NavLink>
             </>
           ) : (
             <>
               <a className="instrument-link" href="/">DHO804</a>
               <a className="instrument-link" href="/dm858e">DM858E</a>
+              <a className="instrument-link" href="/ppk2">PPK2</a>
             </>
           )}
         </nav>

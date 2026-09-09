@@ -11,8 +11,8 @@ import {
 } from "./websocket-protocol";
 
 describe("websocket protocol constants", () => {
-  it("uses the DHO804 bandwidth-limit protocol version", () => {
-    expect(PROTOCOL_VERSION).toBe(9);
+  it("uses the PPK2 integration protocol version", () => {
+    expect(PROTOCOL_VERSION).toBe(10);
   });
 
   it("keeps existing message type values stable and assigns instrument ranges", () => {
@@ -57,10 +57,25 @@ describe("websocket protocol constants", () => {
       MessageType.AcquisitionOperationResult,
       MessageType.AcquisitionOperationListResult,
     ]).toEqual([60, 61, 62, 63, 64, 65]);
+
+    expect([
+      MessageType.Ppk2Connected,
+      MessageType.Ppk2Disconnected,
+      MessageType.Ppk2Stats,
+      MessageType.Ppk2Live,
+      MessageType.Ppk2CaptureStart,
+      MessageType.Ppk2CaptureStop,
+      MessageType.Ppk2ViewportRequest,
+      MessageType.Ppk2ViewportResult,
+    ]).toEqual([70, 71, 72, 73, 74, 75, 76, 77]);
   });
 
   it("keeps instrument identities explicit and stable", () => {
-    expect([SupportedInstrument.Dho804, SupportedInstrument.Dm858e]).toEqual([1, 2]);
+    expect([
+      SupportedInstrument.Dho804,
+      SupportedInstrument.Dm858e,
+      SupportedInstrument.Ppk2,
+    ]).toEqual([1, 2, 3]);
   });
 
   it("keeps control values stable", () => {

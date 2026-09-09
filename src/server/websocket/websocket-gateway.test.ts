@@ -82,17 +82,26 @@ class FakeAdapter implements WebSocketInstrumentAdapter {
 
   public sendInitialPublications(session: WebSocketSession): void {
     this.initialPublicationsSpy(session);
-    if (this.instrument === SupportedInstrument.Dho804) {
-      this.requireHost().sendJson(session, {
-        type: MessageType.ScopeDisconnected,
-        reason: "test lifecycle",
-      });
-      return;
+    switch (this.instrument) {
+      case SupportedInstrument.Dho804:
+        this.requireHost().sendJson(session, {
+          type: MessageType.ScopeDisconnected,
+          reason: "test lifecycle",
+        });
+        return;
+      case SupportedInstrument.Dm858e:
+        this.requireHost().sendJson(session, {
+          type: MessageType.DmmDisconnected,
+          reason: "test lifecycle",
+        });
+        return;
+      case SupportedInstrument.Ppk2:
+        this.requireHost().sendJson(session, {
+          type: MessageType.Ppk2Disconnected,
+          reason: "test lifecycle",
+        });
+        return;
     }
-    this.requireHost().sendJson(session, {
-      type: MessageType.DmmDisconnected,
-      reason: "test lifecycle",
-    });
   }
 
   public sessionUnsubscribed(session: WebSocketSession): void {
@@ -139,6 +148,7 @@ interface Harness {
   acquisitionAdapter: FakeApplicationAdapter;
   scopeAdapter: FakeAdapter;
   dmmAdapter: FakeAdapter;
+  ppk2Adapter: FakeAdapter;
   clients: WebSocket[];
   port: number;
 }
@@ -162,10 +172,12 @@ async function createHarness(): Promise<Harness> {
   const acquisitionAdapter = new FakeApplicationAdapter();
   const scopeAdapter = new FakeAdapter(SupportedInstrument.Dho804);
   const dmmAdapter = new FakeAdapter(SupportedInstrument.Dm858e);
+  const ppk2Adapter = new FakeAdapter(SupportedInstrument.Ppk2);
   const gateway = new WebSocketGateway(httpServer, {
     acquisitionAdapter,
     scopeAdapter,
     dmmAdapter,
+    ppk2Adapter,
   });
   const port = await listen(httpServer);
   active = {
@@ -174,6 +186,7 @@ async function createHarness(): Promise<Harness> {
     acquisitionAdapter,
     scopeAdapter,
     dmmAdapter,
+    ppk2Adapter,
     clients: [],
     port,
   };
@@ -243,6 +256,7 @@ describe("WebSocketGateway broker", () => {
     expect(server.acquisitionAdapter.tryDispatchSpy).not.toHaveBeenCalled();
     expect(server.scopeAdapter.tryDispatchSpy).not.toHaveBeenCalled();
     expect(server.dmmAdapter.tryDispatchSpy).not.toHaveBeenCalled();
+    expect(server.ppk2Adapter.tryDispatchSpy).not.toHaveBeenCalled();
   });
 
   it("treats subscribe and unsubscribe as publication state only", async () => {
@@ -268,6 +282,26 @@ describe("WebSocketGateway broker", () => {
     });
   });
 
+  it("subscribes PPK2 through the same publication-only broker", async () => {
+    const server = await createHarness();
+    const client = await connect(server);
+    const lifecycle = waitForJson(
+      client,
+      (message) => message.type === MessageType.Ppk2Disconnected,
+    );
+
+    client.send(JSON.stringify({
+      type: MessageType.InstrumentSubscribe,
+      instrument: SupportedInstrument.Ppk2,
+    }));
+
+    expect(await lifecycle).toEqual({
+      type: MessageType.Ppk2Disconnected,
+      reason: "test lifecycle",
+    });
+    expect(server.ppk2Adapter.initialPublicationsSpy).toHaveBeenCalledOnce();
+  });
+
   it("delegates non-common messages to adapters and owns result framing", async () => {
     const server = await createHarness();
     const client = await connect(server);
@@ -286,6 +320,7 @@ describe("WebSocketGateway broker", () => {
     expect(server.acquisitionAdapter.tryDispatchSpy).toHaveBeenCalledOnce();
     expect(server.scopeAdapter.tryDispatchSpy).toHaveBeenCalledOnce();
     expect(server.dmmAdapter.tryDispatchSpy).not.toHaveBeenCalled();
+    expect(server.ppk2Adapter.tryDispatchSpy).not.toHaveBeenCalled();
   });
 
   it("returns common command failure when no adapter claims a request", async () => {
@@ -306,6 +341,7 @@ describe("WebSocketGateway broker", () => {
     expect(server.acquisitionAdapter.tryDispatchSpy).toHaveBeenCalledOnce();
     expect(server.scopeAdapter.tryDispatchSpy).toHaveBeenCalledOnce();
     expect(server.dmmAdapter.tryDispatchSpy).toHaveBeenCalledOnce();
+    expect(server.ppk2Adapter.tryDispatchSpy).toHaveBeenCalledOnce();
   });
 
   it("releases only adapter publication/session state on socket close", async () => {

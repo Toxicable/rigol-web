@@ -1,4 +1,4 @@
-import { SupportedInstrument } from "../../shared/instrument-types.js";
+import { SupportedInstrument, type ScpiInstrument } from "../../shared/instrument-types.js";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -56,8 +56,21 @@ export function readInstrument(value: unknown): SupportedInstrument {
   switch (value) {
     case SupportedInstrument.Dho804:
     case SupportedInstrument.Dm858e:
+    case SupportedInstrument.Ppk2:
       return value;
     default:
       throw new Error("Unsupported instrument");
+  }
+}
+
+export function readScpiInstrument(value: unknown): ScpiInstrument {
+  switch (value) {
+    case SupportedInstrument.Dho804:
+    case SupportedInstrument.Dm858e:
+      return value;
+    case SupportedInstrument.Ppk2:
+      throw new Error("PPK2 does not support SCPI");
+    default:
+      throw new Error("Unsupported SCPI instrument");
   }
 }

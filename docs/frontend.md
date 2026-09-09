@@ -2,12 +2,13 @@
 
 ## Purpose
 
-The browser serves two fixed instrument routes while keeping one application transport connection alive across navigation:
+The browser serves three fixed instrument routes while keeping one application WebSocket alive across navigation:
 
 - `/` — DHO804 oscilloscope
 - `/dm858e` — DM858E digital multimeter
+- `/ppk2` — Nordic PPK2
 
-The browser architecture is concrete rather than a generic instrument framework. Scope and DMM keep separate domain stores, bindings and action APIs.
+The browser is concrete rather than a generic instrument framework. Scope, DMM and PPK2 keep separate domain stores, bindings and action APIs.
 
 ## Top-level ownership
 
@@ -22,35 +23,12 @@ React App
   |     - JSON/binary transport fanout
   |     - shared transport state
   |
-  +-> ScopeBinding
-  |     - DHO804 wire request/message mapping
-  |     - lifecycle/state projection
-  |     - waveform decode/controller handoff
-  |     - scope publication subscription
-  |       ^
-  |       |
-  |     ScopeActions
-  |     - domain-valued scope commands
-  |     - optimistic updates
-  |     - interaction coalescing/commit
-  |     - command error/pending ownership
-  |     - measurement configuration/polling
-  |
-  `-> DmmBinding
-        - DM858E wire request/message mapping
-        - lifecycle/state/snapshot projection
-        - DMM publication subscription
-          ^
-          |
-        DmmActions
-        - domain-valued DMM controls
-        - redundant-write suppression
-        - pending/error ownership
+  +-> ScopeBinding -> ScopeActions -> scope UI
+  +-> DmmBinding   -> DmmActions   -> DMM UI
+  `-> Ppk2Binding  -> Ppk2Actions  -> PPK2 UI
 ```
 
-`App` constructs one `AppConnection`, `ScopeBinding`, `DmmBinding`, `ScopeActions` and `DmmActions` above the route elements. Route navigation does not recreate them. Route mount/unmount controls publication subscriptions only.
-
-The obsolete scope-shaped global `ScopeWebSocketClient` no longer exists.
+`App` constructs one `AppConnection` and one binding/action pair for each instrument above the route elements. Route navigation does not recreate them. Route mount/unmount controls publication subscriptions only.
 
 ## Shared transport state
 
@@ -64,16 +42,14 @@ export enum AppTransportKind {
 }
 ```
 
-`Connected` means the WebSocket completed the application protocol handshake, not merely that the socket opened.
+`Connected` means the application protocol handshake completed, not merely that a socket opened.
 
-Scope and DMM stores do not duplicate WebSocket transport state. They represent physical instrument/domain presentation only. When shared transport leaves `Connected`, active bindings invalidate stale instrument presentation by returning their instrument store to its awaiting-instrument state.
+Instrument stores do not duplicate WebSocket transport state. Active bindings invalidate stale connected presentation when shared transport leaves `Connected`.
 
-Transport and physical instrument lifecycle answer different questions:
+Transport and physical instrument lifecycle remain separate questions:
 
 - transport: can this browser communicate with Rigol Web?
-- instrument: is the selected physical instrument connected and usable?
-
-Do not merge those into one generic state object.
+- instrument: is this physical instrument connected and usable?
 
 ## Protocol handshake and reconnect
 
@@ -88,174 +64,145 @@ connect
   -> resend desired instrument subscriptions
 ```
 
-Application messages fail locally before handshake completion. A protocol-version mismatch closes the socket clearly. Unexpected close rejects pending requests and schedules reconnect. Desired route subscriptions are replayed only after the next successful handshake.
+Application messages fail locally before handshake completion. Unexpected close rejects pending requests and schedules reconnect. Desired route subscriptions are replayed only after the next successful handshake.
 
-Request IDs and request/result correlation are application-wide responsibilities of `AppConnection`; instrument bindings and actions do not duplicate them.
+Request IDs/correlation remain application-wide responsibilities of `AppConnection`.
 
 ## Route subscriptions
 
-Each route controls only publication fanout:
+Each route controls publication fanout only:
 
 ```text
-Scope route mount     -> ScopeBinding.activate()   -> subscribe DHO804
-Scope route unmount   -> ScopeBinding.deactivate() -> unsubscribe DHO804
-
-DMM route mount       -> DmmBinding.activate()     -> subscribe DM858E
-DMM route unmount     -> DmmBinding.deactivate()   -> unsubscribe DM858E
+Scope mount   -> ScopeBinding.activate() -> subscribe DHO804
+DMM mount     -> DmmBinding.activate()   -> subscribe DM858E
+PPK2 mount    -> Ppk2Binding.activate()  -> subscribe PPK2
 ```
 
-Scope route unmount also cancels any browser-side coalesced interaction update before unsubscribing, preventing an interaction update from being emitted after route exit.
+Unmount performs the matching unsubscribe.
 
-These subscriptions do not own physical runtime lifetime. The server maintains the configured DHO804 and DM858E runtimes independently of browser routes, last unsubscribe, browser disconnect and browser reconnect.
+Subscriptions do not own physical runtime lifetime. The server keeps all three configured runtimes alive independently of browser routes.
+
+A running PPK2 capture also survives PPK2 route unmount/unsubscribe. When the route remounts, the adapter replays current PPK2 lifecycle and capture stats.
 
 ## Domain actions
 
-Ordinary React controls express instrument-domain intent, not WebSocket messages or protocol discriminants.
+Ordinary React controls express instrument-domain intent, not WebSocket message discriminants.
 
-Examples:
+`ScopeActions` owns scope command orchestration, optimistic presentation, coalesced continuous interaction, command errors, Sleep pending state and measurement polling.
 
-```text
-Channel scale input
-  -> ScopeActions.setChannelScale(channel, value)
-  -> optimistic scope presentation
-  -> ScopeBinding.setControl(...)
-  -> AppConnection request
-  -> authoritative ScopeState later replaces optimistic state
+`DmmActions` owns DMM control construction, redundant-write suppression, and generation-safe pending/error handling.
 
-DMM range button
-  -> DmmActions.setRange(range)
-  -> construct control from current authoritative DMM function
-  -> DMM pending ownership
-  -> DmmBinding.setDmmControl(...)
-  -> authoritative DmmState later wins
-```
+`Ppk2Actions` owns:
 
-`ScopeActions` owns ordinary scope command failure presentation, optimistic control updates, 50 ms latest-value interaction coalescing, final interaction commit, Sleep pending state, and scope measurement configuration/polling. `DmmActions` owns DMM control construction, redundant-write suppression, and generation-safe pending/error handling.
+- capture start intent;
+- capture stop intent using the current operation ID;
+- retained-history viewport intent;
+- duplicate/pending request suppression;
+- PPK2 request error presentation.
 
-Scope and DMM actions remain separate. There is no generic dispatcher, reducer or cross-instrument command abstraction.
+The PPK2 route calls these actions and does not construct PPK2 WebSocket requests itself.
 
-Local UI-only state stays in components where appropriate; for example DMM trend viewport state and measurement picker selections do not need an action layer.
+## Scope binding/store
 
-## Scope binding
-
-`ScopeBinding` maps DHO804 protocol traffic to scope domain behavior. It owns:
-
-- DHO804 lifecycle/state message handling;
-- wire request construction for scope controls/actions;
-- deep-capture request/result wire mapping;
-- DHO804 binary waveform decoding;
-- waveform-controller session reset and deep-capture retirement;
-- transport-loss invalidation of scope presentation;
-- publication subscribe/unsubscribe.
-
-It does not own ordinary measurement polling, optimistic control orchestration or React command error handling; those belong to `ScopeActions`.
-
-## DMM binding
-
-`DmmBinding` maps DM858E protocol traffic to DMM domain state. It owns:
-
-- DMM lifecycle/state/snapshot message handling;
-- DMM wire request construction;
-- instrument-targeted DMM SCPI calls;
-- transport-loss invalidation of DMM presentation;
-- publication subscribe/unsubscribe.
-
-The DMM store remains separate from scope state. DMM control pending/error orchestration belongs to `DmmActions`.
-
-## Instrument stores
-
-### DHO804
-
-`scope-store.ts` owns scope/domain presentation state only:
-
-- awaiting/connected/disconnected physical scope presentation;
-- complete authoritative `ScopeState`;
-- measurement selections/results;
-- deep-capture lifecycle metadata;
-- Sleep pending presentation;
-- scope-specific UI error state.
-
-It does not own WebSocket transport lifecycle.
-
-### DM858E
-
-`dmm-store.ts` owns DMM/domain presentation state only:
-
-- awaiting/connected/disconnected physical DMM presentation;
-- complete authoritative `DmmState`;
-- latest primary reading;
-- generation-safe DMM control pending/error presentation.
-
-It does not own WebSocket transport lifecycle.
-
-Physical instrument state remains authoritative. Actions may update presentation optimistically, but later complete server state replaces the authoritative instrument snapshot.
-
-## DHO804 waveform path
+`ScopeBinding` maps DHO804 protocol traffic, lifecycle/state and binary waveform data. `scope-store.ts` owns scope presentation only.
 
 Waveform sample arrays stay outside React and Zustand:
 
 ```text
 WebSocket binary frame
-  -> AppConnection transport fanout
-  -> ScopeBinding
-  -> decodeWaveformFrame()
-  -> WaveformController
-  -> uPlot
+ -> AppConnection
+ -> ScopeBinding
+ -> WaveformController
+ -> uPlot
 ```
 
-`AppConnection` does not decode DHO804 waveform payloads. Scope-specific decoding, sequence handling, live/deep display state and malformed-frame policy stay in `ScopeBinding` / the waveform layer.
+DHO804 live data remains disposable/latest-oriented.
 
-The waveform view keeps pointer geometry and imperative rendering. It emits domain interaction intent to `ScopeActions`; it no longer constructs `InteractiveControl` wire values or owns interaction coalescing/error handling.
+## DMM binding/store
 
-Create one uPlot instance for the mounted scope waveform view and update it imperatively. Use uPlot mode 2 so channels can carry independent X/Y arrays. Do not auto-range channel Y scales from waveform values.
+`DmmBinding` maps DM858E lifecycle/state/snapshot traffic and typed DMM requests. `dmm-store.ts` owns DMM presentation only.
 
-DHO804 live samples remain latest-oriented and disposable. Deep-capture source data remains server-side; the browser retains metadata and display-sized viewport windows only.
+Latest DMM snapshot state is display state, not a uniquely identified logging sample stream.
 
-## Scope interactions
+## PPK2 binding/store
 
-Continuous scope interactions remain optimistic. During a drag, `ScopeActions` updates presentation immediately and emits the newest coalesced `InteractionUpdate` without waiting for acknowledgement. At interaction end it sends `InteractionCommit`; authoritative scope state later reconciles the result.
+`Ppk2Binding` maps PPK2 protocol traffic to the PPK2 browser domain. It owns:
 
-The server owns the browser-session lease for long-lived scope interactions. Browser route subscription is not a physical-runtime lease.
+- PPK2 publication subscribe/unsubscribe;
+- connected/disconnected projection;
+- capture-stat projection;
+- decimated-live projection;
+- capture start/stop wire requests;
+- retained viewport request/result mapping;
+- transport-loss invalidation of PPK2 connected presentation.
 
-The waveform shell remains the interaction coordinate system for horizontal position, channel-offset markers and trigger-level markers. Existing full-shell drag equations and clamped-marker behavior remain unchanged.
+`ppk2-store.ts` owns only browser-appropriate state:
 
-## Measurements and deep capture
+- awaiting/connected/disconnected PPK2 presentation;
+- latest `Ppk2CaptureStats`;
+- decimated live buckets;
+- one explicitly requested retained viewport;
+- PPK2 request pending/error state.
 
-Scope measurements remain dynamic request/result data, not `ScopeState`. `ScopeActions` configures displayed measurements and suppresses overlapping polling requests.
+It does **not** store raw PPK2 samples.
 
-Deep capture remains an explicit scope operation:
+## PPK2 display bounds
 
-- capture is retained server-side;
-- browser receives capture metadata;
-- browser requests display-sized viewports;
-- `WaveformController` owns viewport cache/display behavior;
-- Run/Single or authoritative resumed acquisition retires stale deep-capture presentation.
+The server live stream is already decimated before reaching the browser.
+
+Current server reduction:
+
+- 100 raw samples per live bucket = 1 ms at 100 kSa/s;
+- 20 buckets per normal live publication = about 20 ms.
+
+The browser keeps at most 5,000 live buckets, about five seconds at this bucket width. Adding new live buckets beyond the cap discards the oldest browser display summaries only.
+
+A retained-history request asks the server for an explicitly reduced viewport. The current action requests up to 1,200 buckets for the known acquisition sequence range; raw retained arrays remain server-side.
+
+When a retained viewport is displayed, the next live publication returns the route to live display by clearing the retained viewport.
+
+## PPK2 route presentation
+
+The PPK2 route presents:
+
+- physical/transport status;
+- PPK2 source session/hardware metadata;
+- Start Capture / Stop Capture;
+- Load retained history;
+- current trace envelope plus mean line from decimated buckets;
+- received/lost/retained sample information;
+- latest/min/max/mean/RMS current;
+- integrated charge;
+- fixed 100 kSa/s / Ampere Meter context.
+
+Formatting is PPK2-local rather than pretending PPK2 uses oscilloscope channel units.
+
+## Backpressure semantics
+
+A slow browser may miss **decimated PPK2 live display updates** when its WebSocket is backpressured. Those are presentation summaries and are not the acquisition data source.
+
+The server continues raw PPK2 decoding, sequence/loss accounting, statistics, charge integration and bounded storage independently. A later retained viewport can reconstruct display history from the server-retained raw capture window.
+
+This is deliberately different from silently dropping raw source samples.
 
 ## Raw SCPI
 
-Raw SCPI is deliberately transport-oriented and explicitly instrument-targeted:
+Raw SCPI remains explicitly instrument-targeted for the two SCPI instruments:
 
 ```text
 AppConnection.executeScpi(instrument, command)
 ```
 
-The raw SCPI console is the intentional exception to ordinary domain-action controls: it is a diagnostic protocol surface whose purpose is to send arbitrary SCPI to a selected instrument. There is no implicit scope target and no fake domain action wrapper around arbitrary SCPI.
+PPK2 does not expose raw SCPI because it is not a SCPI device.
 
-## Presentation rules
-
-Both routes combine shared transport state with instrument-domain state when deciding what to render. A stale prior reading or connected state must not look live after browser transport loss.
-
-The shared instrument header continues to own application-level controls such as navigation and browser-local screenshot copying. Screenshot capture remains browser-local and adds no external package/service dependency.
-
-## Performance rules
+## Presentation/performance rules
 
 - keep one application WebSocket across route changes;
 - keep WebSocket transport state in one application store;
-- keep scope/DMM domain stores and action APIs separate;
-- keep waveform samples outside React/Zustand and outside generic transport semantics;
-- reuse one uPlot instance while the scope view is mounted;
-- keep continuous interactions optimistic and latest-oriented;
-- keep live/deep waveform caches bounded/latest-oriented;
-- do not retain stale DMM or scope connected presentation after transport loss;
-- do not add a generic instrument store, plugin layer, command dispatcher or client-side event bus;
-- measure before adding throttles or rendering machinery.
+- keep scope/DMM/PPK2 domain stores and action APIs separate;
+- keep DHO804 waveform arrays outside React/Zustand;
+- keep PPK2 raw samples entirely server-side;
+- bound PPK2 decimated browser history;
+- allow display-only PPK2 live summaries to be dropped under browser backpressure without affecting raw acquisition;
+- do not retain stale instrument connected presentation after transport loss;
+- do not add a generic instrument store, plugin layer, command dispatcher or client-side event bus.

@@ -9,6 +9,8 @@ services:
       RIGOL_SCPI_LOGGING: ${RIGOL_SCPI_LOGGING:-true}
       RIGOL_DMM_HOST: ${RIGOL_DMM_HOST:?set RIGOL_DMM_HOST in .env}
       RIGOL_DMM_PORT: ${RIGOL_DMM_PORT:?set RIGOL_DMM_PORT in .env}
+      PPK2_BRIDGE_HOST: ${PPK2_BRIDGE_HOST:?set PPK2_BRIDGE_HOST in .env}
+      PPK2_BRIDGE_PORT: ${PPK2_BRIDGE_PORT:?set PPK2_BRIDGE_PORT in .env}
       PORT: "3000"
     ports:
       - "3018:3000"

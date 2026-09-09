@@ -84,6 +84,7 @@ describe("server-owned acquisition operation lifetime", () => {
       acquisitionAdapter: new AcquisitionWebSocketAdapter(acquisitionService),
       scopeAdapter: new NoopInstrumentAdapter(SupportedInstrument.Dho804),
       dmmAdapter: new NoopInstrumentAdapter(SupportedInstrument.Dm858e),
+      ppk2Adapter: new NoopInstrumentAdapter(SupportedInstrument.Ppk2),
     });
     const clients: WebSocket[] = [];
     const port = await listen(httpServer);
