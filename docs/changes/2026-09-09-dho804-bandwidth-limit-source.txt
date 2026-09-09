@@ -1,1 +1,0 @@
-RIGOL DHO800/DHO900 Programming Guide: https://download.rigol.com/en/Manual/Digital%20Oscilloscope/DHO800/DHO800900_ProgrammingGuide_EN.pdf
