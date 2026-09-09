@@ -56,6 +56,7 @@ function createHarness() {
   let connectionListener: ((value: Ppk2Connection) => void) | undefined;
   let statsListener: ((value: Ppk2CaptureStats) => void) | undefined;
   let liveListener: ((value: readonly Ppk2DisplayBucket[]) => void) | undefined;
+  const subscriber: WebSocketSession = { id: 88 };
   const startCapture = vi.fn(async () => operation);
   const stopCapture = vi.fn(async () => ({
     ...operation,
@@ -89,25 +90,35 @@ function createHarness() {
     stopCapture,
     readViewport,
   } as unknown as Ppk2ApplicationService;
+  const isBackpressured = vi.fn(() => false);
+  const sendJson = vi.fn();
+  const forEachSubscribed = vi.fn(
+    (_instrument: SupportedInstrument, callback: (session: WebSocketSession) => void) => {
+      callback(subscriber);
+    },
+  );
   const host = {
     requireSubscribed: vi.fn(),
-    sendJson: vi.fn(),
+    sendJson,
     isOpen: vi.fn(() => true),
-    isBackpressured: vi.fn(() => false),
+    isBackpressured,
     sendBinary: vi.fn(),
     sendCompleted: vi.fn(),
     sendFailure: vi.fn(),
     broadcastJson: vi.fn(),
-    forEachSubscribed: vi.fn(),
+    forEachSubscribed,
   } as unknown as WebSocketAdapterHost;
   const adapter = new Ppk2WebSocketAdapter(service);
   adapter.attach(host);
   return {
     adapter,
     host,
+    subscriber,
     startCapture,
     stopCapture,
     readViewport,
+    isBackpressured,
+    sendJson,
     publishConnection: (value: Ppk2Connection) => connectionListener?.(value),
     publishStats: (value: Ppk2CaptureStats) => statsListener?.(value),
     publishLive: (value: readonly Ppk2DisplayBucket[]) => liveListener?.(value),
@@ -177,13 +188,34 @@ describe("Ppk2WebSocketAdapter", () => {
 
     harness.publishLive([bucket]);
 
-    expect(harness.host.broadcastJson).toHaveBeenCalledWith(
-      SupportedInstrument.Ppk2,
+    expect(harness.isBackpressured).toHaveBeenCalledWith(harness.subscriber);
+    expect(harness.sendJson).toHaveBeenCalledWith(
+      harness.subscriber,
       {
         type: MessageType.Ppk2Live,
         update: { operationId: operation.id, buckets: [bucket] },
       },
     );
+  });
+
+  it("drops only decimated live display updates for a backpressured browser", () => {
+    const harness = createHarness();
+    harness.isBackpressured.mockReturnValue(true);
+    const bucket: Ppk2DisplayBucket = {
+      firstSequence: 1,
+      lastSequence: 1,
+      sampleCount: 1,
+      minCurrentUa: 2,
+      maxCurrentUa: 2,
+      meanCurrentUa: 2,
+      logicOr: 0,
+      logicAnd: 0,
+    };
+
+    harness.publishLive([bucket]);
+
+    expect(harness.sendJson).not.toHaveBeenCalled();
+    expect(harness.stopCapture).not.toHaveBeenCalled();
   });
 
   it("validates and returns retained viewport requests", async () => {
