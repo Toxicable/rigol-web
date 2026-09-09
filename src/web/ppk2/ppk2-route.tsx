@@ -68,7 +68,12 @@ export function Ppk2Route({ binding, actions }: Ppk2RouteProps) {
             </button>
             <button
               type="button"
-              disabled={stats.operation === null || stats.latestSequence === null || pendingRequest !== null}
+              disabled={
+                running ||
+                stats.operation === null ||
+                stats.latestSequence === null ||
+                pendingRequest !== null
+              }
               onClick={() => void actions.loadRetainedHistory()}
             >
               Load retained history
