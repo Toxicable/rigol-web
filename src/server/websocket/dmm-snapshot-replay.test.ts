@@ -18,6 +18,7 @@ import {
 } from "../../shared/dmm-types.js";
 import { SupportedInstrument } from "../../shared/instrument-types.js";
 import { MessageType, PROTOCOL_VERSION, type ServerJsonMessage } from "../../shared/websocket-protocol.js";
+import { AcquisitionService } from "../acquisition/acquisition-service.js";
 import { DmmService } from "../dmm/dmm-service.js";
 import {
   DmmConnectionKind,
@@ -25,6 +26,7 @@ import {
   type DmmConnection,
 } from "../instruments/instrument-connection.js";
 import type { ScopeApplicationService } from "../scope/scope-service.js";
+import { AcquisitionWebSocketAdapter } from "./acquisition-websocket-adapter.js";
 import { DmmWebSocketAdapter } from "./dmm-websocket-adapter.js";
 import { ScopeWebSocketAdapter } from "./scope-websocket-adapter.js";
 import { WebSocketGateway } from "./websocket-gateway.js";
@@ -103,11 +105,17 @@ async function connect(port: number): Promise<WebSocket> {
   return socket;
 }
 
-async function closeHarness(clients: WebSocket[], gateway: WebSocketGateway, server: HttpServer): Promise<void> {
+async function closeHarness(
+  clients: WebSocket[],
+  gateway: WebSocketGateway,
+  acquisitionService: AcquisitionService,
+  server: HttpServer,
+): Promise<void> {
   for (const client of clients) {
     if (client.readyState === WebSocket.OPEN) client.close();
   }
   await gateway.close();
+  acquisitionService.close();
   await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
 }
 
@@ -115,17 +123,19 @@ function createHarness(server: HttpServer) {
   const service = new DmmService({ host: "dmm.test", port: 5556 });
   const internals = service as unknown as DmmServiceInternals;
   internals.acceptConnection({ kind: DmmConnectionKind.Connected, info: dmmInfo, state: dmmState });
+  const acquisitionService = new AcquisitionService();
   const gateway = new WebSocketGateway(server, {
+    acquisitionAdapter: new AcquisitionWebSocketAdapter(acquisitionService),
     scopeAdapter: new ScopeWebSocketAdapter(new UnusedScopeService()),
     dmmAdapter: new DmmWebSocketAdapter(service),
   });
-  return { service, internals, gateway };
+  return { service, internals, acquisitionService, gateway };
 }
 
 describe("DMM snapshot publication replay", () => {
   it("replays the current snapshot only to each newly subscribing session", async () => {
     const httpServer = createServer();
-    const { internals, gateway } = createHarness(httpServer);
+    const { internals, acquisitionService, gateway } = createHarness(httpServer);
     const port = await listen(httpServer);
     const clients: WebSocket[] = [];
 
@@ -171,13 +181,13 @@ describe("DMM snapshot publication replay", () => {
       await reconnectConnected;
       expect(await reconnectSnapshot).toEqual({ type: MessageType.DmmSnapshot, snapshot });
     } finally {
-      await closeHarness(clients, gateway, httpServer);
+      await closeHarness(clients, gateway, acquisitionService, httpServer);
     }
   });
 
   it("replays the current invalidated snapshot after same-function state changes", async () => {
     const httpServer = createServer();
-    const { internals, gateway } = createHarness(httpServer);
+    const { internals, acquisitionService, gateway } = createHarness(httpServer);
     const port = await listen(httpServer);
     const clients: WebSocket[] = [];
 
@@ -221,7 +231,7 @@ describe("DMM snapshot publication replay", () => {
       });
       expect(await replay).toEqual({ type: MessageType.DmmSnapshot, snapshot: invalidated });
     } finally {
-      await closeHarness(clients, gateway, httpServer);
+      await closeHarness(clients, gateway, acquisitionService, httpServer);
     }
   });
 });
