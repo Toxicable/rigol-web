@@ -14,6 +14,7 @@ import type {
   InteractiveControl,
   NonEmptyArray,
 } from "../shared/websocket-protocol.js";
+import { AcquisitionService } from "../server/acquisition/acquisition-service.js";
 import type { DmmApplicationService } from "../server/dmm/dmm-service.js";
 import {
   DmmConnectionKind,
@@ -27,6 +28,7 @@ import {
 } from "../server/instruments/instrument-registry.js";
 import type { ScopeApplicationService } from "../server/scope/scope-service.js";
 import type { DeepCaptureInfo, DeepViewportRequest } from "../server/waveform/deep-capture-service.js";
+import { AcquisitionWebSocketAdapter } from "../server/websocket/acquisition-websocket-adapter.js";
 import { DmmWebSocketAdapter } from "../server/websocket/dmm-websocket-adapter.js";
 import { ScopeWebSocketAdapter } from "../server/websocket/scope-websocket-adapter.js";
 import { WebSocketGateway } from "../server/websocket/websocket-gateway.js";
@@ -172,7 +174,9 @@ async function createHarness(): Promise<Harness> {
 
   const scopeService = new ScopeServiceStub();
   const dmmService = new DmmServiceStub();
+  const acquisitionService = new AcquisitionService();
   const gateway = new WebSocketGateway(httpServer, {
+    acquisitionAdapter: new AcquisitionWebSocketAdapter(acquisitionService),
     scopeAdapter: new ScopeWebSocketAdapter(scopeService),
     dmmAdapter: new DmmWebSocketAdapter(dmmService),
   });
