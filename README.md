@@ -1,5 +1,7 @@
 # Rigol Web
 
+Rigol Web is a local TypeScript bench application for the Rigol DHO804, Rigol DM858E, and Nordic PPK2 through Toxicboards PPK2Bridge.
+
 ## UI development
 
 Run the local development server from this directory:
@@ -70,11 +72,34 @@ and log it to the console.
 RIGOL documents the statistic query in the DHO800/DHO900 Programming Guide:
 https://download.rigol.com/en/Manual/Digital%20Oscilloscope/DHO800/DHO800900_ProgrammingGuide_EN.pdf
 
+## PPK2
+
+The `/ppk2` route integrates a Nordic Power Profiler Kit II through the Toxicboards ESP32-S3 PPK2Bridge in Ampere Meter mode.
+
+Rigol Web owns PPK2 metadata/calibration, packed-sample decoding, source-loss accounting, min/max/mean/RMS statistics, charge integration, bounded raw retention and browser decimation. The ESP bridge remains transport-focused.
+
+The raw PPK2 stream is approximately 100 kSa/s / 400 kB/s before bridge framing. Raw samples stay server-side. The PPK2 browser receives decimated display buckets and may explicitly load a reduced retained-history viewport.
+
+The server retains a fixed 64 MiB typed-array payload window: 4 bytes calibrated current plus 4 bytes original packed sample word per sample. At 100 kSa/s that is approximately 83.9 seconds of nominal retained payload before object/chunk overhead.
+
+A PPK2 capture is a server-owned acquisition operation. Leaving `/ppk2`, closing the browser, or reconnecting the browser does not stop it. Source-session changes, malformed framing, metadata loss, or uncertain sample alignment fail the capture rather than silently guessing around missing raw data.
+
+See `docs/ppk2.md` and `docs/acquisition-operations.md`.
+
 ## Container deployment
 
-Copy `.env.example` to `.env`, then set `RIGOL_SCOPE_HOST` and
-`RIGOL_SCOPE_PORT` to the DHO804's verified raw SCPI/TCP endpoint. Configure
-`RIGOL_DMM_HOST` and `RIGOL_DMM_PORT` for the DM858E endpoint.
+Copy `.env.example` to `.env`, then configure all three physical endpoints:
+
+```text
+RIGOL_SCOPE_HOST
+RIGOL_SCOPE_PORT
+RIGOL_DMM_HOST
+RIGOL_DMM_PORT
+PPK2_BRIDGE_HOST
+PPK2_BRIDGE_PORT=5557
+```
+
+`PPK2_BRIDGE_PORT=5557` is the fixed TBP2 TCP listener selected for Toxicboards PPK2Bridge.
 
 Rigol Web exposes a one-way DHO804 **Sleep** control. Remote Wake is not exposed
 because real-scope testing confirmed that native Sleep takes the instrument off
@@ -143,7 +168,6 @@ docker compose up --build --detach
 
 The HTTP and WebSocket service listens on port `3000` in the container. Its
 `/health` endpoint verifies only that the Node process is running; it remains
-healthy while the scope is disconnected.
+healthy while any physical instrument is disconnected.
 
-The scope UI, Sleep control, statistics and diagnostics changes add no hardware,
-paid service, or runtime dependency. Cost impact: **A$0**.
+The PPK2 integration adds no paid software, package, or hardware dependency to Rigol Web. Incremental cost impact: **A$0**.
