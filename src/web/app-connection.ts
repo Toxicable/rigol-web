@@ -17,6 +17,9 @@ import {
   type InteractionCommitMessage,
   type MeasurementReadMessage,
   type MeasurementSetMessage,
+  type Ppk2CaptureStartMessage,
+  type Ppk2CaptureStopMessage,
+  type Ppk2ViewportRequestMessage,
   type ProtocolHelloAckMessage,
   type ScopeSleepMessage,
   type ScpiExecuteMessage,
@@ -63,7 +66,10 @@ export type RequestMessage =
   | AcquisitionOperationStartMessage
   | AcquisitionOperationStopMessage
   | AcquisitionOperationGetMessage
-  | AcquisitionOperationListMessage;
+  | AcquisitionOperationListMessage
+  | Ppk2CaptureStartMessage
+  | Ppk2CaptureStopMessage
+  | Ppk2ViewportRequestMessage;
 
 interface PendingRequest {
   resolve: (message: ServerJsonMessage) => void;
@@ -101,6 +107,10 @@ function asServerMessage(value: unknown): ServerJsonMessage {
     case MessageType.DmmState:
     case MessageType.DmmDisconnected:
     case MessageType.DmmSnapshot:
+    case MessageType.Ppk2Connected:
+    case MessageType.Ppk2Disconnected:
+    case MessageType.Ppk2Stats:
+    case MessageType.Ppk2Live:
     case MessageType.CommandCompleted:
     case MessageType.CommandFailed:
     case MessageType.ScpiResult:
@@ -108,6 +118,7 @@ function asServerMessage(value: unknown): ServerJsonMessage {
     case MessageType.DeepCaptureReady:
     case MessageType.AcquisitionOperationResult:
     case MessageType.AcquisitionOperationListResult:
+    case MessageType.Ppk2ViewportResult:
       return value as ServerJsonMessage;
     default:
       throw new Error(`Unsupported server message type ${type}`);
