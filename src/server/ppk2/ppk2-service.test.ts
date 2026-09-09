@@ -26,7 +26,6 @@ function sequenced(
   return {
     sequence,
     rawWord: ((logic & 0xff) << 24) >>> 0,
-    adc: 0,
     range: 0,
     counter: sequence % 64,
     logic,
