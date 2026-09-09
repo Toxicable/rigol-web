@@ -10,6 +10,7 @@ import type {
 import {
   AcquisitionType,
   Channel,
+  ChannelBandwidthLimit,
   ChannelCoupling,
   EdgeSlope,
   ScopeRunState,
@@ -115,6 +116,13 @@ function channelCouplingToken(value: ChannelCoupling): string {
   }
 }
 
+function channelBandwidthLimitToken(value: ChannelBandwidthLimit): string {
+  switch (value) {
+    case ChannelBandwidthLimit.Off: return "OFF";
+    case ChannelBandwidthLimit.Mhz20: return "20M";
+  }
+}
+
 function timebaseModeToken(value: TimebaseMode): string {
   switch (value) {
     case TimebaseMode.Main: return "MAIN";
@@ -183,6 +191,7 @@ export class ScopeController {
     switch (control.kind) {
       case ControlKind.ChannelCoupling:
       case ControlKind.ChannelProbeRatio:
+      case ControlKind.ChannelBandwidthLimit:
         await this.reconcileChannel(revision, control.channel, PRIORITY_NORMAL);
         return;
       case ControlKind.HorizontalScale:
@@ -347,6 +356,9 @@ export class ScopeController {
           throw new Error("Probe ratio selector supports 1x or 10x");
         }
         return;
+      case ControlKind.ChannelBandwidthLimit:
+        channelBandwidthLimitToken(control.value);
+        return;
       case ControlKind.HorizontalScale:
         requirePositive(control.value, "Horizontal scale");
         return;
@@ -411,6 +423,8 @@ export class ScopeController {
           return updateChannel(state, control.channel, (channelState) => ({ ...channelState, coupling: control.value }));
         case ControlKind.ChannelProbeRatio:
           return updateChannel(state, control.channel, (channelState) => ({ ...channelState, probeRatio: control.value }));
+        case ControlKind.ChannelBandwidthLimit:
+          return updateChannel(state, control.channel, (channelState) => ({ ...channelState, bandwidthLimit: control.value }));
         case ControlKind.HorizontalScale:
           return { ...state, horizontal: { ...state.horizontal, scale: control.value } };
         case ControlKind.HorizontalPosition:
@@ -461,6 +475,9 @@ export class ScopeController {
         return;
       case ControlKind.ChannelProbeRatio:
         await this.driver.executeRawScpi(`:CHANnel${control.channel}:PROBe ${control.value}`);
+        return;
+      case ControlKind.ChannelBandwidthLimit:
+        await this.driver.executeRawScpi(`:CHANnel${control.channel}:BWLimit ${channelBandwidthLimitToken(control.value)}`);
         return;
       case ControlKind.HorizontalScale:
         await this.driver.setHorizontalScale(control.value, priority);
