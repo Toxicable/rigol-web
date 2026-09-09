@@ -1,0 +1,155 @@
+.ppk2-route {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ppk2-identity {
+  color: #a7b1bc;
+  font-size: 0.82rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.ppk2-layout {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  overflow: hidden;
+}
+
+.ppk2-trace-panel {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.ppk2-trace-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.7rem;
+}
+
+.ppk2-trace-heading h1 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.ppk2-trace-heading p {
+  margin: 0.2rem 0 0;
+  color: #8e9aa6;
+  font-size: 0.78rem;
+}
+
+.ppk2-trace-heading strong {
+  font: 700 1.45rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.ppk2-trace {
+  width: 100%;
+  flex: 1;
+  min-height: 260px;
+  border: 1px solid #303741;
+  border-radius: 8px;
+  background: #07090b;
+}
+
+.ppk2-trace-grid line {
+  stroke: #202832;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.ppk2-trace-envelope {
+  fill: rgb(52 152 219 / 18%);
+  stroke: none;
+}
+
+.ppk2-trace-mean {
+  fill: none;
+  stroke: #5dade2;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.ppk2-empty-trace {
+  position: absolute;
+  inset: 50% 1rem auto;
+  transform: translateY(-50%);
+  color: #7d8994;
+  text-align: center;
+  pointer-events: none;
+}
+
+.ppk2-side-column {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ppk2-stats-grid,
+.ppk2-source-grid {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem 0.75rem;
+}
+
+.ppk2-stats-grid div,
+.ppk2-source-grid div {
+  min-width: 0;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid #242a31;
+}
+
+.ppk2-stats-grid dt,
+.ppk2-source-grid dt {
+  color: #8995a1;
+  font-size: 0.72rem;
+}
+
+.ppk2-stats-grid dd,
+.ppk2-source-grid dd {
+  margin: 0.15rem 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.ppk2-danger,
+.ppk2-request-error {
+  color: #ff8c8c;
+}
+
+.ppk2-request-error {
+  border: 1px solid #713b3b;
+  border-radius: 8px;
+  padding: 0.7rem;
+  background: #2b1717;
+  font-size: 0.82rem;
+}
+
+@media (max-width: 900px) {
+  .ppk2-layout {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .ppk2-trace-panel {
+    min-height: 55vh;
+  }
+
+  .ppk2-side-column {
+    overflow: visible;
+  }
+}
