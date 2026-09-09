@@ -21,6 +21,7 @@ import {
   type ScopeState,
 } from "../../shared/scope-types.js";
 import { MessageType, PROTOCOL_VERSION, type ServerJsonMessage } from "../../shared/websocket-protocol.js";
+import { AcquisitionService } from "../acquisition/acquisition-service.js";
 import type { DmmApplicationService } from "../dmm/dmm-service.js";
 import {
   DmmConnectionKind,
@@ -28,6 +29,7 @@ import {
   type ScopeConnection,
 } from "../instruments/instrument-connection.js";
 import type { ScopeApplicationService } from "../scope/scope-service.js";
+import { AcquisitionWebSocketAdapter } from "./acquisition-websocket-adapter.js";
 import { DmmWebSocketAdapter } from "./dmm-websocket-adapter.js";
 import { ScopeWebSocketAdapter } from "./scope-websocket-adapter.js";
 import { WebSocketGateway } from "./websocket-gateway.js";
@@ -92,6 +94,7 @@ async function listen(server: HttpServer): Promise<number> {
 interface Harness {
   server: HttpServer;
   gateway: WebSocketGateway;
+  acquisitionService: AcquisitionService;
   client: WebSocket | null;
   sleep: ReturnType<typeof vi.fn>;
   port: number;
@@ -103,6 +106,7 @@ afterEach(async () => {
   if (active === null) return;
   if (active.client?.readyState === WebSocket.OPEN) active.client.close();
   await active.gateway.close();
+  active.acquisitionService.close();
   await new Promise<void>((resolve, reject) => {
     active?.server.close((error) => error === undefined ? resolve() : reject(error));
   });
@@ -131,12 +135,14 @@ async function createHarness(): Promise<Harness> {
     subscribeState: () => () => {},
     subscribeSnapshot: () => () => {},
   } as unknown as DmmApplicationService;
+  const acquisitionService = new AcquisitionService();
   const gateway = new WebSocketGateway(server, {
+    acquisitionAdapter: new AcquisitionWebSocketAdapter(acquisitionService),
     scopeAdapter: new ScopeWebSocketAdapter(scopeService),
     dmmAdapter: new DmmWebSocketAdapter(dmmService),
   });
   const port = await listen(server);
-  active = { server, gateway, client: null, sleep, port };
+  active = { server, gateway, acquisitionService, client: null, sleep, port };
   return active;
 }
 
