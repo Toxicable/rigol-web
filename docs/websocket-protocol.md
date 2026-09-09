@@ -7,31 +7,32 @@ Rigol Web uses one persistent WebSocket connection per browser tab. The protocol
 Current protocol version:
 
 ```ts
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 ```
 
-Version 9 is a hard cut. It adds authoritative per-channel DHO804 bandwidth-limit state and the typed bandwidth-limit control. Browser and server bundles must agree exactly during the hello handshake; no compatibility shim is provided.
+Version 10 is a hard cut. It adds PPK2 as an explicit supported instrument plus PPK2 lifecycle, capture-stat, decimated-live, capture start/stop and retained-viewport messages. Browser and server bundles must agree exactly during the hello handshake; no compatibility shim is provided.
 
-Version 8 added typed DHO804 configuration controls for channel coupling/probe ratio, horizontal mode, trigger sweep/coupling, and acquisition type/averages/memory depth. Version 7 added the server-owned acquisition-operation lifecycle requests/results. Those existing message values and semantics remain unchanged in version 9.
+Existing numeric message/control values remain stable.
 
-Supported SCPI instrument identities remain:
+Supported instrument identities are:
 
 ```ts
 export enum SupportedInstrument {
   Dho804 = 1,
   Dm858e = 2,
+  Ppk2 = 3,
 }
 ```
 
-Use JSON for handshake, subscriptions, lifecycle/state, controls, acquisition-operation metadata, results and errors. Binary frames remain DHO804 waveform payloads only.
+Use JSON for handshake, subscriptions, lifecycle/state, controls, operation metadata, PPK2 display summaries, results and errors. Browser binary frames remain DHO804 waveform payloads only. Raw PPK2 acquisition bytes never traverse the browser WebSocket.
 
 ## Application-level hello
 
 Immediately after `/ws` connection:
 
 ```text
-server -> ProtocolHello { protocolVersion: 9 }
-browser -> ProtocolHelloAck { protocolVersion: 9 }
+server -> ProtocolHello { protocolVersion: 10 }
+browser -> ProtocolHelloAck { protocolVersion: 10 }
 ```
 
 The server rejects application traffic before a matching acknowledgement. A version mismatch closes the connection.
@@ -79,134 +80,187 @@ export enum MessageType {
   AcquisitionOperationList = 63,
   AcquisitionOperationResult = 64,
   AcquisitionOperationListResult = 65,
+
+  Ppk2Connected = 70,
+  Ppk2Disconnected = 71,
+  Ppk2Stats = 72,
+  Ppk2Live = 73,
+  Ppk2CaptureStart = 74,
+  Ppk2CaptureStop = 75,
+  Ppk2ViewportRequest = 76,
+  Ppk2ViewportResult = 77,
 }
 ```
-
-Existing numeric values stay stable when adding messages.
 
 ## Instrument subscriptions
 
-After handshake, route bindings explicitly subscribe/unsubscribe to DHO804 or DM858E publications.
+After handshake, route bindings explicitly subscribe/unsubscribe to DHO804, DM858E or PPK2 publications.
 
-Subscriptions control browser publication fanout only. They do not start/stop physical runtimes and do not own acquisition-operation lifetime.
+Subscriptions control browser publication fanout only. They do not start/stop physical runtimes and do not own server acquisition lifetime.
 
-Scope and DMM commands require the corresponding instrument subscription. Raw SCPI requires a subscription to its explicit target.
+Scope/DMM commands require the corresponding instrument subscription. PPK2 capture start/stop/viewport requests require a PPK2 subscription.
 
-Acquisition-operation start/stop/get/list requests are application-level and do **not** require an instrument subscription.
+The generic acquisition-operation start/stop/get/list requests remain application-level and do not require an instrument subscription.
 
 ## Server-owned acquisition operations
 
-Protocol version 7 added:
+The generic acquisition-operation API remains:
 
 ```ts
-interface AcquisitionOperationStartMessage {
-  type: MessageType.AcquisitionOperationStart; // 60
-  requestId: number;
-  label: string;
+AcquisitionOperationStart // 60
+AcquisitionOperationStop  // 61
+AcquisitionOperationGet   // 62
+AcquisitionOperationList  // 63
+AcquisitionOperationResult // 64
+AcquisitionOperationListResult // 65
+```
+
+Browser initiator session ID is metadata only. Closing that socket does not stop the operation.
+
+PPK2 capture start/stop uses the same `AcquisitionOperation` result envelope but is routed through `Ppk2Service`, which also starts/stops the physical PPK2 measurement stream.
+
+## PPK2 lifecycle
+
+A subscribed browser receives one of:
+
+```ts
+interface Ppk2ConnectedMessage {
+  type: MessageType.Ppk2Connected; // 70
+  protocolVersion: number;
+  info: Ppk2Info;
 }
 
-interface AcquisitionOperationStopMessage {
-  type: MessageType.AcquisitionOperationStop; // 61
-  requestId: number;
+interface Ppk2DisconnectedMessage {
+  type: MessageType.Ppk2Disconnected; // 71
+  reason: string;
+}
+```
+
+`Ppk2Info` includes the bridge/Ppk2 source-session ID, hardware/calibration metadata where available, VDD metadata, and the fixed 10 us sample interval.
+
+PPK2 physical runtime lifetime is server-owned; route unsubscribe only stops publications to that browser.
+
+## PPK2 statistics
+
+`Ppk2Stats` (72) carries `Ppk2CaptureStats`:
+
+- current `AcquisitionOperation` or null;
+- received/lost sample counts;
+- retained sample count/duration;
+- latest sample sequence/current;
+- min/max/mean/RMS current;
+- integrated charge in microamp-hours.
+
+Statistics are derived from the server-side raw acquisition stream, not from browser display buckets.
+
+## PPK2 live display
+
+`Ppk2Live` (73) carries:
+
+```ts
+interface Ppk2LiveUpdate {
   operationId: number;
+  buckets: readonly Ppk2DisplayBucket[];
 }
+```
 
-interface AcquisitionOperationGetMessage {
-  type: MessageType.AcquisitionOperationGet; // 62
-  requestId: number;
-  operationId: number;
-}
+Each display bucket contains first/last source sequence, sample count, min/max/mean current, and logic OR/AND.
 
-interface AcquisitionOperationListMessage {
-  type: MessageType.AcquisitionOperationList; // 63
+Current server reduction is 100 raw samples per bucket (1 ms at 100 kSa/s), normally 20 buckets per publication (~20 ms).
+
+This is display data, not raw acquisition data. If a browser WebSocket is backpressured, the server may omit a PPK2 live display update for that browser. The raw acquisition continues server-side and loss accounting is unaffected.
+
+Every live update carries `operationId` so a browser never attaches stale buckets to a newer capture.
+
+## PPK2 capture commands
+
+Start:
+
+```ts
+interface Ppk2CaptureStartMessage {
+  type: MessageType.Ppk2CaptureStart; // 74
   requestId: number;
 }
 ```
 
-Success returns either `AcquisitionOperationResult` (64) or `AcquisitionOperationListResult` (65). A browser initiator records the requesting server-side WebSocket session ID as metadata only; closing that socket does not stop the operation.
+Success returns `AcquisitionOperationResult` with the new running PPK2 operation.
 
-## Scope lifecycle
-
-DHO804 lifecycle messages remain distinct. `ScopeConnected` is not published until identity is verified and complete authoritative `ScopeState` is available.
-
-The physical DHO804 is authoritative. Browser controls may update presentation optimistically, but the server reconciles controls whose physical result can affect related state.
-
-`ChannelState` includes the DHO804 bandwidth-limit setting as `ChannelBandwidthLimit.Off` or `ChannelBandwidthLimit.Mhz20`. This is intentionally model-specific: on the DHO800 family the available bandwidth limit is 20 MHz or disabled.
-
-## DHO804 controls and interactions
-
-Scope controls use the typed `ControlChange` union. Version 9 extends `ControlKind` without renumbering the original values:
+Stop:
 
 ```ts
-export enum ControlKind {
-  ChannelEnabled = 1,
-  ChannelScale = 2,
-  ChannelOffset = 3,
-  HorizontalScale = 4,
-  HorizontalPosition = 5,
-  TriggerLevel = 6,
-  TriggerType = 7,
-  TriggerSource = 8,
-  TriggerSlope = 9,
-  ChannelCoupling = 10,
-  ChannelProbeRatio = 11,
-  HorizontalMode = 12,
-  TriggerSweep = 13,
-  TriggerCoupling = 14,
-  AcquisitionType = 15,
-  AcquisitionAverages = 16,
-  AcquisitionMemoryDepth = 17,
-  ChannelBandwidthLimit = 18,
+interface Ppk2CaptureStopMessage {
+  type: MessageType.Ppk2CaptureStop; // 75
+  requestId: number;
+  operationId: number;
 }
 ```
 
-Discrete controls use `ControlSet`. Continuous interaction updates remain limited to channel scale/offset, horizontal scale/position and trigger level; disposable updates carry no request ID and the final `InteractionCommit` carries a request ID.
+Success returns `AcquisitionOperationResult` with the stopped operation.
 
-The DHO804 mapping used by the server is:
+Both require an active PPK2 publication subscription. Unsubscribing after start does not stop the capture.
 
-| Control | SCPI write | Reconciliation |
-| --- | --- | --- |
-| Channel coupling | `:CHANnel<n>:COUPling AC|DC|GND` | channel state readback |
-| Channel bandwidth limit | `:CHANnel<n>:BWLimit OFF|20M` | channel state readback |
-| Probe selector | `:CHANnel<n>:PROBe 1|10` | channel state readback |
-| Horizontal mode | `:TIMebase:MODE MAIN|ROLL|XY` | horizontal state readback |
-| Trigger sweep | `:TRIGger:SWEep AUTO|NORMal|SINGle` | trigger + run-state readback |
-| Trigger coupling | `:TRIGger:COUPling AC|DC|LFReject|HFReject` | trigger state readback |
-| Acquisition type | `:ACQuire:TYPE NORMal|PEAK|AVERages|ULTRa` | acquisition state readback |
-| Acquisition averages | `:ACQuire:AVERages <2..65536 power-of-two>` | acquisition state readback |
-| Acquisition memory | `:ACQuire:MDEPth <depth>` | acquisition state readback |
+## PPK2 retained viewport
 
-The browser presents the DHO804 bandwidth setting as **Full** (SCPI `OFF`) or **20 MHz** (SCPI `20M`). The driver queries `:CHANnel<n>:BWLimit?` as part of every authoritative channel-state read.
+Request:
 
-The browser intentionally exposes only **1× and 10×** probe selections even though the DHO804 supports additional probe ratios. If the instrument is already configured to another ratio, the UI can display that current value and offers 1×/10× as the writable choices requested for RigolWeb.
+```ts
+interface Ppk2ViewportRequestMessage {
+  type: MessageType.Ppk2ViewportRequest; // 76
+  requestId: number;
+  operationId: number;
+  firstSequence: number;
+  endSequenceExclusive: number;
+  maxBuckets: number;
+}
+```
 
-DHO804 memory-depth writes are restricted to numeric depths supported by the DHO804 and by the current number of enabled channels: up to 25 Mpts with one channel, 10 Mpts with two, and 5 Mpts with three or four. `AUTO` is not exposed because `ScopeState.memoryDepth` is an authoritative numeric depth rather than an Auto/fixed discriminated state.
+Result:
 
-DHO804 acquisition actions remain Run (1), Stop (2) and Single (3). They are instrument actions and are unrelated to the server-owned acquisition-operation lifecycle.
+```ts
+interface Ppk2ViewportResultMessage {
+  type: MessageType.Ppk2ViewportResult; // 77
+  requestId: number;
+  viewport: Ppk2Viewport;
+}
+```
 
-## DMM lifecycle and snapshots
+The server validates positive operation IDs, non-negative sequence bounds, increasing ranges and the PPK2 viewport bucket limit. The concrete service currently allows at most 2,000 viewport buckets.
 
-DM858E lifecycle remains separate from scope lifecycle. `DmmSnapshot` is current display state, not a uniquely identified physical sample event, and must not be used as a logging/statistics stream.
+Viewport data is reduced server-side from retained raw PPK2 chunks; raw arrays are not sent to the browser.
+
+## Scope lifecycle and controls
+
+DHO804 lifecycle/state/controls retain their existing values and semantics.
+
+The physical DHO804 is authoritative. Browser controls may update presentation optimistically, with later authoritative state reconciliation.
+
+DHO804 acquisition actions Run/Stop/Single remain instrument actions and are unrelated to server-owned acquisition-operation lifetime.
+
+## DMM lifecycle and controls
+
+DM858E lifecycle/state/snapshot/control messages retain their existing values and semantics.
+
+`DmmSnapshot` is current display state, not a uniquely identified physical sample event and must not be treated as a logging stream.
 
 ## Scope Sleep
 
 `ScopeSleep` remains a typed request with request ID. Success returns `CommandCompleted`; failure returns `CommandFailed`.
 
-## DMM controls
+## Measurements, raw SCPI and DHO deep capture
 
-DMM controls use `DmmControlSet` and the typed `DmmControlChange` union. Function-dependent range/rate controls carry the function under which they were created so stale writes can be rejected rather than reinterpreted.
+DHO804 measurements use typed request/result messages. Raw SCPI remains explicitly instrument-targeted to the SCPI instruments. PPK2 does not expose SCPI.
 
-## Measurements, raw SCPI and deep capture
-
-DHO804 measurements use typed request/result messages. Raw SCPI remains explicitly instrument-targeted. Deep-capture and viewport messages retain the existing DHO804-specific retained-capture model.
+DHO804 deep-capture/viewport messages retain their concrete scope model.
 
 ## Request completion
 
-Messages with request IDs receive a typed result, `CommandCompleted`, or `CommandFailed`. `AppConnection` owns request ID allocation/correlation.
+Messages with request IDs receive a typed result, `CommandCompleted`, or `CommandFailed`. `AppConnection` owns app-wide request ID allocation/correlation.
 
 ## DHO804 binary waveforms
 
-Binary waveform frames remain outside `ServerJsonMessage` and use `waveform-protocol.md`. Live waveform frames are disposable/latest-oriented under backpressure; that behavior must not be reused for loss-sensitive raw acquisition streams such as PPK2.
+Binary waveform frames remain outside `ServerJsonMessage` and use `waveform-protocol.md`.
+
+DHO804 live waveform frames are disposable/latest-oriented under backpressure. That behavior must not be reused for PPK2 raw acquisition. Only PPK2's already-decimated browser display summaries may be omitted under browser backpressure.
 
 ## JSON validation
 
@@ -218,12 +272,12 @@ Reject at least:
 - unsupported instrument identity;
 - invalid/missing request IDs;
 - invalid acquisition operation IDs;
-- malformed/non-finite controls;
+- malformed/non-finite scope/DMM controls;
 - invalid enum values;
-- unsupported DHO804 probe ratio writes;
-- unsupported DHO804 bandwidth-limit values;
-- invalid acquisition averaging/memory settings;
-- invalid viewport/measurement payloads.
+- invalid scope/DMM viewport/measurement payloads;
+- invalid PPK2 operation IDs;
+- invalid PPK2 sequence ranges;
+- invalid PPK2 viewport bucket counts.
 
 Malformed data must not become partially populated domain objects.
 
