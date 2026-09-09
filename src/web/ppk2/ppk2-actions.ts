@@ -54,7 +54,12 @@ export class Ppk2Actions {
     const store = usePpk2Store.getState();
     const operation = store.stats.operation;
     const latestSequence = store.stats.latestSequence;
-    if (operation === null || latestSequence === null || store.pendingRequest !== null) {
+    if (
+      operation === null ||
+      operation.state === AcquisitionOperationState.Running ||
+      latestSequence === null ||
+      store.pendingRequest !== null
+    ) {
       return;
     }
 
