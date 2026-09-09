@@ -16,6 +16,7 @@ import {
   readNonNegativeInteger,
   readPositiveInteger,
   readRequestId,
+  readScpiInstrument,
 } from "./websocket-validation.js";
 
 export class Ppk2WebSocketAdapter implements WebSocketInstrumentAdapter {
@@ -135,6 +136,14 @@ export class Ppk2WebSocketAdapter implements WebSocketInstrumentAdapter {
           viewport,
         });
         return true;
+      }
+
+      case MessageType.ScpiExecute: {
+        const instrument = readScpiInstrument(message.instrument);
+        if (instrument !== this.instrument) {
+          return false;
+        }
+        return false;
       }
 
       default:
