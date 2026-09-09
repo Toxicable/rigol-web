@@ -10,10 +10,9 @@ import type { Ppk2CaptureStats } from "../../shared/ppk2-types.js";
 import {
   MessageType,
   PROTOCOL_VERSION,
-  type RequestMessage,
   type ServerJsonMessage,
 } from "../../shared/websocket-protocol.js";
-import type { AppConnection } from "../app-connection.js";
+import type { AppConnection, RequestMessage } from "../app-connection.js";
 import { Ppk2Binding } from "./ppk2-binding.js";
 import { Ppk2BrowserConnectionKind, usePpk2Store } from "./ppk2-store.js";
 
