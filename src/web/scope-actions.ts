@@ -1,6 +1,12 @@
 import {
+  AcquisitionType,
   Channel,
+  ChannelBandwidthLimit,
+  ChannelCoupling,
   EdgeSlope,
+  TimebaseMode,
+  TriggerCoupling,
+  TriggerSweep,
   TriggerType,
   type MeasurementSpec,
 } from "../shared/scope-types.js";
@@ -70,6 +76,24 @@ export class ScopeActions {
     return this.setControl({ kind: ControlKind.ChannelOffset, channel, value });
   }
 
+  public setChannelCoupling(channel: Channel, value: ChannelCoupling): Promise<void> {
+    return this.setControl({ kind: ControlKind.ChannelCoupling, channel, value });
+  }
+
+  public setChannelProbeRatio(channel: Channel, value: number): Promise<void> {
+    if (value !== 1 && value !== 10) {
+      return Promise.resolve();
+    }
+    return this.setControl({ kind: ControlKind.ChannelProbeRatio, channel, value });
+  }
+
+  public setChannelBandwidthLimit(
+    channel: Channel,
+    value: ChannelBandwidthLimit,
+  ): Promise<void> {
+    return this.setControl({ kind: ControlKind.ChannelBandwidthLimit, channel, value });
+  }
+
   public setHorizontalScale(value: number): Promise<void> {
     if (!Number.isFinite(value) || value <= 0) {
       return Promise.resolve();
@@ -94,7 +118,29 @@ export class ScopeActions {
     return this.setControl({ kind: ControlKind.HorizontalPosition, value });
   }
 
-  public setTriggerType(value: TriggerType): Promise<void> {
+  public setHorizontalMode(value: TimebaseMode): Promise<void> {
+    return this.setControl({ kind: ControlKind.HorizontalMode, value });
+  }
+
+  public setAcquisitionType(value: AcquisitionType): Promise<void> {
+    return this.setControl({ kind: ControlKind.AcquisitionType, value });
+  }
+
+  public setAcquisitionAverages(value: number): Promise<void> {
+    if (!Number.isSafeInteger(value) || value < 2 || value > 65_536 || (value & (value - 1)) !== 0) {
+      return Promise.resolve();
+    }
+    return this.setControl({ kind: ControlKind.AcquisitionAverages, value });
+  }
+
+  public setAcquisitionMemoryDepth(value: number): Promise<void> {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      return Promise.resolve();
+    }
+    return this.setControl({ kind: ControlKind.AcquisitionMemoryDepth, value });
+  }
+
+  public setTriggerType(value: TriggerType.Edge): Promise<void> {
     return this.setControl({ kind: ControlKind.TriggerType, value });
   }
 
@@ -111,6 +157,14 @@ export class ScopeActions {
       return Promise.resolve();
     }
     return this.setControl({ kind: ControlKind.TriggerLevel, value });
+  }
+
+  public setTriggerSweep(value: TriggerSweep): Promise<void> {
+    return this.setControl({ kind: ControlKind.TriggerSweep, value });
+  }
+
+  public setTriggerCoupling(value: TriggerCoupling): Promise<void> {
+    return this.setControl({ kind: ControlKind.TriggerCoupling, value });
   }
 
   public previewHorizontalPosition(value: number): void {

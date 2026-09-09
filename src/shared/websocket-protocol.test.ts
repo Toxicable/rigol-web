@@ -11,8 +11,8 @@ import {
 } from "./websocket-protocol";
 
 describe("websocket protocol constants", () => {
-  it("uses the acquisition-operation protocol version", () => {
-    expect(PROTOCOL_VERSION).toBe(7);
+  it("uses the DHO804 bandwidth-limit protocol version", () => {
+    expect(PROTOCOL_VERSION).toBe(9);
   });
 
   it("keeps existing message type values stable and assigns instrument ranges", () => {
@@ -74,7 +74,16 @@ describe("websocket protocol constants", () => {
       ControlKind.TriggerType,
       ControlKind.TriggerSource,
       ControlKind.TriggerSlope,
-    ]).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+      ControlKind.ChannelCoupling,
+      ControlKind.ChannelProbeRatio,
+      ControlKind.HorizontalMode,
+      ControlKind.TriggerSweep,
+      ControlKind.TriggerCoupling,
+      ControlKind.AcquisitionType,
+      ControlKind.AcquisitionAverages,
+      ControlKind.AcquisitionMemoryDepth,
+      ControlKind.ChannelBandwidthLimit,
+    ]).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
     expect([
       DmmControlKind.Function,
       DmmControlKind.Range,

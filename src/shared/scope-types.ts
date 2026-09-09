@@ -18,6 +18,11 @@ export enum ChannelCoupling {
   Ground = 3,
 }
 
+export enum ChannelBandwidthLimit {
+  Off = 1,
+  Mhz20 = 2,
+}
+
 export enum ChannelUnit {
   Volts = 1,
   Amps = 2,
@@ -29,6 +34,7 @@ export interface ChannelState {
   channel: Channel;
   enabled: boolean;
   coupling: ChannelCoupling;
+  bandwidthLimit: ChannelBandwidthLimit;
   unit: ChannelUnit;
   scale: number;
   offset: number;

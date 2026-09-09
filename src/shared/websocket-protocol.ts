@@ -7,17 +7,23 @@ import type {
 } from "./dmm-types.js";
 import type { SupportedInstrument } from "./instrument-types.js";
 import type {
+  AcquisitionType,
   Channel,
+  ChannelBandwidthLimit,
+  ChannelCoupling,
   ChannelUnit,
   EdgeSlope,
   MeasurementSpec,
   MeasurementValue,
   ScopeInfo,
   ScopeState,
+  TimebaseMode,
+  TriggerCoupling,
+  TriggerSweep,
   TriggerType,
 } from "./scope-types.js";
 
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 9;
 
 export type NonEmptyArray<T> = [T, ...T[]];
 
@@ -84,6 +90,15 @@ export enum ControlKind {
   TriggerType = 7,
   TriggerSource = 8,
   TriggerSlope = 9,
+  ChannelCoupling = 10,
+  ChannelProbeRatio = 11,
+  HorizontalMode = 12,
+  TriggerSweep = 13,
+  TriggerCoupling = 14,
+  AcquisitionType = 15,
+  AcquisitionAverages = 16,
+  AcquisitionMemoryDepth = 17,
+  ChannelBandwidthLimit = 18,
 }
 
 export type ControlChange =
@@ -103,12 +118,31 @@ export type ControlChange =
       value: number;
     }
   | {
+      kind: ControlKind.ChannelCoupling;
+      channel: Channel;
+      value: ChannelCoupling;
+    }
+  | {
+      kind: ControlKind.ChannelProbeRatio;
+      channel: Channel;
+      value: number;
+    }
+  | {
+      kind: ControlKind.ChannelBandwidthLimit;
+      channel: Channel;
+      value: ChannelBandwidthLimit;
+    }
+  | {
       kind: ControlKind.HorizontalScale;
       value: number;
     }
   | {
       kind: ControlKind.HorizontalPosition;
       value: number;
+    }
+  | {
+      kind: ControlKind.HorizontalMode;
+      value: TimebaseMode;
     }
   | {
       kind: ControlKind.TriggerLevel;
@@ -125,6 +159,26 @@ export type ControlChange =
   | {
       kind: ControlKind.TriggerSlope;
       value: EdgeSlope;
+    }
+  | {
+      kind: ControlKind.TriggerSweep;
+      value: TriggerSweep;
+    }
+  | {
+      kind: ControlKind.TriggerCoupling;
+      value: TriggerCoupling;
+    }
+  | {
+      kind: ControlKind.AcquisitionType;
+      value: AcquisitionType;
+    }
+  | {
+      kind: ControlKind.AcquisitionAverages;
+      value: number;
+    }
+  | {
+      kind: ControlKind.AcquisitionMemoryDepth;
+      value: number;
     };
 
 export type InteractiveControl =

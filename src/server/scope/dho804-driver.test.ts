@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   AcquisitionType,
   Channel,
+  ChannelBandwidthLimit,
   ChannelCoupling,
   ChannelUnit,
   EdgeSlope,
@@ -69,10 +70,12 @@ function respondChannel(
   enabled: string,
   coupling: string,
   unit: string,
+  bandwidthLimit = "OFF",
 ): void {
   const prefix = `:CHANnel${channel}`;
   respond(transport, `${prefix}:DISPlay?`, enabled);
   respond(transport, `${prefix}:COUPling?`, coupling);
+  respond(transport, `${prefix}:BWLimit?`, bandwidthLimit);
   respond(transport, `${prefix}:UNITs?`, unit);
   respond(transport, `${prefix}:SCALe?`, `${channel}E-1`);
   respond(transport, `${prefix}:OFFSet?`, `-${channel}E-2`);
@@ -184,7 +187,7 @@ describe("Dho804Driver", () => {
 
   it("builds a complete scope snapshot from focused state reads", async () => {
     const transport = new ScriptedTransport();
-    respondChannel(transport, Channel.Ch1, "1", "DC", "VOLT");
+    respondChannel(transport, Channel.Ch1, "1", "DC", "VOLT", "20M");
     respondChannel(transport, Channel.Ch2, "0", "AC", "AMP");
     respondChannel(transport, Channel.Ch3, "1", "GND", "WATT");
     respondChannel(transport, Channel.Ch4, "0", "DC", "UNKN");
@@ -205,6 +208,7 @@ describe("Dho804Driver", () => {
       channel: Channel.Ch1,
       enabled: true,
       coupling: ChannelCoupling.Dc,
+      bandwidthLimit: ChannelBandwidthLimit.Mhz20,
       unit: ChannelUnit.Volts,
       scale: 0.1,
       offset: -0.01,
