@@ -32,7 +32,25 @@ import type { ScopeApplicationService } from "../scope/scope-service.js";
 import { AcquisitionWebSocketAdapter } from "./acquisition-websocket-adapter.js";
 import { DmmWebSocketAdapter } from "./dmm-websocket-adapter.js";
 import { ScopeWebSocketAdapter } from "./scope-websocket-adapter.js";
+import type {
+  WebSocketAdapterHost,
+  WebSocketInstrumentAdapter,
+  WebSocketSession,
+} from "./websocket-adapter.js";
 import { WebSocketGateway } from "./websocket-gateway.js";
+
+class NoopPpk2Adapter implements WebSocketInstrumentAdapter {
+  public readonly instrument = SupportedInstrument.Ppk2;
+  public attach(_host: WebSocketAdapterHost): void {}
+  public detach(): void {}
+  public async tryDispatch(
+    _session: WebSocketSession,
+    _message: Record<string, unknown>,
+  ): Promise<boolean> { return false; }
+  public sendInitialPublications(_session: WebSocketSession): void {}
+  public sessionUnsubscribed(_session: WebSocketSession): void {}
+  public transportAvailable(_session: WebSocketSession): void {}
+}
 
 const scopeInfo: ScopeInfo = {
   manufacturer: "RIGOL TECHNOLOGIES",
@@ -140,6 +158,7 @@ async function createHarness(): Promise<Harness> {
     acquisitionAdapter: new AcquisitionWebSocketAdapter(acquisitionService),
     scopeAdapter: new ScopeWebSocketAdapter(scopeService),
     dmmAdapter: new DmmWebSocketAdapter(dmmService),
+    ppk2Adapter: new NoopPpk2Adapter(),
   });
   const port = await listen(server);
   active = { server, gateway, acquisitionService, client: null, sleep, port };
