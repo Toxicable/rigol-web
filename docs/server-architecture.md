@@ -2,9 +2,7 @@
 
 ## Purpose
 
-The Rigol Web server coordinates two fixed instruments, the DHO804 and DM858E, plus browser clients over one persistent WebSocket per browser tab.
-
-The design remains concrete. Shared code exists only where both supported instruments genuinely need the same behaviour. Rigol Web is not a generic instrument framework.
+The Rigol Web server coordinates two fixed SCPI instruments, browser clients, and server-owned long-running acquisition operations. It is deliberately concrete; shared infrastructure is kept only where there is real overlap.
 
 ## Top-level structure
 
@@ -14,299 +12,195 @@ Browser WebSocket
       v
 WebSocketGateway
 (session/protocol broker)
-   /                  \
-  v                    v
-ScopeWebSocketAdapter  DmmWebSocketAdapter
-  |                    |
-  v                    v
-ScopeService          DmmService
-  |                    |
-  v                    v
-ScopeRuntime          DmmRuntime
-   \                  /
-    InstrumentRegistry
-  |                    |
-Dho804Driver         Dm858eDriver
-   \                  /
-    ScpiScheduler
-          |
-    ScpiTransport
+   /                 |                  \
+  v                  v                   v
+Acquisition          Scope               DMM
+WebSocketAdapter     WebSocketAdapter    WebSocketAdapter
+  |                  |                   |
+  v                  v                   v
+AcquisitionService   ScopeService        DmmService
+                     |                   |
+                     v                   v
+                     ScopeRuntime        DmmRuntime
+                       \                 /
+                        InstrumentRegistry
 ```
 
-Each instrument gets its **own** scheduler and transport instance. Only their implementations are shared.
+The acquisition application service is intentionally outside `InstrumentRegistry`. Operation lifetime is not a physical-instrument runtime lifetime or browser publication subscription.
 
-## Server-owned runtime lifetime
+## Server-owned physical runtime lifetime
 
-The server process owns physical instrument lifetime.
+`InstrumentRegistry` owns only process-lifetime start/stop for the exactly two configured physical runtimes:
 
-`InstrumentRegistry` is the small manager for the exactly two known runtimes. It owns only process-lifetime transitions:
+- DHO804 scope runtime;
+- DM858E DMM runtime.
 
-- start both runtimes at server startup;
-- keep start/stop operations idempotent;
-- serialize a stop behind an in-flight start;
-- stop both runtimes at server shutdown;
-- attempt to stop both even if one stop fails;
-- leave a failed transition retryable.
+Both start at server startup and remain active across browser navigation, last unsubscribe, browser disconnect and browser reconnect. Server shutdown stops both.
 
-It does not know browser sessions, publication subscriptions, endpoint selection or DMM snapshot replay.
+`ScopeRuntime` and `DmmRuntime` retain their own physical reconnect/recovery behaviour while running.
 
-`ScopeRuntime` and `DmmRuntime` already maintain their own reconnect loops while running. A transport failure therefore reconnects independently of browser presence.
+## Server-owned acquisition lifetime
+
+`AcquisitionService` owns long-running acquisition/recording metadata and lifecycle:
+
+- positive operation ID;
+- label and initiator metadata;
+- start/stop/failure timestamps and state;
+- monotonic received-item/source-loss progress;
+- bounded retention of terminal operation metadata.
+
+A browser-started operation is not session-owned merely because its initiator records a browser session ID. Closing that browser socket does not stop the operation. Explicit stop, explicit failure or server shutdown ends it.
+
+The service does not define a universal sample representation. Concrete producers own their payload/sample semantics.
+
+## Bounded acquisition storage
+
+`BoundedAcquisitionChunkStore<T>` is the reusable retention primitive for loss-sensitive streaming producers.
+
+The constructor requires an explicit byte capacity. Each appended source-specific chunk declares first sequence, item count and byte length. The store:
+
+- rejects backward/overlapping sequence ranges;
+- records producer/source sequence gaps as `sourceLostItems`;
+- evicts oldest complete chunks to enforce the byte cap;
+- records retention eviction separately from producer loss;
+- supports sequence-range reads;
+- exposes stored chunks through an export boundary.
+
+No default PPK2 retention budget is chosen in Stream G. Stream H must pick a concrete byte budget from the desired retained duration and memory cost.
 
 ## WebSocket session/protocol broker
 
-`WebSocketGateway` is the common browser transport/session broker. It does not own DHO804 or DM858E application semantics or physical runtime lifetime.
+`WebSocketGateway` owns common browser transport/session behaviour:
 
-It owns:
-
-- accept/close of `/ws` sockets;
+- `/ws` accept/close;
 - protocol hello/version handshake;
 - browser session identity;
-- desired instrument publication subscriptions;
-- common JSON and binary send framing;
+- instrument publication subscriptions;
+- common JSON/binary sends;
 - common request completion/failure framing;
-- common socket buffered-amount/backpressure threshold;
-- release of adapter session/publication state on route unsubscribe or socket close.
+- socket buffered-byte/backpressure state;
+- release of instrument adapter session/publication state on unsubscribe/close.
 
-Browser subscribe/unsubscribe is local publication state only. It never calls `InstrumentRegistry` and never starts or stops a physical runtime.
+It does not own scope, DMM or acquisition application semantics.
 
-The broker does **not** parse scope controls, DMM controls, measurements, deep-capture requests or waveform headers. It does not call instrument application-service methods directly.
+After the handshake, app-level acquisition requests are offered first to `AcquisitionWebSocketAdapter`, then instrument-specific requests are routed through the two instrument adapters. Acquisition operations do not require an instrument subscription.
 
-`websocket-validation.ts` contains only transport-common structural readers such as request IDs and supported-instrument discriminants.
+## AcquisitionWebSocketAdapter
 
-## Explicit instrument WebSocket adapters
+The fixed application-level adapter maps protocol-version-7 acquisition requests to `AcquisitionService`:
 
-The server has exactly two explicit adapters. They are fixed composition, not a plugin registry.
+- start;
+- stop;
+- get;
+- list.
 
-### ScopeWebSocketAdapter
+It validates request/operation IDs and labels, records a browser initiator session ID on start, and returns typed operation results.
 
-Owns browser-wire mapping specific to the DHO804:
+It deliberately has no unsubscribe/disconnect cleanup hook because those events do not own acquisition lifetime.
 
-- scope request validation and dispatch;
-- scope connection/state lifecycle projection;
-- controls and interactive controls;
-- acquisition actions and Sleep;
-- measurement requests/results;
-- DHO804-targeted raw SCPI;
-- deep-capture request/result mapping;
-- waveform viewport validation and supersession;
-- binary waveform header validation;
-- live-waveform latest-frame replacement/backpressure state;
-- browser-session ownership and cleanup of long-lived scope interactions.
+## ScopeWebSocketAdapter
 
-Waveform binary behaviour therefore stays scope-specific rather than becoming a generic broker concern.
+Owns DHO804 browser-wire mapping:
 
-Long-lived interactive controls use one narrow per-session lease. The owning session holds live waveform acquisition paused until commit, unsubscribe or disconnect. Another browser cannot commit or resume that interaction. Atomic controls remain globally accepted; the last accepted physical write wins.
+- scope lifecycle/state publications;
+- controls and interactions;
+- run/stop/single and Sleep;
+- measurements and raw SCPI;
+- deep capture/viewport requests;
+- binary waveform delivery and scope-specific backpressure;
+- browser-session ownership of long-lived scope interactions.
 
-### DmmWebSocketAdapter
+DHO live waveform data remains disposable/latest-oriented and is not automatically an acquisition recording.
 
-Owns browser-wire mapping specific to the DM858E:
+## DmmWebSocketAdapter
 
-- DMM control validation and dispatch;
-- DMM connection/state lifecycle projection;
-- latest display-snapshot projection;
-- direct current-snapshot replay to a newly subscribing session;
-- DM858E-targeted raw SCPI;
-- in-flight connection-revision validation.
+Owns DM858E browser-wire mapping:
 
-Snapshot replay is presentation/session behaviour. It does not notify the physical runtime and does not rebroadcast the retained snapshot to already subscribed sessions.
+- DMM lifecycle/state/current-snapshot publications;
+- DMM controls;
+- DM858E raw SCPI;
+- replay of the retained display snapshot to a new subscriber.
 
-It has no waveform/sample transport surface.
-
-The tiny `WebSocketInstrumentAdapter` / `WebSocketAdapterHost` contract exists only to connect these two fixed adapters to common WebSocket session delivery. It is not an instrument plugin API and does not abstract instrument capabilities.
+DM858E latest snapshots do not have unique physical sample identity and are not a logging stream.
 
 ## Shared SCPI infrastructure
 
-### ScpiTransport
+Each physical instrument has its own `ScpiScheduler` and `ScpiTransport` instance.
 
-`ScpiTransport` owns one TCP socket and raw SCPI framing for one physical instrument session.
-
-Responsibilities:
-
-- connect/disconnect;
-- low-latency socket options;
-- write command bytes;
-- read complete text responses;
-- read complete IEEE/TMC binary blocks;
-- report socket, framing and timeout failures.
-
-It contains no instrument or browser semantics.
-
-### ScpiScheduler
-
-`ScpiScheduler` is the sole normal owner of serialized access to its `ScpiTransport`.
-
-Responsibilities:
-
-- one complete SCPI transaction at a time;
-- P0-P4 priority scheduling;
-- query/response ownership;
-- binary-transfer atomicity;
-- coalescing/supersession where callers provide keys;
-- timing/latency instrumentation;
-- rejecting pending work when the transport becomes unusable.
+`ScpiTransport` owns one TCP socket and text/binary framing. `ScpiScheduler` owns serialized physical access, priorities, transaction ownership, supersession/coalescing where explicitly requested, and failure of pending work when the transport becomes unusable.
 
 DHO804 and DM858E do not share a scheduler queue.
-
-### SCPI program-message classification
-
-`src/server/scpi/scpi-program-message.ts` owns generic raw-SCPI program-message rules used by both drivers. Drivers do not maintain independent raw-SCPI query scanners.
 
 ## DHO804 path
 
 ```text
 WebSocketGateway
-   |
-ScopeWebSocketAdapter
-   |
-ScopeService
-   |
-ScopeController
-   |
-ScopeRuntime session
-   |
-Dho804Driver
-   |
-ScpiScheduler
-   |
-ScpiTransport
+ -> ScopeWebSocketAdapter
+ -> ScopeService
+ -> ScopeController / waveform services
+ -> ScopeRuntime
+ -> Dho804Driver
+ -> ScpiScheduler
+ -> ScpiTransport
 ```
 
-`Dho804Driver` owns exact DHO804 SCPI commands, response parsing, waveform native representation and device-specific quirks.
-
-`ScopeStateStore` owns complete cached connected `ScopeState`. `ScopeController` owns application-level scope control semantics. `ScopePoller` validates important physical state. Live/deep waveform services remain DHO804-specific.
-
-`ScopeService` is the application boundary for scope controls, acquisition actions, measurements, raw SCPI, waveform/deep-capture operations and DHO804 Sleep. It exposes data-only connection/state/waveform publications.
-
-DHO804 Sleep follows:
-
-```text
-browser ScopeSleep request
-  -> ScopeWebSocketAdapter
-  -> ScopeService.sleep()
-  -> ScopePowerLifecycle
-       -> ScopeRuntime.suspendForSleep()
-       -> Dho804PowerControl.sleep()
-       -> TCP offline/online wake monitor
-       -> ScopeRuntime.resumeAfterSleep()
-```
-
-`ScopeRuntime` is started at server startup and remains process-owned. Sleep is an instrument-specific temporary physical-session suspension; it does not change process ownership of the runtime.
+`ScopeService` is the server application boundary for scope controls, acquisition actions, measurements, raw SCPI, waveform/deep-capture operations and Sleep.
 
 ## DM858E path
 
 ```text
 WebSocketGateway
-   |
-DmmWebSocketAdapter
-   |
-DmmService
-   |
-DmmRuntime session
-   |
-Dm858eDriver
-   |
-ScpiScheduler
-   |
-ScpiTransport
+ -> DmmWebSocketAdapter
+ -> DmmService
+ -> DmmRuntime
+ -> Dm858eDriver
+ -> ScpiScheduler
+ -> ScpiTransport
 ```
 
-`Dm858eDriver` owns exact DM858E SCPI commands/parsing, model validation, function/range/rate mappings, latest-reading snapshot parsing and immediate physical-function validation before function-dependent writes.
-
-`DmmStateStore` owns authoritative cached DMM configuration state. `DmmPoller` performs configuration reconciliation and latest display-snapshot polling.
-
-The display snapshot is not a sample stream. It carries no sequence/sample identity and must not be used for sample statistics.
-
-`DmmService` owns one logical mutation queue, authoritative post-mutation readback, stale function-dependent control rejection, and current display-snapshot invalidation/deduplication. `DmmRuntime` owns fresh-session connection/composition/recovery. `DmmWebSocketAdapter` owns replay of the retained current snapshot to a new browser subscriber.
+`DmmService` owns mutation serialization, authoritative readback, stale function-dependent write rejection and current display-snapshot invalidation/deduplication.
 
 ## Protocol compatibility
 
-WebSocket protocol version 6 uses the application-level handshake:
+WebSocket protocol version **7** uses the application-level hello:
 
 ```text
-server: ProtocolHello(PROTOCOL_VERSION)
-client: ProtocolHelloAck(PROTOCOL_VERSION)
+server: ProtocolHello(7)
+client: ProtocolHelloAck(7)
 ```
 
-Stream D changes internal lifetime ownership only. It does not change protocol version or add a compatibility path.
+Version 7 is a hard cut adding acquisition-operation start/stop/get/list request/result messages. No compatibility shim is provided.
 
-After handshake, explicit browser subscriptions decide which instrument publications a session receives. They do not affect physical runtime lifetime.
-
-## Raw SCPI
-
-Raw SCPI targeting is explicit:
-
-```text
-ScpiExecute(instrument, command)
-```
-
-The broker delegates the message to the adapter matching the target instrument. The adapter routes it through that instrument's application service and normal scheduler path. There is no implicit DHO804 target and no direct socket bypass.
-
-## Waveform representation and backpressure
-
-DHO804 waveform samples remain outside React/Zustand and outside common WebSocket semantics.
-
-`ScopeWebSocketAdapter` owns:
-
-- validation of the RigolWeb binary waveform frame header;
-- latest-frame-per-channel replacement under browser backpressure;
-- deep viewport response validation;
-- viewport request supersession.
-
-The common broker owns only socket delivery and the common buffered-byte threshold.
-
-## HTTP boundary
-
-HTTP owns frontend/static serving and simple HTTP-specific infrastructure such as `/health`. Instrument application operations use the WebSocket/application-service path.
+Instrument subscribe/unsubscribe remains publication state only and does not affect physical runtime or acquisition-operation lifetime.
 
 ## Failure philosophy
 
-Rigol Web is a local bench tool, not a high-availability service.
+Prefer deterministic visible failure over hidden fallback.
 
-For either instrument, if socket/framing integrity is no longer trustworthy:
+For uncertain SCPI socket/framing integrity, fail affected work, reject stale queued work, close the uncertain session and recover through the already-running physical runtime without replaying stale commands.
 
-- fail current work clearly;
-- stop/reject stale queued work;
-- close the uncertain transport;
-- create a fresh physical session while the server-owned runtime remains active;
-- never replay stale commands after reconnect.
-
-Physical recovery does not depend on browser subscriptions.
-
-Do not add persistent queues, circuit breakers or per-command retry policies without measured need.
+Loss-sensitive streaming producers must preserve/report sequence loss rather than silently using DHO live-waveform latest-frame replacement semantics.
 
 ## Dependency direction
 
 ```text
-server composition / runtime manager
-        |
-        +--------------------------+
-        |                          |
-        v                          v
-physical runtimes        WebSocket session/protocol broker
-                                   |
-                                   v
-                         instrument WebSocket adapter
-                                   |
-                                   v
-                         instrument application service
-                                   |
-                                   v
-                         instrument runtime/driver
-                                   |
-                                   v
-                   shared SCPI scheduler/program-message rules
-                                   |
-                                   v
-                         shared TCP/framing transport
+server composition
+  |-- InstrumentRegistry -> ScopeRuntime / DmmRuntime
+  |-- AcquisitionService
+  `-- WebSocketGateway
+        |-- AcquisitionWebSocketAdapter -> AcquisitionService
+        |-- ScopeWebSocketAdapter -> ScopeService
+        `-- DmmWebSocketAdapter -> DmmService
 ```
 
-Ordinary constructor dependencies and explicit callbacks are sufficient. Do not add a generic event bus, DI framework or instrument plugin system.
+Ordinary constructors and explicit callbacks are sufficient. Do not add a generic event bus, DI framework or plugin manager.
 
 ## Source layout
 
 ```text
 src/
 |- shared/
+|  |- acquisition-types.ts
 |  |- instrument-types.ts
 |  |- scope-types.ts
 |  |- dmm-types.ts
@@ -315,17 +209,18 @@ src/
 |
 |- server/
 |  |- server.ts
-|  |- scope-runtime.ts
+|  |- acquisition/
+|  |  |- acquisition-service.ts
+|  |  `- bounded-chunk-store.ts
 |  |- instruments/
-|  |  `- instrument-registry.ts
-|  |- scpi/
 |  |- scope/
 |  |- dmm/
+|  |- scpi/
 |  |- waveform/
 |  `- websocket/
 |     |- websocket-gateway.ts
 |     |- websocket-adapter.ts
-|     |- websocket-validation.ts
+|     |- acquisition-websocket-adapter.ts
 |     |- scope-websocket-adapter.ts
 |     `- dmm-websocket-adapter.ts
 |
@@ -333,13 +228,3 @@ src/
 ```
 
 Tests live beside the files they exercise.
-
-## Key boundaries
-
-- `InstrumentRegistry` owns process-level start/stop of the two known physical runtimes only.
-- `WebSocketGateway` owns common browser transport/session/protocol and publication subscription concerns only.
-- `ScopeWebSocketAdapter` owns DHO804 wire mapping, waveform browser delivery and scope interaction session ownership.
-- `DmmWebSocketAdapter` owns DM858E wire mapping and per-subscriber current-snapshot replay.
-- `ScopeService` / `DmmService` own application semantics and do not depend on the WebSocket gateway/adapter layer.
-- `Dho804Driver` / `Dm858eDriver` own device protocol semantics.
-- `ScpiScheduler` owns serialized transport access for one instrument session.
