@@ -7,6 +7,12 @@ import type {
 } from "./dmm-types.js";
 import type { SupportedInstrument } from "./instrument-types.js";
 import type {
+  Ppk2CaptureStats,
+  Ppk2Info,
+  Ppk2LiveUpdate,
+  Ppk2Viewport,
+} from "./ppk2-types.js";
+import type {
   AcquisitionType,
   Channel,
   ChannelBandwidthLimit,
@@ -23,7 +29,7 @@ import type {
   TriggerType,
 } from "./scope-types.js";
 
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 
 export type NonEmptyArray<T> = [T, ...T[]];
 
@@ -67,6 +73,15 @@ export enum MessageType {
   AcquisitionOperationList = 63,
   AcquisitionOperationResult = 64,
   AcquisitionOperationListResult = 65,
+
+  Ppk2Connected = 70,
+  Ppk2Disconnected = 71,
+  Ppk2Stats = 72,
+  Ppk2Live = 73,
+  Ppk2CaptureStart = 74,
+  Ppk2CaptureStop = 75,
+  Ppk2ViewportRequest = 76,
+  Ppk2ViewportResult = 77,
 }
 
 export enum AcquisitionAction {
@@ -389,6 +404,55 @@ export interface AcquisitionOperationListResultMessage {
   operations: AcquisitionOperation[];
 }
 
+export interface Ppk2ConnectedMessage {
+  type: MessageType.Ppk2Connected;
+  protocolVersion: number;
+  info: Ppk2Info;
+}
+
+export interface Ppk2DisconnectedMessage {
+  type: MessageType.Ppk2Disconnected;
+  reason: string;
+}
+
+export type Ppk2LifecycleMessage = Ppk2ConnectedMessage | Ppk2DisconnectedMessage;
+
+export interface Ppk2StatsMessage {
+  type: MessageType.Ppk2Stats;
+  stats: Ppk2CaptureStats;
+}
+
+export interface Ppk2LiveMessage {
+  type: MessageType.Ppk2Live;
+  update: Ppk2LiveUpdate;
+}
+
+export interface Ppk2CaptureStartMessage {
+  type: MessageType.Ppk2CaptureStart;
+  requestId: number;
+}
+
+export interface Ppk2CaptureStopMessage {
+  type: MessageType.Ppk2CaptureStop;
+  requestId: number;
+  operationId: number;
+}
+
+export interface Ppk2ViewportRequestMessage {
+  type: MessageType.Ppk2ViewportRequest;
+  requestId: number;
+  operationId: number;
+  firstSequence: number;
+  endSequenceExclusive: number;
+  maxBuckets: number;
+}
+
+export interface Ppk2ViewportResultMessage {
+  type: MessageType.Ppk2ViewportResult;
+  requestId: number;
+  viewport: Ppk2Viewport;
+}
+
 export interface CommandCompletedMessage {
   type: MessageType.CommandCompleted;
   requestId: number;
@@ -420,15 +484,22 @@ export type ClientMessage =
   | AcquisitionOperationStartMessage
   | AcquisitionOperationStopMessage
   | AcquisitionOperationGetMessage
-  | AcquisitionOperationListMessage;
+  | AcquisitionOperationListMessage
+  | Ppk2CaptureStartMessage
+  | Ppk2CaptureStopMessage
+  | Ppk2ViewportRequestMessage;
 
 export type ServerJsonMessage =
   | ProtocolHelloMessage
   | ScopeLifecycleMessage
   | DmmLifecycleMessage
+  | Ppk2LifecycleMessage
+  | Ppk2StatsMessage
+  | Ppk2LiveMessage
   | CommandResult
   | ScpiResultMessage
   | MeasurementResultMessage
   | DeepCaptureReadyMessage
   | AcquisitionOperationResultMessage
-  | AcquisitionOperationListResultMessage;
+  | AcquisitionOperationListResultMessage
+  | Ppk2ViewportResultMessage;
