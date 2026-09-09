@@ -56,6 +56,7 @@ export function readInstrument(value: unknown): SupportedInstrument {
   switch (value) {
     case SupportedInstrument.Dho804:
     case SupportedInstrument.Dm858e:
+    case SupportedInstrument.Ppk2:
       return value;
     default:
       throw new Error("Unsupported instrument");
