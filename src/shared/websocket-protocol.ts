@@ -9,6 +9,7 @@ import type { SupportedInstrument } from "./instrument-types.js";
 import type {
   AcquisitionType,
   Channel,
+  ChannelBandwidthLimit,
   ChannelCoupling,
   ChannelUnit,
   EdgeSlope,
@@ -22,7 +23,7 @@ import type {
   TriggerType,
 } from "./scope-types.js";
 
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 
 export type NonEmptyArray<T> = [T, ...T[]];
 
@@ -97,6 +98,7 @@ export enum ControlKind {
   AcquisitionType = 15,
   AcquisitionAverages = 16,
   AcquisitionMemoryDepth = 17,
+  ChannelBandwidthLimit = 18,
 }
 
 export type ControlChange =
@@ -124,6 +126,11 @@ export type ControlChange =
       kind: ControlKind.ChannelProbeRatio;
       channel: Channel;
       value: number;
+    }
+  | {
+      kind: ControlKind.ChannelBandwidthLimit;
+      channel: Channel;
+      value: ChannelBandwidthLimit;
     }
   | {
       kind: ControlKind.HorizontalScale;
