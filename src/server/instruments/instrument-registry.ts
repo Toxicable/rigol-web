@@ -15,6 +15,7 @@ interface InstrumentEntry {
 export interface InstrumentRegistrations {
   dho804: InstrumentRuntime;
   dm858e: InstrumentRuntime;
+  ppk2: InstrumentRuntime;
 }
 
 function debugLifecycle(
@@ -25,7 +26,7 @@ function debugLifecycle(
   if (!isRigolScpiLoggingEnabled()) {
     return;
   }
-  console.debug(`[SCPI] instrument ${event}`, {
+  console.debug(`[runtime] instrument ${event}`, {
     instrument,
     running: entry.running,
   });
@@ -38,6 +39,7 @@ export class InstrumentRegistry {
     this.entries = new Map([
       [SupportedInstrument.Dho804, this.createEntry(registrations.dho804)],
       [SupportedInstrument.Dm858e, this.createEntry(registrations.dm858e)],
+      [SupportedInstrument.Ppk2, this.createEntry(registrations.ppk2)],
     ]);
   }
 
