@@ -4,8 +4,13 @@ import { usePpk2Store } from "./ppk2-store.js";
 
 const HISTORY_BUCKETS = 1_200;
 
+export type Ppk2ActionBinding = Pick<
+  Ppk2Binding,
+  "startCapture" | "stopCapture" | "requestViewport"
+>;
+
 export class Ppk2Actions {
-  public constructor(private readonly binding: Ppk2Binding) {}
+  public constructor(private readonly binding: Ppk2ActionBinding) {}
 
   public async startCapture(): Promise<void> {
     const store = usePpk2Store.getState();
