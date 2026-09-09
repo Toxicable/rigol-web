@@ -1,6 +1,6 @@
 import { useState, type ChangeEvent, type KeyboardEvent } from "react";
 
-import type { SupportedInstrument } from "../../shared/instrument-types.js";
+import type { ScpiInstrument } from "../../shared/instrument-types.js";
 import type { AppConnection } from "../app-connection.js";
 
 interface ScpiEntry {
@@ -12,7 +12,7 @@ interface ScpiEntry {
 
 interface ScpiConsoleProps {
   client: AppConnection;
-  instrument: SupportedInstrument;
+  instrument: ScpiInstrument;
   placeholder?: string;
 }
 
