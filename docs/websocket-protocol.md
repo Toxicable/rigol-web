@@ -7,12 +7,12 @@ Rigol Web uses one persistent WebSocket connection per browser tab. The protocol
 Current protocol version:
 
 ```ts
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 ```
 
-Version 8 is a hard cut. It adds typed DHO804 configuration controls for state that RigolWeb already reads authoritatively: channel coupling/probe ratio, horizontal mode, trigger sweep/coupling, and acquisition type/averages/memory depth. Browser and server bundles must agree exactly during the hello handshake; no compatibility shim is provided.
+Version 9 is a hard cut. It adds authoritative per-channel DHO804 bandwidth-limit state and the typed bandwidth-limit control. Browser and server bundles must agree exactly during the hello handshake; no compatibility shim is provided.
 
-Version 7 added the server-owned acquisition-operation lifecycle requests/results. Those message values and semantics remain unchanged in version 8.
+Version 8 added typed DHO804 configuration controls for channel coupling/probe ratio, horizontal mode, trigger sweep/coupling, and acquisition type/averages/memory depth. Version 7 added the server-owned acquisition-operation lifecycle requests/results. Those existing message values and semantics remain unchanged in version 9.
 
 Supported SCPI instrument identities remain:
 
@@ -30,8 +30,8 @@ Use JSON for handshake, subscriptions, lifecycle/state, controls, acquisition-op
 Immediately after `/ws` connection:
 
 ```text
-server -> ProtocolHello { protocolVersion: 8 }
-browser -> ProtocolHelloAck { protocolVersion: 8 }
+server -> ProtocolHello { protocolVersion: 9 }
+browser -> ProtocolHelloAck { protocolVersion: 9 }
 ```
 
 The server rejects application traffic before a matching acknowledgement. A version mismatch closes the connection.
@@ -131,9 +131,11 @@ DHO804 lifecycle messages remain distinct. `ScopeConnected` is not published unt
 
 The physical DHO804 is authoritative. Browser controls may update presentation optimistically, but the server reconciles controls whose physical result can affect related state.
 
+`ChannelState` includes the DHO804 bandwidth-limit setting as `ChannelBandwidthLimit.Off` or `ChannelBandwidthLimit.Mhz20`. This is intentionally model-specific: on the DHO800 family the available bandwidth limit is 20 MHz or disabled.
+
 ## DHO804 controls and interactions
 
-Scope controls use the typed `ControlChange` union. Version 8 extends `ControlKind` without renumbering the original values:
+Scope controls use the typed `ControlChange` union. Version 9 extends `ControlKind` without renumbering the original values:
 
 ```ts
 export enum ControlKind {
@@ -154,6 +156,7 @@ export enum ControlKind {
   AcquisitionType = 15,
   AcquisitionAverages = 16,
   AcquisitionMemoryDepth = 17,
+  ChannelBandwidthLimit = 18,
 }
 ```
 
@@ -164,6 +167,7 @@ The DHO804 mapping used by the server is:
 | Control | SCPI write | Reconciliation |
 | --- | --- | --- |
 | Channel coupling | `:CHANnel<n>:COUPling AC|DC|GND` | channel state readback |
+| Channel bandwidth limit | `:CHANnel<n>:BWLimit OFF|20M` | channel state readback |
 | Probe selector | `:CHANnel<n>:PROBe 1|10` | channel state readback |
 | Horizontal mode | `:TIMebase:MODE MAIN|ROLL|XY` | horizontal state readback |
 | Trigger sweep | `:TRIGger:SWEep AUTO|NORMal|SINGle` | trigger + run-state readback |
@@ -171,6 +175,8 @@ The DHO804 mapping used by the server is:
 | Acquisition type | `:ACQuire:TYPE NORMal|PEAK|AVERages|ULTRa` | acquisition state readback |
 | Acquisition averages | `:ACQuire:AVERages <2..65536 power-of-two>` | acquisition state readback |
 | Acquisition memory | `:ACQuire:MDEPth <depth>` | acquisition state readback |
+
+The browser presents the DHO804 bandwidth setting as **Full** (SCPI `OFF`) or **20 MHz** (SCPI `20M`). The driver queries `:CHANnel<n>:BWLimit?` as part of every authoritative channel-state read.
 
 The browser intentionally exposes only **1× and 10×** probe selections even though the DHO804 supports additional probe ratios. If the instrument is already configured to another ratio, the UI can display that current value and offers 1×/10× as the writable choices requested for RigolWeb.
 
@@ -215,6 +221,7 @@ Reject at least:
 - malformed/non-finite controls;
 - invalid enum values;
 - unsupported DHO804 probe ratio writes;
+- unsupported DHO804 bandwidth-limit values;
 - invalid acquisition averaging/memory settings;
 - invalid viewport/measurement payloads.
 
