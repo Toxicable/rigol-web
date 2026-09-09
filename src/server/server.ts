@@ -123,10 +123,10 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   console.log(`Rigol Web shutting down on ${signal}`);
   scopeService.close();
+  acquisitionService.close();
 
   try {
     await ppk2Service.close();
-    acquisitionService.close();
     await gateway.close();
     await instruments.stopAll();
     await closeHttpServer();
