@@ -60,6 +60,16 @@ describe("AcquisitionService", () => {
       sourceLostItems: 15,
       lastSequence: 20_014,
     })).toThrow("received item count must not decrease");
+    expect(() => service.updateProgress(operation.id, {
+      receivedItems: 20_001,
+      sourceLostItems: 15,
+      lastSequence: null,
+    })).toThrow("last sequence must not become unknown");
+    expect(() => service.updateProgress(operation.id, {
+      receivedItems: 20_001,
+      sourceLostItems: 15,
+      lastSequence: 20_013,
+    })).toThrow("last sequence must not move backwards");
   });
 
   it("retains running operations while bounding terminal metadata", () => {
