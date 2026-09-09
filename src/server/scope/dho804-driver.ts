@@ -1,6 +1,7 @@
 import {
   AcquisitionType,
   Channel,
+  ChannelBandwidthLimit,
   ChannelCoupling,
   ChannelUnit,
   EdgeSlope,
@@ -137,6 +138,9 @@ export class Dho804Driver {
     const prefix = channelPrefix(channel);
     const enabled = parseBoolean(await this.queryText(`${prefix}:DISPlay?`, priority));
     const coupling = parseChannelCoupling(await this.queryText(`${prefix}:COUPling?`, priority));
+    const bandwidthLimit = parseChannelBandwidthLimit(
+      await this.queryText(`${prefix}:BWLimit?`, priority),
+    );
     const unit = parseChannelUnit(await this.queryText(`${prefix}:UNITs?`, priority));
     this.channelUnits.set(channel, unit);
     const scale = parseFiniteNumber(await this.queryText(`${prefix}:SCALe?`, priority), "channel scale");
@@ -146,7 +150,7 @@ export class Dho804Driver {
       await this.queryText(`${prefix}:PROBe?`, priority),
       "probe ratio",
     );
-    return { channel, enabled, coupling, unit, scale, offset, probeRatio };
+    return { channel, enabled, coupling, bandwidthLimit, unit, scale, offset, probeRatio };
   }
 
   public async readHorizontalState(priority: ScpiPriority): Promise<HorizontalState> {
@@ -726,6 +730,14 @@ function parseChannelCoupling(value: string): ChannelCoupling {
     case "DC": return ChannelCoupling.Dc;
     case "GND": return ChannelCoupling.Ground;
     default: return failToken("channel coupling", value);
+  }
+}
+
+function parseChannelBandwidthLimit(value: string): ChannelBandwidthLimit {
+  switch (value.trim().toUpperCase()) {
+    case "OFF": return ChannelBandwidthLimit.Off;
+    case "20M": return ChannelBandwidthLimit.Mhz20;
+    default: return failToken("channel bandwidth limit", value);
   }
 }
 

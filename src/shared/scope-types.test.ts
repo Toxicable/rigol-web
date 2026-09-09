@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   AcquisitionType,
   Channel,
+  ChannelBandwidthLimit,
   ChannelCoupling,
   ChannelUnit,
   EdgeSlope,
@@ -25,6 +26,7 @@ describe("scope domain enum values", () => {
     expect([ChannelCoupling.Ac, ChannelCoupling.Dc, ChannelCoupling.Ground]).toEqual([
       1, 2, 3,
     ]);
+    expect([ChannelBandwidthLimit.Off, ChannelBandwidthLimit.Mhz20]).toEqual([1, 2]);
     expect([
       ChannelUnit.Volts,
       ChannelUnit.Amps,

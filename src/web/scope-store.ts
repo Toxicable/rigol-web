@@ -85,7 +85,8 @@ export function applyControlToScope(scope: ScopeState, control: ControlChange): 
     case ControlKind.ChannelScale:
     case ControlKind.ChannelOffset:
     case ControlKind.ChannelCoupling:
-    case ControlKind.ChannelProbeRatio: {
+    case ControlKind.ChannelProbeRatio:
+    case ControlKind.ChannelBandwidthLimit: {
       const channels = scope.channels.map((channel) => {
         if (channel.channel !== control.channel) return channel;
         switch (control.kind) {
@@ -94,6 +95,7 @@ export function applyControlToScope(scope: ScopeState, control: ControlChange): 
           case ControlKind.ChannelOffset: return { ...channel, offset: control.value };
           case ControlKind.ChannelCoupling: return { ...channel, coupling: control.value };
           case ControlKind.ChannelProbeRatio: return { ...channel, probeRatio: control.value };
+          case ControlKind.ChannelBandwidthLimit: return { ...channel, bandwidthLimit: control.value };
           default: return channel;
         }
       }) as ChannelStates;

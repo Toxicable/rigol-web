@@ -2,6 +2,7 @@ import { SupportedInstrument } from "../../shared/instrument-types.js";
 import {
   AcquisitionType,
   Channel,
+  ChannelBandwidthLimit,
   ChannelCoupling,
   EdgeSlope,
   MeasurementKind,
@@ -448,6 +449,16 @@ function readChannelCoupling(value: unknown): ChannelCoupling {
   }
 }
 
+function readChannelBandwidthLimit(value: unknown): ChannelBandwidthLimit {
+  switch (value) {
+    case ChannelBandwidthLimit.Off:
+    case ChannelBandwidthLimit.Mhz20:
+      return value;
+    default:
+      throw new Error("Invalid channel bandwidth limit");
+  }
+}
+
 function readTimebaseMode(value: unknown): TimebaseMode {
   switch (value) {
     case TimebaseMode.Main:
@@ -550,6 +561,8 @@ function readControl(value: unknown): ControlChange {
       return { kind: ControlKind.ChannelCoupling, channel: readChannel(value.channel), value: readChannelCoupling(value.value) };
     case ControlKind.ChannelProbeRatio:
       return { kind: ControlKind.ChannelProbeRatio, channel: readChannel(value.channel), value: readFiniteNumber(value.value, "Probe ratio") };
+    case ControlKind.ChannelBandwidthLimit:
+      return { kind: ControlKind.ChannelBandwidthLimit, channel: readChannel(value.channel), value: readChannelBandwidthLimit(value.value) };
     case ControlKind.HorizontalScale:
       return { kind: ControlKind.HorizontalScale, value: readFiniteNumber(value.value, "Horizontal scale") };
     case ControlKind.HorizontalPosition:
