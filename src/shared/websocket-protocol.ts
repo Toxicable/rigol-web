@@ -5,7 +5,7 @@ import type {
   DmmReadingSnapshot,
   DmmState,
 } from "./dmm-types.js";
-import type { SupportedInstrument } from "./instrument-types.js";
+import type { ScpiInstrument, SupportedInstrument } from "./instrument-types.js";
 import type {
   Ppk2CaptureStats,
   Ppk2Info,
@@ -303,7 +303,7 @@ export interface WaveformViewportRequestMessage {
 export interface ScpiExecuteMessage {
   type: MessageType.ScpiExecute;
   requestId: number;
-  instrument: SupportedInstrument;
+  instrument: ScpiInstrument;
   command: string;
 }
 
