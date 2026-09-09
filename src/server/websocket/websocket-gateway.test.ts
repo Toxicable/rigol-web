@@ -13,12 +13,35 @@ import {
 } from "../../shared/websocket-protocol.js";
 import type {
   WebSocketAdapterHost,
+  WebSocketApplicationAdapter,
   WebSocketInstrumentAdapter,
   WebSocketSession,
 } from "./websocket-adapter.js";
 import { WebSocketGateway } from "./websocket-gateway.js";
 
 const TEST_ADAPTER_MESSAGE = 999;
+
+class FakeApplicationAdapter implements WebSocketApplicationAdapter {
+  public readonly attachSpy = vi.fn();
+  public readonly detachSpy = vi.fn();
+  public readonly tryDispatchSpy = vi.fn();
+
+  public attach(host: WebSocketAdapterHost): void {
+    this.attachSpy(host);
+  }
+
+  public detach(): void {
+    this.detachSpy();
+  }
+
+  public async tryDispatch(
+    session: WebSocketSession,
+    message: Record<string, unknown>,
+  ): Promise<boolean> {
+    this.tryDispatchSpy(session, message);
+    return false;
+  }
+}
 
 class FakeAdapter implements WebSocketInstrumentAdapter {
   private host: WebSocketAdapterHost | null = null;
@@ -113,6 +136,7 @@ async function listen(server: HttpServer): Promise<number> {
 interface Harness {
   httpServer: HttpServer;
   gateway: WebSocketGateway;
+  acquisitionAdapter: FakeApplicationAdapter;
   scopeAdapter: FakeAdapter;
   dmmAdapter: FakeAdapter;
   clients: WebSocket[];
@@ -135,9 +159,11 @@ afterEach(async () => {
 
 async function createHarness(): Promise<Harness> {
   const httpServer = createServer();
+  const acquisitionAdapter = new FakeApplicationAdapter();
   const scopeAdapter = new FakeAdapter(SupportedInstrument.Dho804);
   const dmmAdapter = new FakeAdapter(SupportedInstrument.Dm858e);
   const gateway = new WebSocketGateway(httpServer, {
+    acquisitionAdapter,
     scopeAdapter,
     dmmAdapter,
   });
@@ -145,6 +171,7 @@ async function createHarness(): Promise<Harness> {
   active = {
     httpServer,
     gateway,
+    acquisitionAdapter,
     scopeAdapter,
     dmmAdapter,
     clients: [],
@@ -213,6 +240,7 @@ describe("WebSocketGateway broker", () => {
 
     const [code] = await closed;
     expect(code).toBe(1002);
+    expect(server.acquisitionAdapter.tryDispatchSpy).not.toHaveBeenCalled();
     expect(server.scopeAdapter.tryDispatchSpy).not.toHaveBeenCalled();
     expect(server.dmmAdapter.tryDispatchSpy).not.toHaveBeenCalled();
   });
@@ -255,6 +283,7 @@ describe("WebSocketGateway broker", () => {
       type: MessageType.CommandCompleted,
       requestId: 7,
     });
+    expect(server.acquisitionAdapter.tryDispatchSpy).toHaveBeenCalledOnce();
     expect(server.scopeAdapter.tryDispatchSpy).toHaveBeenCalledOnce();
     expect(server.dmmAdapter.tryDispatchSpy).not.toHaveBeenCalled();
   });
@@ -274,6 +303,7 @@ describe("WebSocketGateway broker", () => {
       requestId: 8,
       error: "Unknown client message type",
     });
+    expect(server.acquisitionAdapter.tryDispatchSpy).toHaveBeenCalledOnce();
     expect(server.scopeAdapter.tryDispatchSpy).toHaveBeenCalledOnce();
     expect(server.dmmAdapter.tryDispatchSpy).toHaveBeenCalledOnce();
   });
