@@ -138,13 +138,9 @@ export class Ppk2WebSocketAdapter implements WebSocketInstrumentAdapter {
         return true;
       }
 
-      case MessageType.ScpiExecute: {
-        const instrument = readScpiInstrument(message.instrument);
-        if (instrument !== this.instrument) {
-          return false;
-        }
+      case MessageType.ScpiExecute:
+        readScpiInstrument(message.instrument);
         return false;
-      }
 
       default:
         return false;
