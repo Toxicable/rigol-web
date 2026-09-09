@@ -124,6 +124,9 @@ export class AcquisitionService implements AcquisitionApplicationService {
     if (progress.sourceLostItems < previous.sourceLostItems) {
       throw new Error("Acquisition source loss count must not decrease");
     }
+    if (previous.lastSequence !== null && progress.lastSequence === null) {
+      throw new Error("Acquisition last sequence must not become unknown");
+    }
     if (
       previous.lastSequence !== null &&
       progress.lastSequence !== null &&
