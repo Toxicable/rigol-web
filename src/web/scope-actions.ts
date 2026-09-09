@@ -1,6 +1,7 @@
 import {
   AcquisitionType,
   Channel,
+  ChannelBandwidthLimit,
   ChannelCoupling,
   EdgeSlope,
   TimebaseMode,
@@ -84,6 +85,13 @@ export class ScopeActions {
       return Promise.resolve();
     }
     return this.setControl({ kind: ControlKind.ChannelProbeRatio, channel, value });
+  }
+
+  public setChannelBandwidthLimit(
+    channel: Channel,
+    value: ChannelBandwidthLimit,
+  ): Promise<void> {
+    return this.setControl({ kind: ControlKind.ChannelBandwidthLimit, channel, value });
   }
 
   public setHorizontalScale(value: number): Promise<void> {
