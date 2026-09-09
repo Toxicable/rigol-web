@@ -18,7 +18,6 @@ import { Ppk2Runtime, type Ppk2RuntimeOptions } from "./ppk2-runtime.js";
 import type { Ppk2DecodedBatch, SequencedPpk2Sample } from "./ppk2-stream-decoder.js";
 
 export const PPK2_RETAINED_BYTES = 64 * 1024 * 1024;
-const STORED_SAMPLE_BYTES = 8;
 const STORE_CHUNK_SAMPLES = 1_024;
 const LIVE_BUCKET_SAMPLES = 100;
 const LIVE_PUBLISH_BUCKETS = 20;
