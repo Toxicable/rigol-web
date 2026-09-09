@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket as NodeWebSocket, type RawData } from "ws";
 
 import type { DmmControlChange, DmmReadingSnapshot, DmmState } from "../shared/dmm-types.js";
+import { SupportedInstrument } from "../shared/instrument-types.js";
 import type { MeasurementSpec, MeasurementValue } from "../shared/scope-types.js";
 import type {
   AcquisitionAction,
@@ -31,6 +32,11 @@ import type { DeepCaptureInfo, DeepViewportRequest } from "../server/waveform/de
 import { AcquisitionWebSocketAdapter } from "../server/websocket/acquisition-websocket-adapter.js";
 import { DmmWebSocketAdapter } from "../server/websocket/dmm-websocket-adapter.js";
 import { ScopeWebSocketAdapter } from "../server/websocket/scope-websocket-adapter.js";
+import type {
+  WebSocketAdapterHost,
+  WebSocketInstrumentAdapter,
+  WebSocketSession,
+} from "../server/websocket/websocket-adapter.js";
 import { WebSocketGateway } from "../server/websocket/websocket-gateway.js";
 import { AppConnection, type WebSocketLike } from "./app-connection.js";
 import { DmmBinding } from "./dmm/dmm-binding.js";
@@ -88,6 +94,19 @@ class DmmServiceStub implements DmmApplicationService {
   public async executeRawScpi(_command: string): Promise<string> { throw new Error("unused"); }
 }
 
+class NoopPpk2Adapter implements WebSocketInstrumentAdapter {
+  public readonly instrument = SupportedInstrument.Ppk2;
+  public attach(_host: WebSocketAdapterHost): void {}
+  public detach(): void {}
+  public async tryDispatch(
+    _session: WebSocketSession,
+    _message: Record<string, unknown>,
+  ): Promise<boolean> { return false; }
+  public sendInitialPublications(_session: WebSocketSession): void {}
+  public sessionUnsubscribed(_session: WebSocketSession): void {}
+  public transportAvailable(_session: WebSocketSession): void {}
+}
+
 function binaryData(data: RawData): ArrayBuffer {
   const buffer = Array.isArray(data)
     ? Buffer.concat(data)
@@ -131,8 +150,10 @@ interface Harness {
   httpServer: HttpServer;
   gateway: WebSocketGateway;
   instruments: InstrumentRegistry;
+  acquisitionService: AcquisitionService;
   scopeLifecycle: LifecycleSpy;
   dmmLifecycle: LifecycleSpy;
+  ppk2Lifecycle: LifecycleSpy;
   clients: BrowserClient[];
   adapters: NodeSocketAdapter[];
   createClient(): BrowserClient;
@@ -153,6 +174,7 @@ afterEach(async () => {
   if (active !== undefined) {
     for (const client of active.clients) client.dispose();
     await active.gateway.close();
+    active.acquisitionService.close();
     await active.instruments.stopAll();
     await new Promise<void>((resolve, reject) => {
       active?.httpServer.close((error) => error === undefined ? resolve() : reject(error));
@@ -166,9 +188,11 @@ async function createHarness(): Promise<Harness> {
   const httpServer = createServer();
   const scopeLifecycle = lifecycle();
   const dmmLifecycle = lifecycle();
+  const ppk2Lifecycle = lifecycle();
   const instruments = new InstrumentRegistry({
     dho804: scopeLifecycle.runtime,
     dm858e: dmmLifecycle.runtime,
+    ppk2: ppk2Lifecycle.runtime,
   });
   await instruments.startAll();
 
@@ -179,6 +203,7 @@ async function createHarness(): Promise<Harness> {
     acquisitionAdapter: new AcquisitionWebSocketAdapter(acquisitionService),
     scopeAdapter: new ScopeWebSocketAdapter(scopeService),
     dmmAdapter: new DmmWebSocketAdapter(dmmService),
+    ppk2Adapter: new NoopPpk2Adapter(),
   });
 
   httpServer.listen(0, "127.0.0.1");
@@ -190,8 +215,10 @@ async function createHarness(): Promise<Harness> {
     httpServer,
     gateway,
     instruments,
+    acquisitionService,
     scopeLifecycle,
     dmmLifecycle,
+    ppk2Lifecycle,
     clients,
     adapters,
     createClient: () => {
@@ -232,10 +259,11 @@ async function settle(): Promise<void> {
 }
 
 describe("server-owned instrument lifetime through browser routes", () => {
-  it("starts both runtimes before any browser subscribes and route switching does not restart them", async () => {
+  it("starts every fixed runtime before any browser subscribes and route switching does not restart them", async () => {
     const harness = await createHarness();
     expect(harness.scopeLifecycle.start).toHaveBeenCalledOnce();
     expect(harness.dmmLifecycle.start).toHaveBeenCalledOnce();
+    expect(harness.ppk2Lifecycle.start).toHaveBeenCalledOnce();
 
     const client = harness.createClient();
     const leaveScope = bindScopeRoute(client.scopeBinding);
@@ -249,8 +277,10 @@ describe("server-owned instrument lifetime through browser routes", () => {
 
     expect(harness.scopeLifecycle.start).toHaveBeenCalledOnce();
     expect(harness.dmmLifecycle.start).toHaveBeenCalledOnce();
+    expect(harness.ppk2Lifecycle.start).toHaveBeenCalledOnce();
     expect(harness.scopeLifecycle.stop).not.toHaveBeenCalled();
     expect(harness.dmmLifecycle.stop).not.toHaveBeenCalled();
+    expect(harness.ppk2Lifecycle.stop).not.toHaveBeenCalled();
     leaveScopeAgain();
   });
 
@@ -270,7 +300,7 @@ describe("server-owned instrument lifetime through browser routes", () => {
     expect(harness.scopeLifecycle.stop).not.toHaveBeenCalled();
   });
 
-  it("does not stop either runtime when browser sockets close", async () => {
+  it("does not stop any runtime when browser sockets close", async () => {
     const harness = await createHarness();
     const scopeClient = harness.createClient();
     const dmmClient = harness.createClient();
@@ -284,6 +314,7 @@ describe("server-owned instrument lifetime through browser routes", () => {
 
     expect(harness.scopeLifecycle.stop).not.toHaveBeenCalled();
     expect(harness.dmmLifecycle.stop).not.toHaveBeenCalled();
+    expect(harness.ppk2Lifecycle.stop).not.toHaveBeenCalled();
   });
 
   it("reconnects browser transport without restarting physical runtimes", async () => {
@@ -298,8 +329,10 @@ describe("server-owned instrument lifetime through browser routes", () => {
 
     expect(harness.scopeLifecycle.start).toHaveBeenCalledOnce();
     expect(harness.dmmLifecycle.start).toHaveBeenCalledOnce();
+    expect(harness.ppk2Lifecycle.start).toHaveBeenCalledOnce();
     expect(harness.scopeLifecycle.stop).not.toHaveBeenCalled();
     expect(harness.dmmLifecycle.stop).not.toHaveBeenCalled();
+    expect(harness.ppk2Lifecycle.stop).not.toHaveBeenCalled();
     leaveScope();
   });
 });
