@@ -50,12 +50,17 @@ export class Ppk2WebSocketAdapter implements WebSocketInstrumentAdapter {
         if (operation === null) {
           return;
         }
-        host.broadcastJson(this.instrument, {
+        const message: ServerJsonMessage = {
           type: MessageType.Ppk2Live,
           update: {
             operationId: operation.id,
             buckets: buckets.map((bucket) => ({ ...bucket })),
           },
+        };
+        host.forEachSubscribed(this.instrument, (session) => {
+          if (!host.isBackpressured(session)) {
+            host.sendJson(session, message);
+          }
         });
       }),
     ];
@@ -151,7 +156,7 @@ export class Ppk2WebSocketAdapter implements WebSocketInstrumentAdapter {
   }
 
   public transportAvailable(_session: WebSocketSession): void {
-    // PPK2 browser publications are bounded JSON summaries, not the raw stream.
+    // No queued PPK2 display frame is retained in the adapter.
   }
 
   private lifecycleMessage(connection: Ppk2Connection): ServerJsonMessage {
