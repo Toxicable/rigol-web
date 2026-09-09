@@ -6,6 +6,8 @@ Implemented PPK2 as the first non-SCPI loss-sensitive streaming instrument on th
 
 Branch: `stream-h-ppk2-integration`.
 
+Stream H implements the **Ampere Meter** software path. During the final pass the canonical Toxicboards PPK2Wireless project had expanded to require both Ampere Meter and Source Meter operation. That newer hardware/project decision is preserved: Source Meter control/presentation remains a PPK2Wireless follow-up and is not claimed complete by this stream.
+
 ## Server
 
 - Added explicit shared PPK2 domain types and `SupportedInstrument.Ppk2 = 3`.
@@ -21,6 +23,7 @@ Branch: `stream-h-ppk2-integration`.
 - Added `Ppk2WebSocketAdapter` and required third instrument adapter in `WebSocketGateway`.
 - Slow browsers may drop already-decimated PPK2 live display updates under WebSocket backpressure; raw acquisition continues server-side.
 - Added PPK2 to the fixed `InstrumentRegistry` runtime set.
+- Kept SCPI capability explicit: `ScpiInstrument` is only DHO804 or DM858E, and PPK2-targeted raw SCPI is rejected by server validation.
 
 ## Browser
 
@@ -31,6 +34,7 @@ Branch: `stream-h-ppk2-integration`.
 - Added Start Capture, Stop Capture and Load retained history actions.
 - Added decimated current trace plus current/charge/loss/retention statistics.
 - PPK2 capture continues when the route unmounts or the browser disconnects; remount/reconnect receives current server state.
+- Raw SCPI browser APIs/components accept only the explicit SCPI-instrument union and cannot target PPK2.
 
 ## Protocol
 
@@ -97,9 +101,10 @@ Source-level tests cover:
 - display-only live backpressure dropping;
 - PPK2 binding/actions and request ownership;
 - protocol v10 constants;
-- fixed PPK2 runtime ownership in `InstrumentRegistry`.
+- fixed PPK2 runtime ownership in `InstrumentRegistry`;
+- explicit SCPI target validation rejecting PPK2.
 
-During final strict-source audit, two compile-level issues were corrected: one unused service constant and one excess test sample field.
+During final strict-source audit, compile-level issues were corrected before merge, including an unused service constant and an invalid excess test sample field. The audit also caught and removed the broader SCPI-capability leak introduced by adding PPK2 to the shared instrument identity enum.
 
 ## Deployment
 
