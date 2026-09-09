@@ -4,7 +4,9 @@
 
 Rigol Web integrates the Nordic Power Profiler Kit II as a concrete non-SCPI, loss-sensitive streaming instrument. The PPK2 path does not use `ScpiScheduler` and does not reuse the DHO804 disposable raw-waveform semantics.
 
-The selected bench mode is **Ampere Meter**. DUT power remains external to PPK2Bridge; the bridge powers/hosts the PPK2 and transports its CDC protocol to Rigol Web.
+**Stream H currently implements Ampere Meter mode.** DUT power remains external to PPK2Bridge; the bridge powers/hosts the PPK2 and transports its CDC protocol to Rigol Web.
+
+The canonical Toxicboards PPK2Wireless project has since expanded to require both Ampere Meter and Source Meter modes. Source Meter control/presentation is therefore a follow-up PPK2Wireless requirement; it is not implemented or claimed complete by Stream H. The runtime deliberately configures Ampere Meter mode today.
 
 Hardware/software contract sources:
 
@@ -177,6 +179,8 @@ Message types 70-77 are PPK2-specific:
 
 PPK2 capture start/stop/viewport requests require a PPK2 publication subscription. Successful capture start/stop returns the shared `AcquisitionOperationResult` so operation identity/lifecycle remains the common server-owned envelope.
 
+Raw SCPI is restricted to the explicit `ScpiInstrument` union (`Dho804 | Dm858e`). PPK2 is rejected as a SCPI target at both the typed browser API and server validation boundary.
+
 ## Tests
 
 Focused source tests cover:
@@ -189,6 +193,7 @@ Focused source tests cover:
 - PPK2 capture statistics, charge, retained viewport, and failure lifecycle;
 - WebSocket start/viewport mapping and unsubscribe-not-stop semantics;
 - browser binding/actions and pending/error ownership;
+- explicit rejection of PPK2 as a SCPI target;
 - server-owned PPK2 runtime lifetime alongside DHO804/DM858E.
 
 Executable `pnpm typecheck`, `pnpm test`, and `pnpm build` remain required before a fully validated release.
