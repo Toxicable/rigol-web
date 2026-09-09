@@ -33,6 +33,7 @@ export interface WebSocketGatewayOptions {
   acquisitionAdapter: WebSocketApplicationAdapter;
   scopeAdapter: WebSocketInstrumentAdapter;
   dmmAdapter: WebSocketInstrumentAdapter;
+  ppk2Adapter: WebSocketInstrumentAdapter;
 }
 
 interface ClientState extends WebSocketSession {
@@ -129,14 +130,20 @@ export class WebSocketGateway implements WebSocketAdapterHost {
       SupportedInstrument.Dm858e,
       "dmmAdapter",
     );
+    requireAdapterInstrument(
+      options.ppk2Adapter,
+      SupportedInstrument.Ppk2,
+      "ppk2Adapter",
+    );
     this.acquisitionAdapter = options.acquisitionAdapter;
-    this.adapters = [options.scopeAdapter, options.dmmAdapter];
+    this.adapters = [options.scopeAdapter, options.dmmAdapter, options.ppk2Adapter];
     this.adaptersByInstrument = new Map<
       SupportedInstrument,
       WebSocketInstrumentAdapter
     >([
       [SupportedInstrument.Dho804, options.scopeAdapter],
       [SupportedInstrument.Dm858e, options.dmmAdapter],
+      [SupportedInstrument.Ppk2, options.ppk2Adapter],
     ]);
 
     this.acquisitionAdapter.attach(this);
@@ -185,8 +192,7 @@ export class WebSocketGateway implements WebSocketAdapterHost {
       return;
     }
 
-    const name = instrument === SupportedInstrument.Dho804 ? "DHO804" : "DM858E";
-    throw new Error(`Browser session is not subscribed to ${name}`);
+    throw new Error(`Browser session is not subscribed to ${instrumentName(instrument)}`);
   }
 
   public isOpen(session: WebSocketSession): boolean {
@@ -485,5 +491,16 @@ function requireAdapterInstrument(
 ): void {
   if (adapter.instrument !== expected) {
     throw new Error(`${name} does not target the expected instrument`);
+  }
+}
+
+function instrumentName(instrument: SupportedInstrument): string {
+  switch (instrument) {
+    case SupportedInstrument.Dho804:
+      return "DHO804";
+    case SupportedInstrument.Dm858e:
+      return "DM858E";
+    case SupportedInstrument.Ppk2:
+      return "PPK2";
   }
 }
