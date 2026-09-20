@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useReducer } from "react";
 
 import { AppTransportKind, useAppTransportStore } from "./app-transport-store.js";
 import { AcquisitionControls } from "./components/acquisition-controls.js";
@@ -14,6 +14,11 @@ import type { ScopeBinding } from "./scope-binding.js";
 import { bindScopeRoute } from "./scope-route-binding.js";
 import { BrowserConnectionKind, useScopeStore } from "./scope-store.js";
 import type { WaveformController } from "./waveform/waveform-controller.js";
+import { WaveformCursorOverlay } from "./waveform/waveform-cursor-overlay.js";
+import {
+  initialWaveformCursorState,
+  waveformCursorReducer,
+} from "./waveform/waveform-cursors.js";
 import { WaveformPlot } from "./waveform/waveform-plot.js";
 
 interface ScopeRouteProps {
@@ -25,6 +30,13 @@ interface ScopeRouteProps {
 export function ScopeRoute({ binding, actions, controller }: ScopeRouteProps) {
   const transport = useAppTransportStore((state) => state.transport);
   const connection = useScopeStore((state) => state.connection);
+  const [cursorState, dispatchCursor] = useReducer(
+    waveformCursorReducer,
+    initialWaveformCursorState,
+  );
+  const connected =
+    transport.kind === AppTransportKind.Connected &&
+    connection.kind === BrowserConnectionKind.ScopeConnected;
 
   useEffect(() => {
     const unbind = bindScopeRoute(binding);
@@ -43,19 +55,29 @@ export function ScopeRoute({ binding, actions, controller }: ScopeRouteProps) {
     }
   }, [connection, controller, transport.kind]);
 
-  const connected =
-    transport.kind === AppTransportKind.Connected &&
-    connection.kind === BrowserConnectionKind.ScopeConnected;
+  useEffect(() => {
+    if (!connected) dispatchCursor({ type: "reset" });
+  }, [connected]);
 
   return (
     <section className="scope-route">
-      <ScopeToolbar actions={actions} />
+      <ScopeToolbar
+        actions={actions}
+        cursorState={cursorState}
+        dispatchCursor={dispatchCursor}
+      />
       {connected ? (
         <div className="scope-layout">
           <div className="waveform-column">
             <section className="waveform-panel">
               <WaveformPlot scope={connection.scope} controller={controller} actions={actions} />
               <MeasurementOverlay scope={connection.scope} />
+              <WaveformCursorOverlay
+                scope={connection.scope}
+                controller={controller}
+                cursorState={cursorState}
+                dispatchCursor={dispatchCursor}
+              />
             </section>
             <MeasurementPanel actions={actions} controller={controller} />
           </div>
