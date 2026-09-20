@@ -19,6 +19,9 @@ import type {
   ChannelCoupling,
   ChannelUnit,
   EdgeSlope,
+  MathChannel,
+  MathOperator,
+  MathSource,
   MeasurementSpec,
   MeasurementValue,
   ScopeInfo,
@@ -29,7 +32,7 @@ import type {
   TriggerType,
 } from "./scope-types.js";
 
-export const PROTOCOL_VERSION = 10;
+export const PROTOCOL_VERSION = 11;
 
 export type NonEmptyArray<T> = [T, ...T[]];
 
@@ -114,6 +117,12 @@ export enum ControlKind {
   AcquisitionAverages = 16,
   AcquisitionMemoryDepth = 17,
   ChannelBandwidthLimit = 18,
+  MathEnabled = 19,
+  MathOperator = 20,
+  MathSource1 = 21,
+  MathSource2 = 22,
+  MathScale = 23,
+  MathOffset = 24,
 }
 
 export type ControlChange =
@@ -193,6 +202,36 @@ export type ControlChange =
     }
   | {
       kind: ControlKind.AcquisitionMemoryDepth;
+      value: number;
+    }
+  | {
+      kind: ControlKind.MathEnabled;
+      math: MathChannel;
+      value: boolean;
+    }
+  | {
+      kind: ControlKind.MathOperator;
+      math: MathChannel;
+      value: MathOperator;
+    }
+  | {
+      kind: ControlKind.MathSource1;
+      math: MathChannel;
+      value: MathSource;
+    }
+  | {
+      kind: ControlKind.MathSource2;
+      math: MathChannel;
+      value: MathSource;
+    }
+  | {
+      kind: ControlKind.MathScale;
+      math: MathChannel;
+      value: number;
+    }
+  | {
+      kind: ControlKind.MathOffset;
+      math: MathChannel;
       value: number;
     };
 
