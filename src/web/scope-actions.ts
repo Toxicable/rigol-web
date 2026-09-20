@@ -11,6 +11,7 @@ import {
   TriggerCoupling,
   TriggerSweep,
   TriggerType,
+  type MathState,
   type MeasurementSpec,
 } from "../shared/scope-types.js";
 import {
@@ -20,7 +21,12 @@ import {
   type InteractiveControl,
 } from "../shared/websocket-protocol.js";
 import type { ScopeBinding } from "./scope-binding.js";
-import { DeepCaptureKind, MeasurementSource, useScopeStore } from "./scope-store.js";
+import {
+  BrowserConnectionKind,
+  DeepCaptureKind,
+  MeasurementSource,
+  useScopeStore,
+} from "./scope-store.js";
 
 const INTERACTION_UPDATE_INTERVAL_MS = 50;
 
@@ -35,6 +41,17 @@ export type ScopeActionBinding = Pick<
   | "readMeasurements"
   | "setMeasurements"
 >;
+
+export function mathDependents(
+  mathStates: readonly MathState[],
+  math: MathChannel,
+): MathChannel[] {
+  const source = (MathSource.Math1 + math - MathChannel.Math1) as MathSource;
+  return mathStates
+    .filter((state) =>
+      state.math > math && (state.source1 === source || state.source2 === source))
+    .map((state) => state.math);
+}
 
 export class ScopeActions {
   private pendingInteraction: InteractiveControl | null = null;
@@ -108,6 +125,31 @@ export class ScopeActions {
   public setMathOffset(math: MathChannel, value: number): Promise<void> {
     if (!Number.isFinite(value)) return Promise.resolve();
     return this.setControl({ kind: ControlKind.MathOffset, math, value });
+  }
+
+  public async resetMath(math: MathChannel): Promise<void> {
+    const connection = useScopeStore.getState().connection;
+    if (connection.kind !== BrowserConnectionKind.ScopeConnected) return;
+
+    const dependents = mathDependents(connection.scope.math, math);
+    if (dependents.length > 0) {
+      this.surfaceError(
+        `MATH${math} is used by ${dependents.map((item) => `MATH${item}`).join(", ")}; change those sources before resetting it`,
+      );
+      return;
+    }
+
+    const controls: ControlChange[] = [
+      { kind: ControlKind.MathEnabled, math, value: false },
+      { kind: ControlKind.MathOperator, math, value: MathOperator.Add },
+      { kind: ControlKind.MathSource1, math, value: MathSource.Ch1 },
+      { kind: ControlKind.MathSource2, math, value: MathSource.Ch2 },
+      { kind: ControlKind.MathScale, math, value: 1 },
+      { kind: ControlKind.MathOffset, math, value: 0 },
+    ];
+    for (const control of controls) {
+      if (!await this.trySetControl(control)) return;
+    }
   }
 
   public setHorizontalScale(value: number): Promise<void> {
@@ -285,9 +327,19 @@ export class ScopeActions {
     }
   }
 
-  private setControl(control: ControlChange): Promise<void> {
+  private async setControl(control: ControlChange): Promise<void> {
+    await this.trySetControl(control);
+  }
+
+  private async trySetControl(control: ControlChange): Promise<boolean> {
     useScopeStore.getState().applyOptimisticControl(control);
-    return this.binding.setControl(control).catch((error: unknown) => this.surfaceError(error));
+    try {
+      await this.binding.setControl(control);
+      return true;
+    } catch (error) {
+      this.surfaceError(error);
+      return false;
+    }
   }
 
   private previewInteraction(control: InteractiveControl): void {
