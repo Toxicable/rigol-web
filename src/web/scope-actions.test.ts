@@ -3,15 +3,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AcquisitionType,
   Channel,
+  ChannelBandwidthLimit,
   ChannelCoupling,
   ChannelUnit,
   EdgeSlope,
+  MathChannel,
+  MathOperator,
+  MathSource,
   MeasurementKind,
   ScopeRunState,
   TimebaseMode,
   TriggerCoupling,
   TriggerSweep,
   TriggerType,
+  WaveformSource,
   type ScopeInfo,
   type ScopeState,
 } from "../shared/scope-types.js";
@@ -42,11 +47,21 @@ function scope(): ScopeState {
       channel,
       enabled: true,
       coupling: ChannelCoupling.Dc,
+      bandwidthLimit: ChannelBandwidthLimit.Off,
       unit: ChannelUnit.Volts,
       scale: 1,
       offset: 0,
       probeRatio: 1,
     })) as ScopeState["channels"],
+    math: [MathChannel.Math1, MathChannel.Math2, MathChannel.Math3, MathChannel.Math4].map((math) => ({
+      math,
+      enabled: false,
+      operator: MathOperator.Add,
+      source1: MathSource.Ch1,
+      source2: MathSource.Ch2,
+      scale: 1,
+      offset: 0,
+    })) as ScopeState["math"],
     horizontal: { mode: TimebaseMode.Main, scale: 0.001, position: 0 },
     acquisition: {
       type: AcquisitionType.Normal,
@@ -167,6 +182,103 @@ describe("ScopeActions", () => {
     expect(useScopeStore.getState().lastError).toBe("scope write failed");
   });
 
+  it("resets an unused math slot to deterministic disabled defaults", async () => {
+    const current = scope();
+    current.math[0] = {
+      math: MathChannel.Math1,
+      enabled: true,
+      operator: MathOperator.Fft,
+      source1: MathSource.Ch3,
+      source2: null,
+      scale: 2,
+      offset: -3,
+    };
+    useScopeStore.setState({
+      connection: { kind: BrowserConnectionKind.ScopeConnected, info: INFO, scope: current },
+    });
+    const binding = fakeBinding();
+    const actions = new ScopeActions(binding);
+
+    await actions.resetMath(MathChannel.Math1);
+
+    expect(binding.setControl).toHaveBeenCalledTimes(6);
+    expect(binding.setControl).toHaveBeenNthCalledWith(1, {
+      kind: ControlKind.MathEnabled,
+      math: MathChannel.Math1,
+      value: false,
+    });
+    expect(binding.setControl).toHaveBeenNthCalledWith(2, {
+      kind: ControlKind.MathOperator,
+      math: MathChannel.Math1,
+      value: MathOperator.Add,
+    });
+    expect(binding.setControl).toHaveBeenNthCalledWith(3, {
+      kind: ControlKind.MathSource1,
+      math: MathChannel.Math1,
+      value: MathSource.Ch1,
+    });
+    expect(binding.setControl).toHaveBeenNthCalledWith(4, {
+      kind: ControlKind.MathSource2,
+      math: MathChannel.Math1,
+      value: MathSource.Ch2,
+    });
+    expect(binding.setControl).toHaveBeenNthCalledWith(5, {
+      kind: ControlKind.MathScale,
+      math: MathChannel.Math1,
+      value: 1,
+    });
+    expect(binding.setControl).toHaveBeenNthCalledWith(6, {
+      kind: ControlKind.MathOffset,
+      math: MathChannel.Math1,
+      value: 0,
+    });
+
+    const connection = useScopeStore.getState().connection;
+    if (connection.kind !== BrowserConnectionKind.ScopeConnected) {
+      throw new Error("expected connected scope");
+    }
+    expect(connection.scope.math[0]).toEqual({
+      math: MathChannel.Math1,
+      enabled: false,
+      operator: MathOperator.Add,
+      source1: MathSource.Ch1,
+      source2: MathSource.Ch2,
+      scale: 1,
+      offset: 0,
+    });
+  });
+
+  it("blocks math reset while a later slot depends on it", async () => {
+    const current = scope();
+    current.math[1] = { ...current.math[1], source1: MathSource.Math1 };
+    useScopeStore.setState({
+      connection: { kind: BrowserConnectionKind.ScopeConnected, info: INFO, scope: current },
+    });
+    const binding = fakeBinding();
+    const actions = new ScopeActions(binding);
+
+    await actions.resetMath(MathChannel.Math1);
+
+    expect(binding.setControl).not.toHaveBeenCalled();
+    expect(useScopeStore.getState().lastError).toBe(
+      "MATH1 is used by MATH2; change those sources before resetting it",
+    );
+  });
+
+  it("stops a multi-write math reset after the first failed write", async () => {
+    const binding = fakeBinding({
+      setControl: vi.fn(async (control) => {
+        if (control.kind === ControlKind.MathOperator) throw new Error("operator failed");
+      }),
+    });
+    const actions = new ScopeActions(binding);
+
+    await actions.resetMath(MathChannel.Math1);
+
+    expect(binding.setControl).toHaveBeenCalledTimes(2);
+    expect(useScopeStore.getState().lastError).toBe("operator failed");
+  });
+
   it("coalesces interactive updates while applying optimistic presentation immediately", () => {
     vi.useFakeTimers();
     vi.stubGlobal("window", {
@@ -217,7 +329,7 @@ describe("ScopeActions", () => {
       type: MessageType.MeasurementResult,
       requestId: 3,
       values: [{
-        channel: Channel.Ch1,
+        channel: WaveformSource.Ch1,
         kind: MeasurementKind.Vpp,
         statistics: {
           current: 2.5,
@@ -233,7 +345,7 @@ describe("ScopeActions", () => {
       readMeasurements: vi.fn(async () => result),
     });
     const actions = new ScopeActions(binding);
-    const specs = [{ channel: Channel.Ch1, kind: MeasurementKind.Vpp }];
+    const specs = [{ channel: WaveformSource.Ch1, kind: MeasurementKind.Vpp }];
 
     actions.setMeasurementSpecs(specs);
     await actions.pollMeasurementsOnce();
