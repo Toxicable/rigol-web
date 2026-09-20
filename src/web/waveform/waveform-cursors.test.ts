@@ -10,6 +10,10 @@ import {
   waveformCursorReducer,
 } from "./waveform-cursors.js";
 
+function marker(source: WaveformSource, x: number, y: number) {
+  return { source, unit: ChannelUnit.Volts, x, y };
+}
+
 function frame(): DecodedWaveformFrame {
   return {
     kind: WaveformKind.Live,
@@ -31,16 +35,16 @@ describe("waveform cursors", () => {
   it("places A then B and cycles the next placement back to A", () => {
     const first = waveformCursorReducer(initialWaveformCursorState, {
       type: "place",
-      marker: { source: WaveformSource.Ch1, x: 1, y: 2 },
+      marker: marker(WaveformSource.Ch1, 1, 2),
     });
     const second = waveformCursorReducer(first, {
       type: "place",
-      marker: { source: WaveformSource.Ch2, x: 3, y: 4 },
+      marker: marker(WaveformSource.Ch2, 3, 4),
     });
 
-    expect(first.markerA).toEqual({ source: WaveformSource.Ch1, x: 1, y: 2 });
+    expect(first.markerA).toEqual(marker(WaveformSource.Ch1, 1, 2));
     expect(first.nextSlot).toBe("B");
-    expect(second.markerB).toEqual({ source: WaveformSource.Ch2, x: 3, y: 4 });
+    expect(second.markerB).toEqual(marker(WaveformSource.Ch2, 3, 4));
     expect(second.nextSlot).toBe("A");
     expect(waveformCursorMarkerCount(second)).toBe(2);
   });
@@ -48,15 +52,15 @@ describe("waveform cursors", () => {
   it("moves a stored marker without changing the next placement slot", () => {
     const withA = waveformCursorReducer(initialWaveformCursorState, {
       type: "place",
-      marker: { source: WaveformSource.Ch1, x: 1, y: 2 },
+      marker: marker(WaveformSource.Ch1, 1, 2),
     });
     const moved = waveformCursorReducer(withA, {
       type: "move",
       slot: "A",
-      marker: { source: WaveformSource.Math1, x: 5, y: 6 },
+      marker: marker(WaveformSource.Math1, 5, 6),
     });
 
-    expect(moved.markerA).toEqual({ source: WaveformSource.Math1, x: 5, y: 6 });
+    expect(moved.markerA).toEqual(marker(WaveformSource.Math1, 5, 6));
     expect(moved.nextSlot).toBe("B");
   });
 
@@ -64,7 +68,7 @@ describe("waveform cursors", () => {
     const armed = waveformCursorReducer(initialWaveformCursorState, { type: "set-armed", value: true });
     const withA = waveformCursorReducer(armed, {
       type: "place",
-      marker: { source: WaveformSource.Ch1, x: 1, y: 2 },
+      marker: marker(WaveformSource.Ch1, 1, 2),
     });
     const cleared = waveformCursorReducer(withA, { type: "clear" });
 
