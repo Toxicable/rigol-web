@@ -35,7 +35,7 @@ Scope-owned implementation remains preferable for features whose correctness dep
 | Plot markers / cursors | Missing | Browser-only marker mode. While armed, pointer hover draws dotted X/Y guides. Clicking drops a marker. Stored markers show X/Y values and useful deltas in a compact readout. No DHO cursor SCPI required. |
 | Offscreen trace indication | Partial | Current CH reference markers clamp to the top/bottom edge and show an arrow when the channel reference is offscreen. Also detect delivered trace samples outside the visible Y range and clearly indicate an enabled trace is above/below the plot. |
 | Channel labels / legend | Missing | User-visible names such as `VCC`, `Gate`, or `Current`. Labels should appear next to CH identity in controls and in a compact plot/screenshot legend. Treat presentation labels as Rigol Web metadata unless a concrete need to mirror the scope label is identified. |
-| Math remove/reset UX | Missing | DHO math channels are fixed MATH1-MATH4 slots, but Rigol Web should provide an obvious Reset/Remove operation. Removing means disable the slot and restore a deterministic default configuration rather than pretending the hardware object was deleted. Dependency handling must prevent silently breaking later MATH channels that consume the slot. |
+| Math remove/reset UX | Covered | Reset disables the fixed MATH slot and restores `A + B`, CH1/CH2, scale 1 and offset 0. Reset is blocked while any later MATH slot consumes the target, including disabled dependents, so stored configurations are not silently broken. |
 
 ## Scope-backed major gaps
 
@@ -60,20 +60,19 @@ Scope-owned implementation remains preferable for features whose correctness dep
 
 ## Already covered well enough for normal remote use
 
-The current scope route covers the core analog workflow: CH1-CH4 enable/scale/offset/coupling/bandwidth/probe ratio, Main/Roll/XY timebase selection, time/div and horizontal position, acquisition mode/averaging/memory depth, run/stop/single, live waveform display, stopped deep capture, Edge trigger controls, measurements/statistics, raw SCPI console, scope sleep, and MATH1-MATH4.
+The current scope route covers the core analog workflow: CH1-CH4 enable/scale/offset/coupling/bandwidth/probe ratio, Main/Roll/XY timebase selection, time/div and horizontal position, acquisition mode/averaging/memory depth, run/stop/single, live waveform display, stopped deep capture, Edge trigger controls, measurements/statistics, raw SCPI console, scope sleep, and MATH1-MATH4 including dependency-safe reset.
 
 ## Suggested implementation order
 
 For day-to-day electronics debugging, prioritize user value rather than scope feature parity:
 
-1. finish math UX: Reset/Remove and dependency-safe behavior;
-2. browser-native channel labels/legend and offscreen trace indication;
-3. browser-native plot markers/cursors;
-4. protocol decode plus serial trigger detail;
-5. reference waveforms;
-6. search/navigation and waveform recording;
-7. channel invert/skew/full probe options;
-8. pass/fail, histogram, DVM/counter and remaining measurements;
-9. lower-priority display, storage and utility surfaces.
+1. browser-native channel labels/legend and offscreen trace indication;
+2. browser-native plot markers/cursors;
+3. protocol decode plus serial trigger detail;
+4. reference waveforms;
+5. search/navigation and waveform recording;
+6. channel invert/skew/full probe options;
+7. pass/fail, histogram, DVM/counter and remaining measurements;
+8. lower-priority display, storage and utility surfaces.
 
 This ordering is product priority, not protocol/API dependency order.
