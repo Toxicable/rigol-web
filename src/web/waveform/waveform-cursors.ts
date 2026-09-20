@@ -1,10 +1,11 @@
-import type { WaveformSource } from "../../shared/scope-types.js";
+import type { ChannelUnit, WaveformSource } from "../../shared/scope-types.js";
 import type { DecodedWaveformFrame } from "./waveform-frame-decoder.js";
 
 export type WaveformCursorSlot = "A" | "B";
 
 export interface WaveformCursorMarker {
   source: WaveformSource;
+  unit: ChannelUnit;
   x: number;
   y: number;
 }
