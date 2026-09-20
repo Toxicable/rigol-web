@@ -4,14 +4,20 @@ import { SupportedInstrument } from "../../shared/instrument-types.js";
 import {
   AcquisitionType,
   Channel,
+  ChannelBandwidthLimit,
   ChannelCoupling,
   ChannelUnit,
   EdgeSlope,
+  MathChannel,
+  MathOperator,
+  MathSource,
   ScopeRunState,
   TimebaseMode,
   TriggerCoupling,
   TriggerSweep,
   TriggerType,
+  WaveformSource,
+  waveformSourceForChannel,
   type ScopeInfo,
   type ScopeState,
 } from "../../shared/scope-types.js";
@@ -26,18 +32,11 @@ import {
   WaveformKind,
   type ServerJsonMessage,
 } from "../../shared/websocket-protocol.js";
-import {
-  ScopeConnectionKind,
-  type ScopeConnection,
-} from "../instruments/instrument-connection.js";
+import { ScopeConnectionKind, type ScopeConnection } from "../instruments/instrument-connection.js";
 import type { ScopeApplicationService } from "../scope/scope-service.js";
 import type { DeepViewportRequest } from "../waveform/deep-capture-service.js";
 import { ScopeWebSocketAdapter } from "./scope-websocket-adapter.js";
-import type {
-  BinarySendCallback,
-  WebSocketAdapterHost,
-  WebSocketSession,
-} from "./websocket-adapter.js";
+import type { BinarySendCallback, WebSocketAdapterHost, WebSocketSession } from "./websocket-adapter.js";
 
 const info: ScopeInfo = {
   manufacturer: "RIGOL TECHNOLOGIES",
@@ -52,18 +51,23 @@ function createState(): ScopeState {
       channel,
       enabled: channel === Channel.Ch1,
       coupling: ChannelCoupling.Dc,
+      bandwidthLimit: ChannelBandwidthLimit.Off,
       unit: ChannelUnit.Volts,
       scale: 1,
       offset: 0,
       probeRatio: 1,
     })) as ScopeState["channels"],
+    math: [MathChannel.Math1, MathChannel.Math2, MathChannel.Math3, MathChannel.Math4].map((math) => ({
+      math,
+      enabled: math === MathChannel.Math1,
+      operator: MathOperator.Add,
+      source1: MathSource.Ch1,
+      source2: MathSource.Ch2,
+      scale: 1,
+      offset: 0,
+    })) as ScopeState["math"],
     horizontal: { mode: TimebaseMode.Main, scale: 1e-3, position: 0 },
-    acquisition: {
-      type: AcquisitionType.Normal,
-      averages: 2,
-      memoryDepth: 1_000,
-      sampleRate: 1_000_000,
-    },
+    acquisition: { type: AcquisitionType.Normal, averages: 2, memoryDepth: 1_000, sampleRate: 1_000_000 },
     runState: ScopeRunState.Running,
     trigger: {
       type: TriggerType.Edge,
@@ -78,7 +82,7 @@ function createState(): ScopeState {
 
 function createWaveformFrame(
   kind: WaveformKind,
-  channel: Channel,
+  source: WaveformSource,
   captureId: number,
   sequence: number,
 ): Uint8Array {
@@ -87,7 +91,7 @@ function createWaveformFrame(
   view.setUint32(0, WAVEFORM_MAGIC, true);
   view.setUint8(4, WAVEFORM_FRAME_VERSION);
   view.setUint8(5, kind);
-  view.setUint8(6, channel);
+  view.setUint8(6, source);
   view.setUint8(7, WaveformEncoding.IndexedFloat32);
   view.setUint32(8, sequence, true);
   view.setUint32(12, captureId, true);
@@ -116,32 +120,13 @@ class FakeHost implements WebSocketAdapterHost {
 
   public isOpen(_session: WebSocketSession): boolean { return true; }
   public isBackpressured(_session: WebSocketSession): boolean { return false; }
-
-  public sendBinary(
-    session: WebSocketSession,
-    frame: Uint8Array,
-    callback?: BinarySendCallback,
-  ): void {
+  public sendBinary(session: WebSocketSession, frame: Uint8Array, callback?: BinarySendCallback): void {
     this.sendBinarySpy(session, frame);
-    if (callback !== undefined) {
-      this.binaryCallbacks.push(callback);
-    }
+    if (callback !== undefined) this.binaryCallbacks.push(callback);
   }
-
-  public completeNextBinary(): void {
-    this.binaryCallbacks.shift()?.(undefined);
-  }
-
-  public forEachSubscribed(
-    instrument: SupportedInstrument,
-    callback: (session: WebSocketSession) => void,
-  ): void {
-    if (
-      instrument === SupportedInstrument.Dho804 &&
-      this.subscribedSession !== null
-    ) {
-      callback(this.subscribedSession);
-    }
+  public completeNextBinary(): void { this.binaryCallbacks.shift()?.(undefined); }
+  public forEachSubscribed(instrument: SupportedInstrument, callback: (session: WebSocketSession) => void): void {
+    if (instrument === SupportedInstrument.Dho804 && this.subscribedSession !== null) callback(this.subscribedSession);
   }
 }
 
@@ -153,16 +138,12 @@ interface Harness {
 }
 
 function createHarness(): Harness {
-  const connection: ScopeConnection = {
-    kind: ScopeConnectionKind.Connected,
-    info,
-    state: createState(),
-  };
+  const connection: ScopeConnection = { kind: ScopeConnectionKind.Connected, info, state: createState() };
   let waveformListener: ((frame: Uint8Array) => void) | undefined;
   const requestViewport = vi.fn(async (request: DeepViewportRequest) =>
     createWaveformFrame(
       WaveformKind.DeepViewport,
-      request.channel,
+      waveformSourceForChannel(request.channel),
       request.captureId,
       77,
     ));
@@ -179,50 +160,39 @@ function createHarness(): Harness {
   const adapter = new ScopeWebSocketAdapter(service);
   const host = new FakeHost();
   adapter.attach(host);
-  return {
-    adapter,
-    host,
-    requestViewport,
-    publishWaveform: (frame) => waveformListener?.(frame),
-  };
+  return { adapter, host, requestViewport, publishWaveform: (frame) => waveformListener?.(frame) };
 }
 
 function sequence(frame: Uint8Array): number {
-  return new DataView(
-    frame.buffer,
-    frame.byteOffset,
-    frame.byteLength,
-  ).getUint32(8, true);
+  return new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint32(8, true);
+}
+
+function source(frame: Uint8Array): WaveformSource {
+  return new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint8(6) as WaveformSource;
 }
 
 describe("ScopeWebSocketAdapter waveform delivery", () => {
-  it("keeps only the latest live frame per channel while a send is in flight", () => {
+  it("keeps only the latest live frame per source while a send is in flight", () => {
     const harness = createHarness();
     const session = { id: 1 };
     harness.host.subscribedSession = session;
 
-    harness.publishWaveform(
-      createWaveformFrame(WaveformKind.Live, Channel.Ch1, 0, 1),
-    );
-    harness.publishWaveform(
-      createWaveformFrame(WaveformKind.Live, Channel.Ch1, 0, 2),
-    );
-    harness.publishWaveform(
-      createWaveformFrame(WaveformKind.Live, Channel.Ch1, 0, 3),
-    );
+    harness.publishWaveform(createWaveformFrame(WaveformKind.Live, WaveformSource.Math1, 0, 1));
+    harness.publishWaveform(createWaveformFrame(WaveformKind.Live, WaveformSource.Math1, 0, 2));
+    harness.publishWaveform(createWaveformFrame(WaveformKind.Live, WaveformSource.Math1, 0, 3));
 
     expect(harness.host.sendBinarySpy).toHaveBeenCalledTimes(1);
     expect(sequence(harness.host.sendBinarySpy.mock.calls[0]?.[1] as Uint8Array)).toBe(1);
+    expect(source(harness.host.sendBinarySpy.mock.calls[0]?.[1] as Uint8Array)).toBe(WaveformSource.Math1);
 
     harness.host.completeNextBinary();
     harness.adapter.transportAvailable(session);
-
     expect(harness.host.sendBinarySpy).toHaveBeenCalledTimes(2);
     expect(sequence(harness.host.sendBinarySpy.mock.calls[1]?.[1] as Uint8Array)).toBe(3);
     harness.adapter.detach();
   });
 
-  it("maps deep viewport requests through the scope service and sends the frame", async () => {
+  it("maps deep viewport requests through the scope service and sends the physical-channel frame", async () => {
     const harness = createHarness();
     const session = { id: 2 };
 
@@ -236,10 +206,7 @@ describe("ScopeWebSocketAdapter waveform delivery", () => {
       pixelWidth: 200,
     })).toBe(true);
 
-    expect(harness.host.requireSubscribed).toHaveBeenCalledWith(
-      session,
-      SupportedInstrument.Dho804,
-    );
+    expect(harness.host.requireSubscribed).toHaveBeenCalledWith(session, SupportedInstrument.Dho804);
     expect(harness.requestViewport).toHaveBeenCalledWith({
       captureId: 9,
       channel: Channel.Ch2,
@@ -250,14 +217,14 @@ describe("ScopeWebSocketAdapter waveform delivery", () => {
     expect(harness.host.sendBinarySpy).toHaveBeenCalledOnce();
     const frame = harness.host.sendBinarySpy.mock.calls[0]?.[1] as Uint8Array;
     expect(sequence(frame)).toBe(77);
+    expect(source(frame)).toBe(WaveformSource.Ch2);
     harness.adapter.detach();
   });
 
   it("rejects non-live frames on the live publication surface", () => {
     const harness = createHarness();
-
     expect(() => harness.publishWaveform(
-      createWaveformFrame(WaveformKind.DeepViewport, Channel.Ch1, 4, 1),
+      createWaveformFrame(WaveformKind.DeepViewport, WaveformSource.Ch1, 4, 1),
     )).toThrow("Scope waveform publication only accepts live waveform frames");
     harness.adapter.detach();
   });
