@@ -3,6 +3,8 @@ import { create } from "zustand";
 import {
   TriggerType,
   type ChannelStates,
+  type MathChannel,
+  type MathState,
   type MeasurementSpec,
   type MeasurementValue,
   type ScopeInfo,
@@ -70,13 +72,30 @@ export interface ScopeStoreState {
   setMeasurementValues(values: MeasurementValue[]): void;
   setLocalMeasurementValues(values: MeasurementValue[]): void;
   setDeepCapturing(requestId: number): void;
-  setDeepReady(
-    captureId: number,
-    channels: NonEmptyArray<DeepCaptureChannelInfo>,
-  ): void;
+  setDeepReady(captureId: number, channels: NonEmptyArray<DeepCaptureChannelInfo>): void;
   setDeepHorizontal(position: number, scale: number): void;
   clearDeepCapture(): void;
   setError(error: string | null): void;
+}
+
+function replaceMath(state: ScopeState, math: MathChannel, replacement: MathState): ScopeState {
+  const current = state.math;
+  switch (math) {
+    case 1: return { ...state, math: [replacement, current[1], current[2], current[3]] };
+    case 2: return { ...state, math: [current[0], replacement, current[2], current[3]] };
+    case 3: return { ...state, math: [current[0], current[1], replacement, current[3]] };
+    case 4: return { ...state, math: [current[0], current[1], current[2], replacement] };
+  }
+}
+
+function updateMath(
+  state: ScopeState,
+  math: MathChannel,
+  updater: (value: MathState) => MathState,
+): ScopeState {
+  const current = state.math[math - 1];
+  if (current === undefined || current.math !== math) return state;
+  return replaceMath(state, math, updater(current));
 }
 
 export function applyControlToScope(scope: ScopeState, control: ControlChange): ScopeState {
@@ -101,6 +120,18 @@ export function applyControlToScope(scope: ScopeState, control: ControlChange): 
       }) as ChannelStates;
       return { ...scope, channels };
     }
+    case ControlKind.MathEnabled:
+      return updateMath(scope, control.math, (math) => ({ ...math, enabled: control.value }));
+    case ControlKind.MathOperator:
+      return updateMath(scope, control.math, (math) => ({ ...math, operator: control.value }));
+    case ControlKind.MathSource1:
+      return updateMath(scope, control.math, (math) => ({ ...math, source1: control.value }));
+    case ControlKind.MathSource2:
+      return updateMath(scope, control.math, (math) => ({ ...math, source2: control.value }));
+    case ControlKind.MathScale:
+      return updateMath(scope, control.math, (math) => ({ ...math, scale: control.value }));
+    case ControlKind.MathOffset:
+      return updateMath(scope, control.math, (math) => ({ ...math, offset: control.value }));
     case ControlKind.HorizontalScale:
       return { ...scope, horizontal: { ...scope.horizontal, scale: control.value } };
     case ControlKind.HorizontalPosition:
