@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { Channel, ChannelUnit } from "../../shared/scope-types.js";
+import { ChannelUnit, WaveformSource } from "../../shared/scope-types.js";
 import { WaveformKind } from "../../shared/websocket-protocol.js";
 import { encodeWaveformFrame } from "./waveform-frame-encoder.js";
 
 function baseInput() {
   return {
     kind: WaveformKind.Live,
-    channel: Channel.Ch2,
+    source: WaveformSource.Ch2,
     unit: ChannelUnit.Volts,
     sequence: 0x01020304,
     captureId: 0,
@@ -22,10 +22,10 @@ function baseInput() {
 }
 
 describe("encodeWaveformFrame", () => {
-  it("matches the fixed version 1 byte layout", () => {
+  it("matches the fixed version 2 byte layout", () => {
     const actual = encodeWaveformFrame(baseInput());
     const expected = new Uint8Array([
-      0x52, 0x47, 0x57, 0x46, 0x01, 0x01, 0x02, 0x01,
+      0x52, 0x47, 0x57, 0x46, 0x02, 0x01, 0x02, 0x01,
       0x04, 0x03, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00,
       0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
       0x02, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00,
@@ -37,6 +37,16 @@ describe("encodeWaveformFrame", () => {
       0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0xc0,
     ]);
     expect(actual).toEqual(expected);
+  });
+
+  it("allows native math live frames but keeps deep frames physical-channel-only", () => {
+    expect(() => encodeWaveformFrame({ ...baseInput(), source: WaveformSource.Math1 })).not.toThrow();
+    expect(() => encodeWaveformFrame({
+      ...baseInput(),
+      kind: WaveformKind.DeepViewport,
+      source: WaveformSource.Math1,
+      captureId: 1,
+    })).toThrow(/physical channel/);
   });
 
   it("enforces live and deep capture ID rules", () => {

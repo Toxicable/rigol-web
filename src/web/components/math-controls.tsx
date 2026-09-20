@@ -1,7 +1,6 @@
 import type { CSSProperties, ChangeEvent } from "react";
 
 import {
-  Channel,
   MathOperator,
   MathSource,
   isArithmeticMathOperator,

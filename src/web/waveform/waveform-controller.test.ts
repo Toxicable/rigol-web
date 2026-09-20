@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { Channel, ChannelUnit } from "../../shared/scope-types.js";
+import { Channel, ChannelUnit, WaveformSource } from "../../shared/scope-types.js";
 import { WaveformKind, type DeepCaptureChannelInfo } from "../../shared/websocket-protocol.js";
 import type { DecodedWaveformFrame } from "./waveform-frame-decoder.js";
 import {
@@ -10,7 +10,7 @@ import {
 } from "./waveform-controller.js";
 
 function frame(
-  channel: Channel,
+  source: WaveformSource,
   kind: WaveformKind,
   sequence: number,
   captureId = 0,
@@ -19,7 +19,7 @@ function frame(
 ): DecodedWaveformFrame {
   return {
     kind,
-    channel,
+    source,
     unit: ChannelUnit.Volts,
     sequence,
     captureId,
@@ -47,38 +47,39 @@ const ALL_ENABLED = [Channel.Ch1, Channel.Ch2, Channel.Ch3, Channel.Ch4].map(
 );
 
 describe("waveform controller", () => {
-  it("ignores stale live sequences independently per channel", () => {
+  it("ignores stale live sequences independently per source", () => {
     const controller = new WaveformController(() => 0);
-    expect(controller.acceptFrame(frame(Channel.Ch1, WaveformKind.Live, 5))).toBe(true);
-    expect(controller.acceptFrame(frame(Channel.Ch2, WaveformKind.Live, 2))).toBe(true);
-    expect(controller.acceptFrame(frame(Channel.Ch1, WaveformKind.Live, 4))).toBe(false);
-    expect(controller.getFrame(Channel.Ch1)?.sequence).toBe(5);
-    expect(controller.getFrame(Channel.Ch2)?.sequence).toBe(2);
+    expect(controller.acceptFrame(frame(WaveformSource.Ch1, WaveformKind.Live, 5))).toBe(true);
+    expect(controller.acceptFrame(frame(WaveformSource.Math1, WaveformKind.Live, 2))).toBe(true);
+    expect(controller.acceptFrame(frame(WaveformSource.Ch1, WaveformKind.Live, 4))).toBe(false);
+    expect(controller.getFrame(WaveformSource.Ch1)?.sequence).toBe(5);
+    expect(controller.getFrame(WaveformSource.Math1)?.sequence).toBe(2);
   });
 
-  it("clears disabled live channels and ignores late frames until re-enabled", () => {
+  it("clears disabled live sources and ignores late frames until re-enabled", () => {
     const controller = new WaveformController(() => 0);
-    controller.acceptFrame(frame(Channel.Ch1, WaveformKind.Live, 5));
+    controller.acceptFrame(frame(WaveformSource.Ch1, WaveformKind.Live, 5));
 
-    controller.setLiveChannels(
+    controller.setLiveSources(
       ALL_ENABLED.map((channel) =>
         channel.channel === Channel.Ch1 ? { ...channel, enabled: false } : channel,
-      ),
+      ) as never,
+      [] as never,
     );
-    expect(controller.getFrame(Channel.Ch1)).toBeUndefined();
-    expect(controller.acceptFrame(frame(Channel.Ch1, WaveformKind.Live, 6))).toBe(false);
+    expect(controller.getFrame(WaveformSource.Ch1)).toBeUndefined();
+    expect(controller.acceptFrame(frame(WaveformSource.Ch1, WaveformKind.Live, 6))).toBe(false);
 
-    controller.setLiveChannels(ALL_ENABLED);
-    expect(controller.getFrame(Channel.Ch1)).toBeUndefined();
-    expect(controller.acceptFrame(frame(Channel.Ch1, WaveformKind.Live, 7))).toBe(true);
-    expect(controller.getFrame(Channel.Ch1)?.sequence).toBe(7);
+    controller.setLiveSources(ALL_ENABLED as never, [] as never);
+    expect(controller.getFrame(WaveformSource.Ch1)).toBeUndefined();
+    expect(controller.acceptFrame(frame(WaveformSource.Ch1, WaveformKind.Live, 7))).toBe(true);
+    expect(controller.getFrame(WaveformSource.Ch1)?.sequence).toBe(7);
   });
 
   it("uses cached deep overscan for a small pan and requests near a boundary", () => {
     const request = vi.fn(() => 1);
     const controller = new WaveformController(request);
     controller.setDeepCapture(12);
-    controller.acceptFrame(frame(Channel.Ch1, WaveformKind.DeepViewport, 1, 12, 100, 500));
+    controller.acceptFrame(frame(WaveformSource.Ch1, WaveformKind.DeepViewport, 1, 12, 100, 500));
 
     controller.setDesiredDeepTimeRange(12, Channel.Ch1, 0.0002, 0.0003, 800, INFO);
     expect(request).not.toHaveBeenCalled();
@@ -97,8 +98,8 @@ describe("waveform controller", () => {
     const controller = new WaveformController(() => 0);
     controller.setDeepCapture(7);
     controller.setDesiredDeepTimeRange(7, Channel.Ch1, 0.0004, 0.0005, 700, INFO);
-    expect(controller.acceptFrame(frame(Channel.Ch1, WaveformKind.DeepViewport, 1, 7, 100, 350))).toBe(false);
-    expect(controller.acceptFrame(frame(Channel.Ch1, WaveformKind.DeepViewport, 2, 7, 350, 600))).toBe(true);
+    expect(controller.acceptFrame(frame(WaveformSource.Ch1, WaveformKind.DeepViewport, 1, 7, 100, 350))).toBe(false);
+    expect(controller.acceptFrame(frame(WaveformSource.Ch1, WaveformKind.DeepViewport, 2, 7, 350, 600))).toBe(true);
   });
 
   it("keeps only one deep viewport request in flight while the desired view moves", () => {
@@ -110,7 +111,7 @@ describe("waveform controller", () => {
     controller.setDesiredDeepTimeRange(4, Channel.Ch1, 0.00012, 0.00022, 800, INFO);
     expect(request).toHaveBeenCalledTimes(1);
 
-    expect(controller.acceptFrame(frame(Channel.Ch1, WaveformKind.DeepViewport, 1, 4, 90, 205))).toBe(false);
+    expect(controller.acceptFrame(frame(WaveformSource.Ch1, WaveformKind.DeepViewport, 1, 4, 90, 205))).toBe(false);
     expect(request).toHaveBeenCalledTimes(2);
   });
 
@@ -118,27 +119,27 @@ describe("waveform controller", () => {
     const request = vi.fn(() => 1);
     const controller = new WaveformController(request);
     controller.setDeepCapture(8);
-    controller.acceptFrame(frame(Channel.Ch1, WaveformKind.DeepViewport, 1, 8));
+    controller.acceptFrame(frame(WaveformSource.Ch1, WaveformKind.DeepViewport, 1, 8));
 
     controller.retireDeepCapture();
     expect(controller.getDisplayMode()).toBe(WaveformDisplayMode.Live);
-    expect(controller.getFrame(Channel.Ch1)).toBeUndefined();
+    expect(controller.getFrame(WaveformSource.Ch1)).toBeUndefined();
 
     controller.setDesiredDeepTimeRange(8, Channel.Ch1, 0, 0.0001, 800, INFO);
     expect(request).not.toHaveBeenCalled();
-    expect(controller.acceptFrame(frame(Channel.Ch1, WaveformKind.DeepViewport, 2, 8))).toBe(false);
+    expect(controller.acceptFrame(frame(WaveformSource.Ch1, WaveformKind.DeepViewport, 2, 8))).toBe(false);
   });
 
   it("clears live and deep buffers at a new scope session boundary", () => {
     const controller = new WaveformController(() => 0);
-    controller.acceptFrame(frame(Channel.Ch1, WaveformKind.Live, 5));
+    controller.acceptFrame(frame(WaveformSource.Ch1, WaveformKind.Live, 5));
     controller.setDeepCapture(6);
-    controller.acceptFrame(frame(Channel.Ch2, WaveformKind.DeepViewport, 1, 6));
+    controller.acceptFrame(frame(WaveformSource.Ch2, WaveformKind.DeepViewport, 1, 6));
 
     controller.resetSession();
     expect(controller.getDisplayMode()).toBe(WaveformDisplayMode.Live);
-    expect(controller.getFrame(Channel.Ch1)).toBeUndefined();
-    expect(controller.getFrame(Channel.Ch2)).toBeUndefined();
+    expect(controller.getFrame(WaveformSource.Ch1)).toBeUndefined();
+    expect(controller.getFrame(WaveformSource.Ch2)).toBeUndefined();
   });
 
   it("converts time ranges to half-open sample ranges", () => {
@@ -150,11 +151,12 @@ describe("waveform controller", () => {
 
   it("returns live or deep data according to explicit display mode", () => {
     const controller = new WaveformController(() => 0);
-    controller.acceptFrame(frame(Channel.Ch1, WaveformKind.Live, 1));
-    expect(controller.getPlotData()[1][1][0]).toBe(1);
+    controller.acceptFrame(frame(WaveformSource.Math1, WaveformKind.Live, 1));
+    expect(controller.getPlotData()[5][1][0]).toBe(1);
     controller.setDeepCapture(3);
-    controller.acceptFrame(frame(Channel.Ch1, WaveformKind.DeepViewport, 1, 3));
+    controller.acceptFrame(frame(WaveformSource.Ch1, WaveformKind.DeepViewport, 1, 3));
     expect(controller.getDisplayMode()).toBe(WaveformDisplayMode.Deep);
     expect(controller.getPlotData()[1][1][0]).toBe(1);
+    expect(controller.getPlotData()[5][1]).toHaveLength(0);
   });
 });
