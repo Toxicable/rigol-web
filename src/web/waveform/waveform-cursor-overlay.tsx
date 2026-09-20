@@ -85,12 +85,10 @@ function sourceDomain(scope: ScopeState, source: WaveformSource): { min: number;
   const math = mathForWaveformSource(source);
   if (math === null) return null;
   const state = scope.math[math - 1];
-  if (
-    state === undefined ||
-    state.scale === null ||
-    state.offset === null ||
-    !(state.scale > 0)
-  ) return null;
+  if (state === undefined) return null;
+  if (state.scale === null || state.offset === null || !(state.scale > 0)) {
+    return { min: -0.5, max: 1.5 };
+  }
   return {
     min: -state.offset - 4 * state.scale,
     max: -state.offset + 4 * state.scale,
