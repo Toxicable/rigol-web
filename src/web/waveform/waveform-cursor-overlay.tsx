@@ -5,6 +5,7 @@ import {
   type CSSProperties,
   type Dispatch,
   type PointerEvent,
+  type ReactNode,
 } from "react";
 
 import {
@@ -306,7 +307,7 @@ export function WaveformCursorOverlay({
       })}
 
       {cursorState.armed || markerCount > 0 ? (
-        <CursorReadout scope={scope} state={cursorState} hover={hover?.marker ?? null} />
+        <CursorReadout state={cursorState} hover={hover?.marker ?? null} />
       ) : null}
     </div>
   );
@@ -323,7 +324,7 @@ function CursorCrosshair({
   position: CursorPosition;
   plotRect: PlotRect;
   accent: string;
-  children?: React.ReactNode;
+  children?: ReactNode;
 }) {
   const style = { "--cursor-accent": accent } as CSSProperties;
   return (
@@ -342,11 +343,9 @@ function CursorCrosshair({
 }
 
 function CursorReadout({
-  scope,
   state,
   hover,
 }: {
-  scope: ScopeState;
   state: WaveformCursorState;
   hover: WaveformCursorMarker | null;
 }) {
