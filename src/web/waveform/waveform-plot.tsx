@@ -4,9 +4,13 @@ import "uplot/dist/uPlot.min.css";
 
 import {
   Channel,
+  MathChannel,
   TimebaseMode,
   TriggerType,
+  waveformSourceForMath,
+  waveformSourceUnit,
   type ChannelState,
+  type MathState,
   type ScopeState,
 } from "../../shared/scope-types.js";
 import { formatAmplitude } from "../format-value.js";
@@ -17,6 +21,7 @@ import {
 } from "../interaction-math.js";
 import type { ScopeActions } from "../scope-actions.js";
 import { DeepCaptureKind, useScopeStore } from "../scope-store.js";
+import { mathAccent } from "../waveform-source-style.js";
 import {
   divisionSplits,
   formatTimeAxisValues,
@@ -51,6 +56,13 @@ const CHANNEL_STROKES: Record<Channel, string> = {
   [Channel.Ch3]: "#3498db",
   [Channel.Ch4]: "#e74c3c",
 };
+
+const MATH_CHANNELS = [
+  MathChannel.Math1,
+  MathChannel.Math2,
+  MathChannel.Math3,
+  MathChannel.Math4,
+] as const;
 
 type DragState =
   | {
@@ -101,6 +113,10 @@ function channelScaleName(channel: Channel): string {
   return `ch${channel}`;
 }
 
+function mathScaleName(math: MathChannel): string {
+  return `math${math}`;
+}
+
 function channelAxis(channel: ChannelState): uPlot.Axis {
   const stroke = CHANNEL_STROKES[channel.channel];
   return {
@@ -121,6 +137,33 @@ function channelAxis(channel: ChannelState): uPlot.Axis {
       size: 5,
     },
     values: (_plot, ticks) => ticks.map((value) => formatAmplitude(value, channel.unit)),
+  };
+}
+
+function mathAxis(scope: ScopeState, math: MathState): uPlot.Axis | null {
+  if (math.scale === null || math.offset === null || !(math.scale > 0)) {
+    return null;
+  }
+  const stroke = mathAccent(math.math);
+  const unit = waveformSourceUnit(scope, waveformSourceForMath(math.math));
+  return {
+    scale: mathScaleName(math.math),
+    side: 1,
+    stroke,
+    font: AXIS_FONT,
+    gap: 4,
+    size: 58,
+    space: 20,
+    incrs: [math.scale],
+    splits: (_plot, _axisIndex, scaleMin, scaleMax) =>
+      divisionSplits(scaleMin, scaleMax, 8),
+    grid: { show: false },
+    ticks: {
+      show: true,
+      stroke,
+      size: 5,
+    },
+    values: (_plot, ticks) => ticks.map((value) => formatAmplitude(value, unit)),
   };
 }
 
@@ -238,6 +281,10 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
     ...scope.channels.map(
       (channel) => `${channel.channel}:${channel.enabled ? 1 : 0}:${channel.scale}:${channel.unit}`,
     ),
+    ...scope.math.map((math) => {
+      const unit = waveformSourceUnit(scope, waveformSourceForMath(math.math));
+      return `m${math.math}:${math.enabled ? 1 : 0}:${math.scale ?? "none"}:${math.offset ?? "none"}:${unit}`;
+    }),
   ].join("|");
 
   useEffect(() => {
@@ -249,6 +296,10 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
     const width = Math.max(1, host.clientWidth);
     const height = Math.max(1, host.clientHeight);
     const enabledChannels = scope.channels.filter((channel) => channel.enabled);
+    const enabledMathAxes = scope.math
+      .filter((math) => math.enabled)
+      .map((math) => mathAxis(scope, math))
+      .filter((axis): axis is uPlot.Axis => axis !== null);
     const options = {
       width,
       height,
@@ -264,6 +315,10 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
         ch2: { auto: false },
         ch3: { auto: false },
         ch4: { auto: false },
+        math1: { auto: false },
+        math2: { auto: false },
+        math3: { auto: false },
+        math4: { auto: false },
       },
       axes: [
         {
@@ -278,6 +333,7 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
             formatTimeAxisValues(ticks, horizontalUnit),
         },
         ...enabledChannels.map((channel) => channelAxis(channel)),
+        ...enabledMathAxes,
       ],
       series: [
         {},
@@ -309,6 +365,13 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
           points: { show: false },
           facets: [{ scale: "x" }, { scale: "ch4" }],
         },
+        ...MATH_CHANNELS.map((math) => ({
+          label: `MATH${math}`,
+          stroke: mathAccent(math),
+          width: 1.4,
+          points: { show: false },
+          facets: [{ scale: "x" }, { scale: mathScaleName(math) }],
+        })),
       ],
     } as unknown as uPlot.Options;
 
@@ -339,7 +402,7 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
       plot.destroy();
       plotRef.current = null;
     };
-  }, [axisConfigSignature, controller, horizontalUnit]);
+  }, [axisConfigSignature, controller, horizontalUnit, scope]);
 
   useEffect(() => {
     const plot = plotRef.current;
@@ -363,6 +426,16 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
         min: -channel.offset - 4 * channel.scale,
         max: -channel.offset + 4 * channel.scale,
       });
+    }
+    for (const math of scope.math) {
+      if (math.scale !== null && math.offset !== null && math.scale > 0) {
+        plot.setScale(mathScaleName(math.math), {
+          min: -math.offset - 4 * math.scale,
+          max: -math.offset + 4 * math.scale,
+        });
+      } else {
+        plot.setScale(mathScaleName(math.math), { min: -0.5, max: 1.5 });
+      }
     }
   }, [deepCapture, isDeep, scope]);
 
