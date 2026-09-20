@@ -4,6 +4,7 @@ import { AppTransportKind, useAppTransportStore } from "./app-transport-store.js
 import { AcquisitionControls } from "./components/acquisition-controls.js";
 import { ChannelControls } from "./components/channel-controls.js";
 import { HorizontalControls } from "./components/horizontal-controls.js";
+import { MathControls } from "./components/math-controls.js";
 import { MeasurementOverlay } from "./components/measurement-overlay.js";
 import { MeasurementPanel } from "./components/measurement-panel.js";
 import { ScopeToolbar } from "./components/scope-toolbar.js";
@@ -38,7 +39,7 @@ export function ScopeRoute({ binding, actions, controller }: ScopeRouteProps) {
       transport.kind === AppTransportKind.Connected &&
       connection.kind === BrowserConnectionKind.ScopeConnected
     ) {
-      controller.setLiveChannels(connection.scope.channels);
+      controller.setLiveSources(connection.scope.channels, connection.scope.math);
     }
   }, [connection, controller, transport.kind]);
 
@@ -60,6 +61,7 @@ export function ScopeRoute({ binding, actions, controller }: ScopeRouteProps) {
           </div>
           <aside className="control-stack">
             <ChannelControls channels={connection.scope.channels} actions={actions} />
+            <MathControls math={connection.scope.math} actions={actions} />
             <HorizontalControls scope={connection.scope} actions={actions} />
             <AcquisitionControls scope={connection.scope} actions={actions} />
             <TriggerControls scope={connection.scope} actions={actions} />

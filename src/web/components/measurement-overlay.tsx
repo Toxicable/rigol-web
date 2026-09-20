@@ -1,6 +1,10 @@
+import type { CSSProperties } from "react";
+
 import {
   MeasurementKind,
+  waveformSourceUnit,
   type ScopeState,
+  type WaveformSource,
 } from "../../shared/scope-types.js";
 import {
   formatStableAmplitude,
@@ -9,6 +13,7 @@ import {
   formatStableSeconds,
 } from "../format-value.js";
 import { useScopeStore } from "../scope-store.js";
+import { waveformSourceAccent, waveformSourceLabel } from "../waveform-source-style.js";
 
 const KIND_LABELS: Record<MeasurementKind, string> = {
   [MeasurementKind.Vpp]: "Vpp",
@@ -41,58 +46,38 @@ interface MeasurementOverlayProps {
 }
 
 function isTimeMeasurement(kind: MeasurementKind): boolean {
-  switch (kind) {
-    case MeasurementKind.Period:
-    case MeasurementKind.RiseTime:
-    case MeasurementKind.FallTime:
-    case MeasurementKind.PositiveWidth:
-    case MeasurementKind.NegativeWidth:
-    case MeasurementKind.Tvmax:
-    case MeasurementKind.Tvmin:
-      return true;
-    default:
-      return false;
-  }
+  return kind === MeasurementKind.Period ||
+    kind === MeasurementKind.RiseTime ||
+    kind === MeasurementKind.FallTime ||
+    kind === MeasurementKind.PositiveWidth ||
+    kind === MeasurementKind.NegativeWidth ||
+    kind === MeasurementKind.Tvmax ||
+    kind === MeasurementKind.Tvmin;
 }
 
 function isPercentMeasurement(kind: MeasurementKind): boolean {
-  switch (kind) {
-    case MeasurementKind.Overshoot:
-    case MeasurementKind.Preshoot:
-    case MeasurementKind.PositiveDuty:
-    case MeasurementKind.NegativeDuty:
-      return true;
-    default:
-      return false;
-  }
+  return kind === MeasurementKind.Overshoot ||
+    kind === MeasurementKind.Preshoot ||
+    kind === MeasurementKind.PositiveDuty ||
+    kind === MeasurementKind.NegativeDuty;
 }
 
 function formatMeasurement(
   scope: ScopeState,
   value: number,
   kind: MeasurementKind,
-  channel: number,
+  source: WaveformSource,
 ): string {
-  if (kind === MeasurementKind.Frequency) {
-    return formatStableHertz(value);
-  }
-  if (isTimeMeasurement(kind)) {
-    return formatStableSeconds(value);
-  }
-  if (isPercentMeasurement(kind)) {
-    return formatStablePercent(value);
-  }
-  const channelState = scope.channels[channel - 1];
-  return channelState === undefined ? String(value) : formatStableAmplitude(value, channelState.unit);
+  if (kind === MeasurementKind.Frequency) return formatStableHertz(value);
+  if (isTimeMeasurement(kind)) return formatStableSeconds(value);
+  if (isPercentMeasurement(kind)) return formatStablePercent(value);
+  return formatStableAmplitude(value, waveformSourceUnit(scope, source));
 }
 
 export function MeasurementOverlay({ scope }: MeasurementOverlayProps) {
   const specs = useScopeStore((state) => state.measurementSpecs);
   const values = useScopeStore((state) => state.measurementValues);
-
-  if (specs.length === 0) {
-    return null;
-  }
+  if (specs.length === 0) return null;
 
   return (
     <div className="measurement-overlay" aria-label="Measurements">
@@ -105,16 +90,15 @@ export function MeasurementOverlay({ scope }: MeasurementOverlayProps) {
           value.statistics.count > 0
             ? value.statistics
             : null;
-        const formatted = (raw: number) =>
-          formatMeasurement(scope, raw, spec.kind, spec.channel);
+        const formatted = (raw: number) => formatMeasurement(scope, raw, spec.kind, spec.channel);
+        const style = {
+          "--channel-accent": waveformSourceAccent(spec.channel),
+        } as CSSProperties;
 
         return (
-          <div
-            className={`measurement-overlay-item ch${spec.channel}`}
-            key={`${spec.channel}-${spec.kind}`}
-          >
+          <div className="measurement-overlay-item" style={style} key={`${spec.channel}-${spec.kind}`}>
             <div className="measurement-overlay-primary">
-              <span className="measurement-overlay-channel">CH{spec.channel}</span>
+              <span className="measurement-overlay-channel">{waveformSourceLabel(spec.channel)}</span>
               <span className="measurement-overlay-kind">{KIND_LABELS[spec.kind]}</span>
               <strong>{statistics === null ? "—" : formatted(statistics.current)}</strong>
             </div>

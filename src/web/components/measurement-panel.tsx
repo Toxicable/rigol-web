@@ -1,12 +1,13 @@
 import { useEffect, useState, type ChangeEvent } from "react";
 
 import {
-  Channel,
   MeasurementKind,
+  WaveformSource,
 } from "../../shared/scope-types.js";
 import { LocalMeasurementAccumulator } from "../local-measurements.js";
 import type { ScopeActions } from "../scope-actions.js";
 import { MeasurementSource, useScopeStore } from "../scope-store.js";
+import { waveformSourceLabel } from "../waveform-source-style.js";
 import type { WaveformController } from "../waveform/waveform-controller.js";
 
 const KIND_LABELS: Record<MeasurementKind, string> = {
@@ -36,8 +37,19 @@ const KIND_LABELS: Record<MeasurementKind, string> = {
 };
 
 const MEASUREMENT_GROUPS = [
-  { label: "Voltage", kinds: [MeasurementKind.Vpp, MeasurementKind.Vmax, MeasurementKind.Vmin, MeasurementKind.Vtop, MeasurementKind.Vbase, MeasurementKind.Vamp, MeasurementKind.Vavg, MeasurementKind.Vrms, MeasurementKind.Vupper, MeasurementKind.Vmid, MeasurementKind.Vlower, MeasurementKind.Overshoot, MeasurementKind.Preshoot] },
+  { label: "Amplitude", kinds: [MeasurementKind.Vpp, MeasurementKind.Vmax, MeasurementKind.Vmin, MeasurementKind.Vtop, MeasurementKind.Vbase, MeasurementKind.Vamp, MeasurementKind.Vavg, MeasurementKind.Vrms, MeasurementKind.Vupper, MeasurementKind.Vmid, MeasurementKind.Vlower, MeasurementKind.Overshoot, MeasurementKind.Preshoot] },
   { label: "Timing", kinds: [MeasurementKind.Frequency, MeasurementKind.Period, MeasurementKind.RiseTime, MeasurementKind.FallTime, MeasurementKind.PositiveWidth, MeasurementKind.NegativeWidth, MeasurementKind.PositiveDuty, MeasurementKind.NegativeDuty, MeasurementKind.Tvmax, MeasurementKind.Tvmin] },
+] as const;
+
+const SOURCES = [
+  WaveformSource.Ch1,
+  WaveformSource.Ch2,
+  WaveformSource.Ch3,
+  WaveformSource.Ch4,
+  WaveformSource.Math1,
+  WaveformSource.Math2,
+  WaveformSource.Math3,
+  WaveformSource.Math4,
 ] as const;
 
 interface MeasurementPanelProps {
@@ -48,37 +60,28 @@ interface MeasurementPanelProps {
 export function MeasurementPanel({ actions, controller }: MeasurementPanelProps) {
   const source = useScopeStore((state) => state.measurementSource);
   const specs = useScopeStore((state) => state.measurementSpecs);
-  const [channel, setChannel] = useState(Channel.Ch1);
+  const [waveformSource, setWaveformSource] = useState(WaveformSource.Ch1);
   const [kind, setKind] = useState(MeasurementKind.Vpp);
   const [localMeasurements] = useState(() => new LocalMeasurementAccumulator());
 
   useEffect(() => {
-    if (source !== MeasurementSource.Scope) {
-      return;
-    }
+    if (source !== MeasurementSource.Scope) return;
     return actions.startMeasurementPolling();
   }, [actions, source]);
 
   useEffect(() => {
     localMeasurements.reset();
-    if (source !== MeasurementSource.Local) {
-      return;
-    }
-
+    if (source !== MeasurementSource.Local) return;
     const update = () => {
-      useScopeStore
-        .getState()
-        .setLocalMeasurementValues(localMeasurements.update(specs, controller));
+      useScopeStore.getState().setLocalMeasurementValues(localMeasurements.update(specs, controller));
     };
     update();
     return controller.subscribe(update);
   }, [controller, localMeasurements, source, specs]);
 
   const add = () => {
-    if (specs.some((spec) => spec.channel === channel && spec.kind === kind)) {
-      return;
-    }
-    actions.setMeasurementSpecs([...specs, { channel, kind }]);
+    if (specs.some((spec) => spec.channel === waveformSource && spec.kind === kind)) return;
+    actions.setMeasurementSpecs([...specs, { channel: waveformSource, kind }]);
   };
 
   return (
@@ -86,7 +89,7 @@ export function MeasurementPanel({ actions, controller }: MeasurementPanelProps)
       <h2>Measurements</h2>
       <div className="measurement-add">
         <select
-          aria-label="Measurement source"
+          aria-label="Measurement calculation source"
           value={source}
           onChange={(event: ChangeEvent<HTMLSelectElement>) =>
             actions.setMeasurementSource(Number(event.target.value) as MeasurementSource)
@@ -95,9 +98,15 @@ export function MeasurementPanel({ actions, controller }: MeasurementPanelProps)
           <option value={MeasurementSource.Scope}>Source: Scope</option>
           <option value={MeasurementSource.Local}>Source: Local</option>
         </select>
-        <select value={channel} onChange={(event: ChangeEvent<HTMLSelectElement>) => setChannel(Number(event.target.value) as Channel)}>
-          {[Channel.Ch1, Channel.Ch2, Channel.Ch3, Channel.Ch4].map((item) => (
-            <option value={item} key={item}>CH{item}</option>
+        <select
+          aria-label="Measurement waveform source"
+          value={waveformSource}
+          onChange={(event: ChangeEvent<HTMLSelectElement>) =>
+            setWaveformSource(Number(event.target.value) as WaveformSource)
+          }
+        >
+          {SOURCES.map((item) => (
+            <option value={item} key={item}>{waveformSourceLabel(item)}</option>
           ))}
         </select>
         <select value={kind} onChange={(event: ChangeEvent<HTMLSelectElement>) => setKind(Number(event.target.value) as MeasurementKind)}>
@@ -113,13 +122,11 @@ export function MeasurementPanel({ actions, controller }: MeasurementPanelProps)
         <ul className="measurement-list">
           {specs.map((spec, index) => (
             <li key={`${spec.channel}-${spec.kind}`}>
-              <span>CH{spec.channel} {KIND_LABELS[spec.kind]}</span>
+              <span>{waveformSourceLabel(spec.channel)} {KIND_LABELS[spec.kind]}</span>
               <button
                 type="button"
                 className="text-button"
-                onClick={() => actions.setMeasurementSpecs(
-                  specs.filter((_, candidate) => candidate !== index),
-                )}
+                onClick={() => actions.setMeasurementSpecs(specs.filter((_, candidate) => candidate !== index))}
               >
                 Remove
               </button>
