@@ -5,19 +5,27 @@ import {
   ChannelCoupling,
   ChannelUnit,
   EdgeSlope,
+  MathChannel,
+  MathOperator,
+  MathSource,
   MeasurementKind,
-  type MeasurementSpec,
-  type MeasurementValue,
-  type AcquisitionState,
-  type ChannelState,
-  type HorizontalState,
-  type ScopeInfo,
   ScopeRunState,
-  type ScopeState,
   TimebaseMode,
   TriggerCoupling,
   TriggerSweep,
   TriggerType,
+  WaveformSource,
+  channelForWaveformSource,
+  mathForWaveformSource,
+  waveformSourceForChannel,
+  type AcquisitionState,
+  type ChannelState,
+  type HorizontalState,
+  type MathState,
+  type MeasurementSpec,
+  type MeasurementValue,
+  type ScopeInfo,
+  type ScopeState,
   type TriggerState,
 } from "../../shared/scope-types.js";
 import { isRigolScpiLoggingEnabled } from "../logging.js";
@@ -38,7 +46,7 @@ import {
 import { decodeDho804WordSamples } from "./dho804-word-decoder.js";
 
 export interface Dho804Waveform {
-  channel: Channel;
+  source: WaveformSource;
   unit: ChannelUnit;
   samples: Float32Array;
   xIncrement: number;
@@ -57,7 +65,7 @@ interface WaveformPreamble {
 }
 
 interface WaveformSetupCache {
-  source: Channel | null;
+  source: WaveformSource | null;
   mode: "NORM" | "RAW" | null;
   format: "BYTE" | "WORD" | null;
   points: number | null;
@@ -78,6 +86,7 @@ interface Dho804CoalesceKeys {
 }
 
 const channels = [Channel.Ch1, Channel.Ch2, Channel.Ch3, Channel.Ch4] as const;
+const mathChannels = [MathChannel.Math1, MathChannel.Math2, MathChannel.Math3, MathChannel.Math4] as const;
 const rawChunkSamples = 250_000;
 
 export class Dho804Driver {
@@ -89,7 +98,7 @@ export class Dho804Driver {
   };
   private readonly channelUnits = new Map<Channel, ChannelUnit>();
   private readonly channelScales = new Map<Channel, number>();
-  private readonly liveWaveformPreambles = new Map<Channel, LiveWaveformPreambleCache>();
+  private readonly liveWaveformPreambles = new Map<WaveformSource, LiveWaveformPreambleCache>();
   private readonly coalesceKeys = createDho804CoalesceKeys();
 
   public constructor(private readonly scheduler: ScpiScheduler) {}
@@ -120,6 +129,10 @@ export class Dho804Driver {
     const channel2 = await this.readChannelState(Channel.Ch2, priority);
     const channel3 = await this.readChannelState(Channel.Ch3, priority);
     const channel4 = await this.readChannelState(Channel.Ch4, priority);
+    const math1 = await this.readMathState(MathChannel.Math1, priority);
+    const math2 = await this.readMathState(MathChannel.Math2, priority);
+    const math3 = await this.readMathState(MathChannel.Math3, priority);
+    const math4 = await this.readMathState(MathChannel.Math4, priority);
     const horizontal = await this.readHorizontalState(priority);
     const acquisition = await this.readAcquisitionState(priority);
     const runState = await this.readRunState(priority);
@@ -127,6 +140,7 @@ export class Dho804Driver {
 
     return {
       channels: [channel1, channel2, channel3, channel4],
+      math: [math1, math2, math3, math4],
       horizontal,
       acquisition,
       runState,
@@ -143,14 +157,125 @@ export class Dho804Driver {
     );
     const unit = parseChannelUnit(await this.queryText(`${prefix}:UNITs?`, priority));
     this.channelUnits.set(channel, unit);
-    const scale = parseFiniteNumber(await this.queryText(`${prefix}:SCALe?`, priority), "channel scale");
+    const scale = parseFiniteNumber(
+      await this.queryText(`${prefix}:SCALe?`, priority),
+      "channel scale",
+    );
     this.channelScales.set(channel, scale);
-    const offset = parseFiniteNumber(await this.queryText(`${prefix}:OFFSet?`, priority), "channel offset");
+    const offset = parseFiniteNumber(
+      await this.queryText(`${prefix}:OFFSet?`, priority),
+      "channel offset",
+    );
     const probeRatio = parsePositiveNumber(
       await this.queryText(`${prefix}:PROBe?`, priority),
       "probe ratio",
     );
     return { channel, enabled, coupling, bandwidthLimit, unit, scale, offset, probeRatio };
+  }
+
+  public async readMathState(math: MathChannel, priority: ScpiPriority): Promise<MathState> {
+    const prefix = mathPrefix(math);
+    const enabled = parseBoolean(await this.queryText(`${prefix}:DISPlay?`, priority));
+    const operator = parseMathOperator(await this.queryText(`${prefix}:OPERator?`, priority));
+
+    let source1: MathSource;
+    let source2: MathSource | null = null;
+    if (operator === MathOperator.Fft) {
+      source1 = parseMathSource(await this.queryText(`${prefix}:FFT:SOURce?`, priority));
+    } else if (isLogicOperator(operator)) {
+      source1 = parseMathSource(await this.queryText(`${prefix}:LSOurce1?`, priority));
+      if (operator !== MathOperator.Not) {
+        source2 = parseMathSource(await this.queryText(`${prefix}:LSOurce2?`, priority));
+      }
+    } else {
+      source1 = parseMathSource(await this.queryText(`${prefix}:SOURce1?`, priority));
+      if (isBinaryArithmeticOperator(operator)) {
+        source2 = parseMathSource(await this.queryText(`${prefix}:SOURce2?`, priority));
+      }
+    }
+
+    let scale: number | null;
+    let offset: number | null;
+    if (isLogicOperator(operator)) {
+      scale = null;
+      offset = null;
+    } else if (operator === MathOperator.Fft) {
+      scale = parsePositiveNumber(
+        await this.queryText(`${prefix}:FFT:SCALe?`, priority),
+        "math FFT scale",
+      );
+      offset = parseFiniteNumber(
+        await this.queryText(`${prefix}:FFT:OFFSet?`, priority),
+        "math FFT offset",
+      );
+    } else {
+      scale = parsePositiveNumber(
+        await this.queryText(`${prefix}:SCALe?`, priority),
+        "math scale",
+      );
+      offset = parseFiniteNumber(
+        await this.queryText(`${prefix}:OFFSet?`, priority),
+        "math offset",
+      );
+    }
+
+    return { math, enabled, operator, source1, source2, scale, offset };
+  }
+
+  public async setMathEnabled(
+    math: MathChannel,
+    enabled: boolean,
+    priority: ScpiPriority,
+  ): Promise<void> {
+    await this.command(`${mathPrefix(math)}:DISPlay ${enabled ? "ON" : "OFF"}`, priority, null);
+    this.invalidateMathWaveform(math);
+  }
+
+  public async setMathOperator(
+    math: MathChannel,
+    operator: MathOperator,
+    priority: ScpiPriority,
+  ): Promise<void> {
+    await this.command(`${mathPrefix(math)}:OPERator ${mathOperatorToken(operator)}`, priority, null);
+    this.invalidateMathWaveform(math);
+  }
+
+  public async setMathSource1(
+    math: MathChannel,
+    source: MathSource,
+    priority: ScpiPriority,
+  ): Promise<void> {
+    await this.command(`${mathPrefix(math)}:SOURce1 ${mathSourceToken(source)}`, priority, null);
+    this.invalidateMathWaveform(math);
+  }
+
+  public async setMathSource2(
+    math: MathChannel,
+    source: MathSource,
+    priority: ScpiPriority,
+  ): Promise<void> {
+    await this.command(`${mathPrefix(math)}:SOURce2 ${mathSourceToken(source)}`, priority, null);
+    this.invalidateMathWaveform(math);
+  }
+
+  public async setMathScale(
+    math: MathChannel,
+    value: number,
+    priority: ScpiPriority,
+  ): Promise<void> {
+    requirePositive(value, "math scale");
+    await this.command(`${mathPrefix(math)}:SCALe ${value}`, priority, null);
+    this.invalidateMathWaveform(math);
+  }
+
+  public async setMathOffset(
+    math: MathChannel,
+    value: number,
+    priority: ScpiPriority,
+  ): Promise<void> {
+    requireFinite(value, "math offset");
+    await this.command(`${mathPrefix(math)}:OFFSet ${value}`, priority, null);
+    this.invalidateMathWaveform(math);
   }
 
   public async readHorizontalState(priority: ScpiPriority): Promise<HorizontalState> {
@@ -224,11 +349,7 @@ export class Dho804Driver {
   }
 
   public async setChannelEnabled(channel: Channel, enabled: boolean, priority: ScpiPriority): Promise<void> {
-    await this.command(
-      `${channelPrefix(channel)}:DISPlay ${enabled ? "ON" : "OFF"}`,
-      priority,
-      null,
-    );
+    await this.command(`${channelPrefix(channel)}:DISPlay ${enabled ? "ON" : "OFF"}`, priority, null);
   }
 
   public async readChannelScale(channel: Channel, priority: ScpiPriority): Promise<number> {
@@ -239,7 +360,7 @@ export class Dho804Driver {
   }
 
   public async setChannelScale(channel: Channel, value: number, priority: ScpiPriority): Promise<void> {
-    requireFinite(value, "channel scale");
+    requirePositive(value, "channel scale");
     await this.command(
       `${channelPrefix(channel)}:SCALe ${value}`,
       priority,
@@ -279,9 +400,9 @@ export class Dho804Driver {
   }
 
   public async setHorizontalScale(value: number, priority: ScpiPriority): Promise<void> {
-    requireFinite(value, "horizontal scale");
+    requirePositive(value, "horizontal scale");
     await this.command(
-      `:TIMebase:MAIN:SCALe ${value}`,
+      ":TIMebase:MAIN:SCALe " + value,
       priority,
       this.coalesceKeys.horizontalScale,
       ScpiOperationKind.Write,
@@ -300,7 +421,7 @@ export class Dho804Driver {
   public async setHorizontalPosition(value: number, priority: ScpiPriority): Promise<void> {
     requireFinite(value, "horizontal position");
     await this.command(
-      `:TIMebase:MAIN:OFFSet ${value}`,
+      ":TIMebase:MAIN:OFFSet " + value,
       priority,
       this.coalesceKeys.horizontalPosition,
       ScpiOperationKind.Write,
@@ -345,11 +466,7 @@ export class Dho804Driver {
 
   public async setTriggerLevel(value: number, priority: ScpiPriority): Promise<void> {
     requireFinite(value, "trigger level");
-    await this.command(
-      `:TRIGger:EDGE:LEVel ${value}`,
-      priority,
-      this.coalesceKeys.triggerLevel,
-    );
+    await this.command(":TRIGger:EDGE:LEVel " + value, priority, this.coalesceKeys.triggerLevel);
   }
 
   public async run(): Promise<void> {
@@ -372,7 +489,7 @@ export class Dho804Driver {
     const values: MeasurementValue[] = [];
     for (const spec of specs) {
       const item = measurementItem(spec.kind);
-      const source = `CHANnel${spec.channel}`;
+      const source = waveformSourceToken(spec.channel);
       const queryStatistic = async (statistic: string, name: string): Promise<number> =>
         parseFiniteNumber(
           await this.queryText(
@@ -396,10 +513,7 @@ export class Dho804Driver {
         ),
         "measurement count",
       );
-      values.push({
-        ...spec,
-        statistics: { current, minimum, maximum, average, deviation, count },
-      });
+      values.push({ ...spec, statistics: { current, minimum, maximum, average, deviation, count } });
     }
     if (isRigolScpiLoggingEnabled()) {
       console.info(`[SCPI] measurements:complete ${JSON.stringify({
@@ -411,21 +525,13 @@ export class Dho804Driver {
     return values;
   }
 
-  public async setMeasurements(
-    specs: MeasurementSpec[],
-    priority: ScpiPriority,
-  ): Promise<void> {
+  public async setMeasurements(specs: MeasurementSpec[], priority: ScpiPriority): Promise<void> {
     await this.command(":MEASure:CLEar", priority, null, ScpiOperationKind.Measurement);
     await this.command(":MEASure:STATistic:RESet", priority, null, ScpiOperationKind.Measurement);
     for (const spec of specs) {
       const item = measurementItem(spec.kind);
-      const source = `CHANnel${spec.channel}`;
-      await this.command(
-        `:MEASure:ITEM ${item},${source}`,
-        priority,
-        null,
-        ScpiOperationKind.Measurement,
-      );
+      const source = waveformSourceToken(spec.channel);
+      await this.command(`:MEASure:ITEM ${item},${source}`, priority, null, ScpiOperationKind.Measurement);
       await this.command(
         `:MEASure:STATistic:ITEM ${item},${source}`,
         priority,
@@ -466,11 +572,14 @@ export class Dho804Driver {
     }
   }
 
-  public async readLiveWaveform(channel: Channel, pointCount: number): Promise<Dho804Waveform> {
+  public async readLiveWaveform(
+    source: WaveformSource,
+    pointCount: number,
+  ): Promise<Dho804Waveform> {
     if (!Number.isInteger(pointCount) || pointCount < 1 || pointCount > 1_000) {
       throw new Error("Live waveform pointCount must be an integer from 1 to 1000");
     }
-    channelPrefix(channel);
+    const sourceToken = waveformSourceToken(source);
 
     return this.scheduler.scheduleLatest(
       ScpiPriority.Waveform,
@@ -478,29 +587,21 @@ export class Dho804Driver {
       ScpiOperationKind.BinaryTransfer,
       async (transport, recorder) => {
         await this.ensureWaveformModeFormatPoints(transport, "NORM", "BYTE", pointCount);
-
-        // A horizontal write invalidates live preambles. On the real DHO804,
-        // issuing DATA? immediately after that invalidation can return an empty
-        // block after a long stall. Refresh metadata first on a cache miss so
-        // the scope establishes the new waveform context before binary data.
-        const preamble = await this.liveWaveformPreamble(transport, channel, pointCount);
-        const unit = await this.channelUnit(transport, channel);
-
-        // Real DHO804 captures show that chaining multiple DATA? units in one
-        // program message returns only the first non-empty waveform. Keep one
-        // channel per transaction while still combining source selection and
-        // DATA? into a single program message.
-        const command = `:WAVeform:SOURce CHANnel${channel};:WAVeform:DATA?`;
+        const preamble = await this.liveWaveformPreamble(transport, source, pointCount);
+        const channel = channelForWaveformSource(source);
+        const unit = channel === null
+          ? ChannelUnit.Unknown
+          : await this.channelUnit(transport, channel);
+        const command = `:WAVeform:SOURce ${sourceToken};:WAVeform:DATA?`;
         const payload = await transport.queryBinary(command);
-        this.waveformSetup.source = channel;
+        this.waveformSetup.source = source;
         recorder.addBinaryBytes(payload.byteLength);
         if (payload.byteLength !== pointCount) {
           throw new Error(
-            `Expected ${pointCount} live waveform samples for CH${channel}, received ${payload.byteLength}`,
+            `Expected ${pointCount} live waveform samples for ${sourceToken}, received ${payload.byteLength}`,
           );
         }
-
-        return createWaveform(channel, unit, payload, preamble);
+        return createWaveform(source, unit, payload, preamble);
       },
     );
   }
@@ -509,12 +610,13 @@ export class Dho804Driver {
     if (!Number.isSafeInteger(sampleCount) || sampleCount < 1) {
       throw new Error("RAW waveform sampleCount must be a positive safe integer");
     }
+    const source = waveformSourceForChannel(channel);
 
     return this.scheduler.schedule({
       priority: ScpiPriority.Normal,
       kind: ScpiOperationKind.BinaryTransfer,
       execute: async (transport, recorder) => {
-        await this.ensureWaveformSetup(transport, channel, "RAW", "WORD", sampleCount);
+        await this.ensureWaveformSetup(transport, source, "RAW", "WORD", sampleCount);
         const native = new Uint16Array(sampleCount);
         let written = 0;
         while (written < sampleCount) {
@@ -534,15 +636,13 @@ export class Dho804Driver {
           native.set(decoded, written);
           written += decoded.length;
         }
-
         if (written !== sampleCount) {
           throw new Error(`RAW waveform returned ${written} samples instead of ${sampleCount}`);
         }
-
         const preamble = parseWaveformPreamble(await transport.queryText(":WAVeform:PREamble?"));
         const unit = parseChannelUnit(await transport.queryText(`${channelPrefix(channel)}:UNITs?`));
         this.channelUnits.set(channel, unit);
-        return createWaveform(channel, unit, native, preamble);
+        return createWaveform(source, unit, native, preamble);
       },
     });
   }
@@ -577,7 +677,6 @@ export class Dho804Driver {
       await transport.command(command);
       onExecuted?.();
     };
-
     if (priority === ScpiPriority.Interactive) {
       if (coalesceKey === null) {
         throw new Error("Interactive SCPI writes require a semantic coalescing key");
@@ -594,22 +693,22 @@ export class Dho804Driver {
 
   private async ensureWaveformSetup(
     transport: ScpiTransport,
-    channel: Channel,
+    source: WaveformSource,
     mode: "NORM" | "RAW",
     format: "BYTE" | "WORD",
     points: number,
   ): Promise<void> {
-    await this.ensureWaveformSource(transport, channel);
+    await this.ensureWaveformSource(transport, source);
     await this.ensureWaveformModeFormatPoints(transport, mode, format, points);
   }
 
   private async ensureWaveformSource(
     transport: ScpiTransport,
-    channel: Channel,
+    source: WaveformSource,
   ): Promise<void> {
-    if (this.waveformSetup.source !== channel) {
-      await transport.command(`:WAVeform:SOURce CHANnel${channel}`);
-      this.waveformSetup.source = channel;
+    if (this.waveformSetup.source !== source) {
+      await transport.command(`:WAVeform:SOURce ${waveformSourceToken(source)}`);
+      this.waveformSetup.source = source;
     }
   }
 
@@ -635,24 +734,20 @@ export class Dho804Driver {
 
   private async liveWaveformPreamble(
     transport: ScpiTransport,
-    channel: Channel,
+    source: WaveformSource,
     pointCount: number,
   ): Promise<WaveformPreamble> {
-    const cached = this.liveWaveformPreambles.get(channel);
-    if (cached !== undefined && cached.pointCount === pointCount) {
-      return cached.preamble;
-    }
-    await this.ensureWaveformSource(transport, channel);
+    const cached = this.liveWaveformPreambles.get(source);
+    if (cached !== undefined && cached.pointCount === pointCount) return cached.preamble;
+    await this.ensureWaveformSource(transport, source);
     const preamble = parseWaveformPreamble(await transport.queryText(":WAVeform:PREamble?"));
-    this.liveWaveformPreambles.set(channel, { pointCount, preamble });
+    this.liveWaveformPreambles.set(source, { pointCount, preamble });
     return preamble;
   }
 
   private async channelUnit(transport: ScpiTransport, channel: Channel): Promise<ChannelUnit> {
     const cached = this.channelUnits.get(channel);
-    if (cached !== undefined) {
-      return cached;
-    }
+    if (cached !== undefined) return cached;
     const unit = parseChannelUnit(await transport.queryText(`${channelPrefix(channel)}:UNITs?`));
     this.channelUnits.set(channel, unit);
     return unit;
@@ -663,14 +758,15 @@ export class Dho804Driver {
     previousScale: number | undefined,
     nextScale: number,
   ): void {
-    const cached = this.liveWaveformPreambles.get(channel);
+    const source = waveformSourceForChannel(channel);
+    const cached = this.liveWaveformPreambles.get(source);
     if (
       cached === undefined ||
       previousScale === undefined ||
       previousScale <= 0 ||
       nextScale <= 0
     ) {
-      this.liveWaveformPreambles.delete(channel);
+      this.liveWaveformPreambles.delete(source);
       return;
     }
     const ratio = nextScale / previousScale;
@@ -679,12 +775,17 @@ export class Dho804Driver {
   }
 
   private updateCachedChannelOffset(channel: Channel, nextOffset: number): void {
-    const cached = this.liveWaveformPreambles.get(channel);
+    const source = waveformSourceForChannel(channel);
+    const cached = this.liveWaveformPreambles.get(source);
     if (cached === undefined || cached.preamble.yIncrement === 0) {
-      this.liveWaveformPreambles.delete(channel);
+      this.liveWaveformPreambles.delete(source);
       return;
     }
     cached.preamble.yOrigin = nextOffset / cached.preamble.yIncrement;
+  }
+
+  private invalidateMathWaveform(math: MathChannel): void {
+    this.liveWaveformPreambles.delete((math + 4) as WaveformSource);
   }
 }
 
@@ -710,10 +811,112 @@ function createDho804CoalesceKeys(): Dho804CoalesceKeys {
 }
 
 function channelPrefix(channel: Channel): string {
-  if (!channels.includes(channel)) {
-    throw new Error(`Invalid DHO804 channel: ${channel}`);
-  }
+  if (!channels.includes(channel)) throw new Error(`Invalid DHO804 channel: ${channel}`);
   return `:CHANnel${channel}`;
+}
+
+function mathPrefix(math: MathChannel): string {
+  if (!mathChannels.includes(math)) throw new Error(`Invalid DHO804 math channel: ${math}`);
+  return `:MATH${math}`;
+}
+
+function waveformSourceToken(source: WaveformSource): string {
+  const channel = channelForWaveformSource(source);
+  if (channel !== null) return `CHANnel${channel}`;
+  const math = mathForWaveformSource(source);
+  if (math !== null) return `MATH${math}`;
+  throw new Error(`Invalid DHO804 waveform source: ${source}`);
+}
+
+function mathSourceToken(source: MathSource): string {
+  if (source >= MathSource.Ch1 && source <= MathSource.Ch4) {
+    return `CHANnel${source}`;
+  }
+  if (source >= MathSource.Math1 && source <= MathSource.Math4) {
+    return `MATH${source - 4}`;
+  }
+  if (source >= MathSource.Ref1 && source <= MathSource.Ref10) {
+    return `REF${source - 100}`;
+  }
+  throw new Error(`Invalid DHO804 math source: ${source}`);
+}
+
+function parseMathSource(value: string): MathSource {
+  const token = value.trim().toUpperCase();
+  const channel = /^CHAN(?:NEL)?([1-4])$/.exec(token);
+  if (channel?.[1] !== undefined) return Number(channel[1]) as MathSource;
+  const math = /^MATH([1-4])$/.exec(token);
+  if (math?.[1] !== undefined) return (Number(math[1]) + 4) as MathSource;
+  const ref = /^REF(10|[1-9])$/.exec(token);
+  if (ref?.[1] !== undefined) return (Number(ref[1]) + 100) as MathSource;
+  return failToken("math source", value);
+}
+
+function parseMathOperator(value: string): MathOperator {
+  switch (value.trim().toUpperCase()) {
+    case "ADD": return MathOperator.Add;
+    case "SUBT": return MathOperator.Subtract;
+    case "MULT": return MathOperator.Multiply;
+    case "DIV": return MathOperator.Divide;
+    case "AND": return MathOperator.And;
+    case "OR": return MathOperator.Or;
+    case "XOR": return MathOperator.Xor;
+    case "NOT": return MathOperator.Not;
+    case "FFT": return MathOperator.Fft;
+    case "INTG": return MathOperator.Integrate;
+    case "DIFF": return MathOperator.Differentiate;
+    case "SQRT": return MathOperator.SquareRoot;
+    case "LG": return MathOperator.Log10;
+    case "LN": return MathOperator.NaturalLog;
+    case "EXP": return MathOperator.Exp;
+    case "ABS": return MathOperator.Abs;
+    case "LPAS": return MathOperator.LowPass;
+    case "HPAS": return MathOperator.HighPass;
+    case "BPAS": return MathOperator.BandPass;
+    case "BST": return MathOperator.BandStop;
+    case "AXB": return MathOperator.AxB;
+    default: return failToken("math operator", value);
+  }
+}
+
+function mathOperatorToken(value: MathOperator): string {
+  switch (value) {
+    case MathOperator.Add: return "ADD";
+    case MathOperator.Subtract: return "SUBTract";
+    case MathOperator.Multiply: return "MULTiply";
+    case MathOperator.Divide: return "DIVision";
+    case MathOperator.And: return "AND";
+    case MathOperator.Or: return "OR";
+    case MathOperator.Xor: return "XOR";
+    case MathOperator.Not: return "NOT";
+    case MathOperator.Fft: return "FFT";
+    case MathOperator.Integrate: return "INTG";
+    case MathOperator.Differentiate: return "DIFF";
+    case MathOperator.SquareRoot: return "SQRT";
+    case MathOperator.Log10: return "LG";
+    case MathOperator.NaturalLog: return "LN";
+    case MathOperator.Exp: return "EXP";
+    case MathOperator.Abs: return "ABS";
+    case MathOperator.LowPass: return "LPASs";
+    case MathOperator.HighPass: return "HPASs";
+    case MathOperator.BandPass: return "BPASs";
+    case MathOperator.BandStop: return "BSTop";
+    case MathOperator.AxB: return "AXB";
+  }
+}
+
+function isBinaryArithmeticOperator(operator: MathOperator): boolean {
+  return operator === MathOperator.Add ||
+    operator === MathOperator.Subtract ||
+    operator === MathOperator.Multiply ||
+    operator === MathOperator.Divide;
+}
+
+function isLogicOperator(operator: MathOperator): boolean {
+  return operator === MathOperator.And ||
+    operator === MathOperator.Or ||
+    operator === MathOperator.Xor ||
+    operator === MathOperator.Not;
 }
 
 function parseBoolean(value: string): boolean {
@@ -794,9 +997,7 @@ function parseTriggerSweep(value: string): TriggerSweep {
 
 function parseChannelSource(value: string): Channel {
   const match = /^CHAN(?:NEL)?([1-4])$/i.exec(value.trim());
-  if (match === null || match[1] === undefined) {
-    return failToken("trigger source", value);
-  }
+  if (match === null || match[1] === undefined) return failToken("trigger source", value);
   return Number(match[1]) as Channel;
 }
 
@@ -857,9 +1058,7 @@ function measurementItem(kind: MeasurementKind): string {
 
 function parseWaveformPreamble(value: string): WaveformPreamble {
   const fields = value.trim().split(",");
-  if (fields.length < 10) {
-    throw new Error(`Malformed DHO804 waveform preamble: ${value}`);
-  }
+  if (fields.length < 10) throw new Error(`Malformed DHO804 waveform preamble: ${value}`);
   const points = parsePositiveIntegerLikeNumber(requiredField(fields, 2), "waveform points");
   return {
     points,
@@ -874,14 +1073,12 @@ function parseWaveformPreamble(value: string): WaveformPreamble {
 
 function requiredField(fields: string[], index: number): string {
   const value = fields[index];
-  if (value === undefined) {
-    throw new Error(`Missing waveform preamble field ${index}`);
-  }
+  if (value === undefined) throw new Error(`Missing waveform preamble field ${index}`);
   return value;
 }
 
 function createWaveform(
-  channel: Channel,
+  source: WaveformSource,
   unit: ChannelUnit,
   native: Uint8Array | Uint16Array,
   preamble: WaveformPreamble,
@@ -889,13 +1086,11 @@ function createWaveform(
   const samples = new Float32Array(native.length);
   for (let index = 0; index < native.length; index += 1) {
     const code = native[index];
-    if (code === undefined) {
-      throw new Error("Missing native waveform sample");
-    }
+    if (code === undefined) throw new Error("Missing native waveform sample");
     samples[index] = (code - preamble.yOrigin - preamble.yReference) * preamble.yIncrement;
   }
   return {
-    channel,
+    source,
     unit,
     samples,
     xIncrement: preamble.xIncrement,
@@ -906,48 +1101,41 @@ function createWaveform(
 
 function parseFiniteNumber(value: string, name: string): number {
   const parsed = Number(value.trim());
-  if (!Number.isFinite(parsed)) {
-    throw new Error(`Invalid ${name}: ${value}`);
-  }
+  if (!Number.isFinite(parsed)) throw new Error(`Invalid ${name}: ${value}`);
   return parsed;
 }
 
 function parsePositiveNumber(value: string, name: string): number {
   const parsed = parseFiniteNumber(value, name);
-  if (parsed <= 0) {
-    throw new Error(`Invalid ${name}: ${value}`);
-  }
+  if (parsed <= 0) throw new Error(`Invalid ${name}: ${value}`);
   return parsed;
 }
 
 function parsePositiveInteger(value: string, name: string): number {
   const parsed = Number(value.trim());
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`Invalid ${name}: ${value}`);
-  }
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`Invalid ${name}: ${value}`);
   return parsed;
 }
 
 function parseNonNegativeInteger(value: string, name: string): number {
   const parsed = Number(value.trim());
-  if (!Number.isSafeInteger(parsed) || parsed < 0) {
-    throw new Error(`Invalid ${name}: ${value}`);
-  }
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`Invalid ${name}: ${value}`);
   return parsed;
 }
 
 function parsePositiveIntegerLikeNumber(value: string, name: string): number {
   const parsed = parsePositiveNumber(value, name);
-  if (!Number.isSafeInteger(parsed)) {
-    throw new Error(`Invalid ${name}: ${value}`);
-  }
+  if (!Number.isSafeInteger(parsed)) throw new Error(`Invalid ${name}: ${value}`);
   return parsed;
 }
 
 function requireFinite(value: number, name: string): void {
-  if (!Number.isFinite(value)) {
-    throw new Error(`${name} must be finite`);
-  }
+  if (!Number.isFinite(value)) throw new Error(`${name} must be finite`);
+}
+
+function requirePositive(value: number, name: string): void {
+  requireFinite(value, name);
+  if (value <= 0) throw new Error(`${name} must be greater than zero`);
 }
 
 function failToken(name: string, value: string): never {
