@@ -38,7 +38,7 @@ function syncFormState(sourceRoot: HTMLElement, cloneRoot: HTMLElement): void {
   for (let index = 0; index < sourceInputs.length; index += 1) {
     const source = sourceInputs[index];
     const clone = cloneInputs[index];
-    if (clone === undefined) {
+    if (source === undefined || clone === undefined) {
       continue;
     }
     clone.value = source.value;
@@ -56,7 +56,7 @@ function syncFormState(sourceRoot: HTMLElement, cloneRoot: HTMLElement): void {
   for (let index = 0; index < sourceTextareas.length; index += 1) {
     const source = sourceTextareas[index];
     const clone = cloneTextareas[index];
-    if (clone === undefined) {
+    if (source === undefined || clone === undefined) {
       continue;
     }
     clone.value = source.value;
@@ -68,11 +68,14 @@ function syncFormState(sourceRoot: HTMLElement, cloneRoot: HTMLElement): void {
   for (let index = 0; index < sourceSelects.length; index += 1) {
     const source = sourceSelects[index];
     const clone = cloneSelects[index];
-    if (clone === undefined) {
+    if (source === undefined || clone === undefined) {
       continue;
     }
     for (let optionIndex = 0; optionIndex < clone.options.length; optionIndex += 1) {
       const option = clone.options[optionIndex];
+      if (option === undefined) {
+        continue;
+      }
       option.selected = optionIndex === source.selectedIndex;
       if (option.selected) {
         option.setAttribute("selected", "");
@@ -94,7 +97,7 @@ function replaceCanvases(sourceRoot: HTMLElement, cloneRoot: HTMLElement): void 
   for (let index = 0; index < sourceCanvases.length; index += 1) {
     const source = sourceCanvases[index];
     const clone = cloneCanvases[index];
-    if (clone === undefined) {
+    if (source === undefined || clone === undefined) {
       continue;
     }
 

@@ -52,8 +52,8 @@ export interface Ppk2ApplicationService {
 }
 
 export interface Ppk2ServiceOptions {
-  host: string;
-  port: number;
+  host?: string;
+  port?: number;
 }
 
 interface PendingStoredChunk {

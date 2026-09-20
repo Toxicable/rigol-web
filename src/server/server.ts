@@ -17,13 +17,11 @@ const SCOPE_ADB_PORT_DEFAULT = 55_555;
 
 type InstrumentHostName =
   | "RIGOL_SCOPE_HOST"
-  | "RIGOL_DMM_HOST"
-  | "PPK2_BRIDGE_HOST";
+  | "RIGOL_DMM_HOST";
 
 type InstrumentPortName =
   | "RIGOL_SCOPE_PORT"
-  | "RIGOL_DMM_PORT"
-  | "PPK2_BRIDGE_PORT";
+  | "RIGOL_DMM_PORT";
 
 function readHttpPort(): number {
   const value = Number(process.env.PORT ?? HTTP_PORT_DEFAULT);
@@ -62,6 +60,22 @@ function readScopeAdbPort(): number {
   return value;
 }
 
+function readOptionalPpk2Endpoint(): { host: string; port: number } | undefined {
+  const host = process.env.PPK2_BRIDGE_HOST?.trim();
+  const rawPort = process.env.PPK2_BRIDGE_PORT?.trim();
+  if ((host === undefined || host.length === 0) && (rawPort === undefined || rawPort.length === 0)) {
+    return undefined;
+  }
+  if (host === undefined || host.length === 0) {
+    throw new Error("PPK2_BRIDGE_HOST must be set when PPK2_BRIDGE_PORT is set");
+  }
+  const port = Number(rawPort);
+  if (rawPort === undefined || rawPort.length === 0 || !Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("PPK2_BRIDGE_PORT must be an integer from 1 through 65535 when PPK2_BRIDGE_HOST is set");
+  }
+  return { host, port };
+}
+
 const httpPort = readHttpPort();
 const scopeEndpoint = {
   host: readInstrumentHost("RIGOL_SCOPE_HOST"),
@@ -71,10 +85,7 @@ const dmmEndpoint = {
   host: readInstrumentHost("RIGOL_DMM_HOST"),
   port: readInstrumentPort("RIGOL_DMM_PORT"),
 };
-const ppk2Endpoint = {
-  host: readInstrumentHost("PPK2_BRIDGE_HOST"),
-  port: readInstrumentPort("PPK2_BRIDGE_PORT"),
-};
+const ppk2Endpoint = readOptionalPpk2Endpoint();
 
 const acquisitionService = new AcquisitionService();
 const scopeService = new ScopeService({
@@ -82,7 +93,7 @@ const scopeService = new ScopeService({
   adbPort: readScopeAdbPort(),
 });
 const dmmService = new DmmService(dmmEndpoint);
-const ppk2Service = new Ppk2Service(ppk2Endpoint, acquisitionService);
+const ppk2Service = new Ppk2Service(ppk2Endpoint ?? {}, acquisitionService);
 
 const instruments = new InstrumentRegistry({
   dho804: scopeService.runtime,

@@ -44,9 +44,9 @@ interface FailureSignal {
 }
 
 export interface Ppk2RuntimeSession {
-  readonly info: Ppk2Info;
-  readonly metadata: Ppk2CalibrationMetadata;
-  readonly sourceSessionId: number;
+  info: Ppk2Info;
+  metadata: Ppk2CalibrationMetadata;
+  sourceSessionId: number;
   startMeasurement(): Promise<void>;
   stopMeasurement(): Promise<void>;
 }
@@ -65,8 +65,8 @@ interface OwnedPpk2RuntimeSession extends Ppk2RuntimeSession {
 }
 
 export interface Ppk2RuntimeOptions {
-  host: string;
-  port: number;
+  host?: string;
+  port?: number;
   publishConnection: (connection: Ppk2Connection) => void;
   publishBatch: (batch: Ppk2DecodedBatch) => void;
   reconnectDelayMs?: number;
@@ -75,8 +75,8 @@ export interface Ppk2RuntimeOptions {
 }
 
 export class Ppk2Runtime {
-  private readonly host: string;
-  private readonly port: number;
+  private readonly host: string | null;
+  private readonly port: number | null;
   private readonly reconnectDelayMs: number;
   private readonly connectTimeoutMs: number;
   private readonly metadataTimeoutMs: number;
@@ -91,14 +91,20 @@ export class Ppk2Runtime {
   private disconnectedReason = "PPK2 runtime inactive";
 
   public constructor(options: Ppk2RuntimeOptions) {
-    if (options.host.trim().length === 0) {
+    const host = options.host?.trim();
+    const hasHost = host !== undefined && host.length > 0;
+    const hasPort = options.port !== undefined;
+    if (!hasHost && !hasPort) {
+      this.host = null;
+      this.port = null;
+    } else if (!hasHost) {
       throw new Error("PPK2_BRIDGE_HOST must be a non-empty string");
-    }
-    if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65_535) {
+    } else if (!Number.isInteger(options.port) || options.port! < 1 || options.port! > 65_535) {
       throw new Error("PPK2_BRIDGE_PORT must be an integer from 1 through 65535");
+    } else {
+      this.host = host;
+      this.port = options.port!;
     }
-    this.host = options.host;
-    this.port = options.port;
     this.reconnectDelayMs = readDelay(options.reconnectDelayMs, DEFAULT_RECONNECT_DELAY_MS, "reconnectDelayMs");
     this.connectTimeoutMs = readPositiveDelay(options.connectTimeoutMs, DEFAULT_CONNECT_TIMEOUT_MS, "connectTimeoutMs");
     this.metadataTimeoutMs = readPositiveDelay(options.metadataTimeoutMs, DEFAULT_METADATA_TIMEOUT_MS, "metadataTimeoutMs");
@@ -109,6 +115,11 @@ export class Ppk2Runtime {
   public start(): void {
     if (this.running) return;
     this.running = true;
+    if (this.host === null || this.port === null) {
+      this.disconnectedReason = "PPK2 bridge not configured";
+      this.publishConnection({ kind: Ppk2ConnectionKind.Disconnected, reason: this.disconnectedReason });
+      return;
+    }
     this.disconnectedReason = "PPK2 bridge connection pending";
     this.publishConnection({ kind: Ppk2ConnectionKind.Disconnected, reason: this.disconnectedReason });
     this.loopPromise = this.runLoop();
@@ -164,7 +175,7 @@ export class Ppk2Runtime {
   }
 
   private async createSession(): Promise<OwnedPpk2RuntimeSession> {
-    const socket = connect({ host: this.host, port: this.port });
+    const socket = connect({ host: this.host!, port: this.port! });
     this.initializingSocket = socket;
     try {
       await waitForSocketConnect(socket, this.connectTimeoutMs);

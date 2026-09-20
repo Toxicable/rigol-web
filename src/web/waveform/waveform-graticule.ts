@@ -1,4 +1,4 @@
-import type uPlot from "uplot";
+import uPlot from "uplot";
 
 export const SCOPE_HORIZONTAL_DIVISIONS = 10;
 export const SCOPE_VERTICAL_DIVISIONS = 8;
@@ -34,7 +34,7 @@ export function drawScopeGraticule(plot: uPlot): void {
   }
 
   const ctx = plot.ctx;
-  const lineWidth = Math.max(1, Math.round(plot.pxRatio));
+  const lineWidth = Math.max(1, Math.round(uPlot.pxRatio));
   const verticalLines = graticuleLinePositions(
     left,
     width,

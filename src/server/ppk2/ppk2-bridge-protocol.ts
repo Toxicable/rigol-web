@@ -19,7 +19,7 @@ export interface Ppk2BridgeFrame {
 }
 
 export class Ppk2BridgeFrameParser {
-  private remainder = Buffer.alloc(0);
+  private remainder: Buffer<ArrayBufferLike> = Buffer.alloc(0);
 
   public push(data: Buffer): readonly Ppk2BridgeFrame[] {
     if (data.length === 0) {

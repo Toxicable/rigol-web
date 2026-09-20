@@ -128,10 +128,10 @@ function readPlotLayout(plot: uPlot, width: number, height: number): PlotLayout 
   return {
     width,
     height,
-    plotLeft: plot.bbox.left / plot.pxRatio,
-    plotTop: plot.bbox.top / plot.pxRatio,
-    plotWidth: plot.bbox.width / plot.pxRatio,
-    plotHeight: plot.bbox.height / plot.pxRatio,
+    plotLeft: plot.bbox.left / uPlot.pxRatio,
+    plotTop: plot.bbox.top / uPlot.pxRatio,
+    plotWidth: plot.bbox.width / uPlot.pxRatio,
+    plotHeight: plot.bbox.height / uPlot.pxRatio,
   };
 }
 

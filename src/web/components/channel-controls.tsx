@@ -69,54 +69,59 @@ export function ChannelControls({ channels, actions }: ChannelControlsProps) {
                 />
                 <span>{channelUnitSymbol(channel.unit)}</span>
               </label>
-              <label>
-                Coupling
-                <select
-                  value={channel.coupling}
-                  onChange={(event: ChangeEvent<HTMLSelectElement>) => {
-                    void actions.setChannelCoupling(
-                      channel.channel,
-                      Number(event.target.value) as ChannelCoupling,
-                    );
-                  }}
-                >
-                  {COUPLINGS.map((coupling) => (
-                    <option value={coupling} key={coupling}>{COUPLING_LABELS[coupling]}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                BW limit
-                <select
-                  value={channel.bandwidthLimit}
-                  onChange={(event: ChangeEvent<HTMLSelectElement>) => {
-                    void actions.setChannelBandwidthLimit(
-                      channel.channel,
-                      Number(event.target.value) as ChannelBandwidthLimit,
-                    );
-                  }}
-                >
-                  {BANDWIDTH_LIMITS.map((limit) => (
-                    <option value={limit} key={limit}>{BANDWIDTH_LABELS[limit]}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Probe
-                <select
-                  value={channel.probeRatio}
-                  onChange={(event: ChangeEvent<HTMLSelectElement>) => {
-                    void actions.setChannelProbeRatio(channel.channel, Number(event.target.value));
-                  }}
-                >
-                  {!knownProbeRatio ? (
-                    <option value={channel.probeRatio}>{channel.probeRatio}×</option>
-                  ) : null}
-                  {PROBE_RATIOS.map((ratio) => (
-                    <option value={ratio} key={ratio}>{ratio}×</option>
-                  ))}
-                </select>
-              </label>
+              <details className="channel-menu">
+                <summary aria-label={`CH${channel.channel} channel options`} title="Channel options">⋮</summary>
+                <div className="channel-menu-content">
+                  <label>
+                    Coupling
+                    <select
+                      value={channel.coupling}
+                      onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+                        void actions.setChannelCoupling(
+                          channel.channel,
+                          Number(event.target.value) as ChannelCoupling,
+                        );
+                      }}
+                    >
+                      {COUPLINGS.map((coupling) => (
+                        <option value={coupling} key={coupling}>{COUPLING_LABELS[coupling]}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    BW limit
+                    <select
+                      value={channel.bandwidthLimit}
+                      onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+                        void actions.setChannelBandwidthLimit(
+                          channel.channel,
+                          Number(event.target.value) as ChannelBandwidthLimit,
+                        );
+                      }}
+                    >
+                      {BANDWIDTH_LIMITS.map((limit) => (
+                        <option value={limit} key={limit}>{BANDWIDTH_LABELS[limit]}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Probe
+                    <select
+                      value={channel.probeRatio}
+                      onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+                        void actions.setChannelProbeRatio(channel.channel, Number(event.target.value));
+                      }}
+                    >
+                      {!knownProbeRatio ? (
+                        <option value={channel.probeRatio}>{channel.probeRatio}×</option>
+                      ) : null}
+                      {PROBE_RATIOS.map((ratio) => (
+                        <option value={ratio} key={ratio}>{ratio}×</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </details>
               <dl className="compact-details">
                 <div><dt>Range</dt><dd>{formatAmplitude(channel.scale * 8, channel.unit)}</dd></div>
               </dl>
