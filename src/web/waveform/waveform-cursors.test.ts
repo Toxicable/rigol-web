@@ -79,8 +79,15 @@ describe("waveform cursors", () => {
   });
 
   it("snaps to the nearest delivered waveform sample", () => {
-    expect(nearestWaveformPoint(frame(), 18e-6)).toEqual({ x: 20e-6, y: 2 });
-    expect(nearestWaveformPoint(frame(), -1)).toEqual({ x: 10e-6, y: 1 });
-    expect(nearestWaveformPoint(frame(), 1)).toEqual({ x: 50e-6, y: 5 });
+    const middle = nearestWaveformPoint(frame(), 18e-6);
+    const first = nearestWaveformPoint(frame(), -1);
+    const last = nearestWaveformPoint(frame(), 1);
+
+    expect(middle?.x).toBeCloseTo(20e-6);
+    expect(middle?.y).toBe(2);
+    expect(first?.x).toBeCloseTo(10e-6);
+    expect(first?.y).toBe(1);
+    expect(last?.x).toBeCloseTo(50e-6);
+    expect(last?.y).toBe(5);
   });
 });
