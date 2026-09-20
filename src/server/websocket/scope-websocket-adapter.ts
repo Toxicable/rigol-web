@@ -5,11 +5,16 @@ import {
   ChannelBandwidthLimit,
   ChannelCoupling,
   EdgeSlope,
+  MathChannel,
+  MathOperator,
+  MathSource,
   MeasurementKind,
   TimebaseMode,
   TriggerCoupling,
   TriggerSweep,
   TriggerType,
+  WaveformSource,
+  waveformSourceForChannel,
   type MeasurementSpec,
 } from "../../shared/scope-types.js";
 import {
@@ -50,12 +55,12 @@ import {
 
 interface WaveformHeader {
   kind: WaveformKind;
-  channel: Channel;
+  source: WaveformSource;
   captureId: number;
 }
 
 interface ScopeClientState {
-  pendingLiveFrames: Map<Channel, Uint8Array>;
+  pendingLiveFrames: Map<WaveformSource, Uint8Array>;
   liveSendInFlight: boolean;
   viewportGenerations: Map<Channel, number>;
 }
@@ -75,17 +80,13 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
   }
 
   public attach(host: WebSocketAdapterHost): void {
-    if (this.host !== null) {
-      throw new Error("Scope WebSocket adapter is already attached");
-    }
+    if (this.host !== null) throw new Error("Scope WebSocket adapter is already attached");
     this.host = host;
     this.unsubscribeServices = [
       this.scopeService.subscribeConnection((connection) => {
         this.connection = connection;
         this.connectionRevision += 1;
-        if (connection.kind === ScopeConnectionKind.Disconnected) {
-          this.releaseInteractionOwner();
-        }
+        if (connection.kind === ScopeConnectionKind.Disconnected) this.releaseInteractionOwner();
         host.broadcastJson(this.instrument, this.lifecycleMessage(connection));
       }),
       this.scopeService.subscribeState((state) => {
@@ -94,9 +95,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
         }
         host.broadcastJson(this.instrument, { type: MessageType.ScopeState, state });
       }),
-      this.scopeService.subscribeWaveform((frame) => {
-        this.broadcastWaveform(frame);
-      }),
+      this.scopeService.subscribeWaveform((frame) => this.broadcastWaveform(frame)),
     ];
   }
 
@@ -127,6 +126,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
           kind: control.kind,
           value: control.value,
           channel: "channel" in control ? control.channel : undefined,
+          math: "math" in control ? control.math : undefined,
           pausesLive,
         });
         try {
@@ -134,9 +134,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
           this.requireConnectionRevision(revision);
           host.sendCompleted(session, requestId);
         } finally {
-          if (pausesLive && this.interactionOwner === null) {
-            this.scopeService.resumeLiveWaveform();
-          }
+          if (pausesLive && this.interactionOwner === null) this.scopeService.resumeLiveWaveform();
         }
         return true;
       }
@@ -295,9 +293,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
   }
 
   private requireConnectionRevision(revision: number): void {
-    if (revision !== this.connectionRevision) {
-      throw new Error("Scope session changed while request was in flight");
-    }
+    if (revision !== this.connectionRevision) throw new Error("Scope session changed while request was in flight");
   }
 
   private requireInteractionAvailable(session: WebSocketSession): void {
@@ -336,7 +332,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
       throw new Error("Scope waveform publication only accepts live waveform frames");
     }
     this.requireHost().forEachSubscribed(this.instrument, (session) => {
-      this.queueLiveFrame(session, header.channel, frame);
+      this.queueLiveFrame(session, header.source, frame);
     });
   }
 
@@ -363,7 +359,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
     if (
       header.kind !== WaveformKind.DeepViewport ||
       header.captureId !== message.captureId ||
-      header.channel !== message.channel
+      header.source !== waveformSourceForChannel(message.channel)
     ) {
       throw new Error("Viewport handler returned a mismatched waveform frame");
     }
@@ -374,15 +370,15 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
     host.sendBinary(session, frame);
   }
 
-  private queueLiveFrame(session: WebSocketSession, channel: Channel, frame: Uint8Array): void {
+  private queueLiveFrame(session: WebSocketSession, source: WaveformSource, frame: Uint8Array): void {
     const host = this.requireHost();
     if (!host.isOpen(session)) return;
     const state = this.clientState(session);
     if (state.liveSendInFlight || host.isBackpressured(session)) {
-      state.pendingLiveFrames.set(channel, frame);
+      state.pendingLiveFrames.set(source, frame);
       return;
     }
-    state.pendingLiveFrames.delete(channel);
+    state.pendingLiveFrames.delete(source);
     this.sendLiveFrame(session, frame);
   }
 
@@ -403,8 +399,8 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
     ) return;
     const pending = state.pendingLiveFrames.entries().next();
     if (pending.done) return;
-    const [channel, frame] = pending.value;
-    state.pendingLiveFrames.delete(channel);
+    const [source, frame] = pending.value;
+    state.pendingLiveFrames.delete(source);
     this.sendLiveFrame(session, frame);
   }
 
@@ -436,6 +432,72 @@ function readChannel(value: unknown): Channel {
     default:
       throw new Error("channel must be CH1 through CH4");
   }
+}
+
+function readWaveformSource(value: unknown): WaveformSource {
+  switch (value) {
+    case WaveformSource.Ch1:
+    case WaveformSource.Ch2:
+    case WaveformSource.Ch3:
+    case WaveformSource.Ch4:
+    case WaveformSource.Math1:
+    case WaveformSource.Math2:
+    case WaveformSource.Math3:
+    case WaveformSource.Math4:
+      return value;
+    default:
+      throw new Error("waveform source must be CH1-CH4 or MATH1-MATH4");
+  }
+}
+
+function readMathChannel(value: unknown): MathChannel {
+  switch (value) {
+    case MathChannel.Math1:
+    case MathChannel.Math2:
+    case MathChannel.Math3:
+    case MathChannel.Math4:
+      return value;
+    default:
+      throw new Error("math must be MATH1 through MATH4");
+  }
+}
+
+function readMathOperator(value: unknown): MathOperator {
+  switch (value) {
+    case MathOperator.Add:
+    case MathOperator.Subtract:
+    case MathOperator.Multiply:
+    case MathOperator.Divide:
+    case MathOperator.And:
+    case MathOperator.Or:
+    case MathOperator.Xor:
+    case MathOperator.Not:
+    case MathOperator.Fft:
+    case MathOperator.Integrate:
+    case MathOperator.Differentiate:
+    case MathOperator.SquareRoot:
+    case MathOperator.Log10:
+    case MathOperator.NaturalLog:
+    case MathOperator.Exp:
+    case MathOperator.Abs:
+    case MathOperator.LowPass:
+    case MathOperator.HighPass:
+    case MathOperator.BandPass:
+    case MathOperator.BandStop:
+    case MathOperator.AxB:
+      return value;
+    default:
+      throw new Error("Invalid math operator");
+  }
+}
+
+function readMathSource(value: unknown): MathSource {
+  if (typeof value !== "number") throw new Error("Invalid math source");
+  if (
+    (value >= MathSource.Ch1 && value <= MathSource.Math4) ||
+    (value >= MathSource.Ref1 && value <= MathSource.Ref10)
+  ) return value as MathSource;
+  throw new Error("Invalid math source");
 }
 
 function readChannelCoupling(value: unknown): ChannelCoupling {
@@ -563,6 +625,19 @@ function readControl(value: unknown): ControlChange {
       return { kind: ControlKind.ChannelProbeRatio, channel: readChannel(value.channel), value: readFiniteNumber(value.value, "Probe ratio") };
     case ControlKind.ChannelBandwidthLimit:
       return { kind: ControlKind.ChannelBandwidthLimit, channel: readChannel(value.channel), value: readChannelBandwidthLimit(value.value) };
+    case ControlKind.MathEnabled:
+      if (typeof value.value !== "boolean") throw new Error("Math enabled value must be boolean");
+      return { kind: ControlKind.MathEnabled, math: readMathChannel(value.math), value: value.value };
+    case ControlKind.MathOperator:
+      return { kind: ControlKind.MathOperator, math: readMathChannel(value.math), value: readMathOperator(value.value) };
+    case ControlKind.MathSource1:
+      return { kind: ControlKind.MathSource1, math: readMathChannel(value.math), value: readMathSource(value.value) };
+    case ControlKind.MathSource2:
+      return { kind: ControlKind.MathSource2, math: readMathChannel(value.math), value: readMathSource(value.value) };
+    case ControlKind.MathScale:
+      return { kind: ControlKind.MathScale, math: readMathChannel(value.math), value: readFiniteNumber(value.value, "Math scale") };
+    case ControlKind.MathOffset:
+      return { kind: ControlKind.MathOffset, math: readMathChannel(value.math), value: readFiniteNumber(value.value, "Math offset") };
     case ControlKind.HorizontalScale:
       return { kind: ControlKind.HorizontalScale, value: readFiniteNumber(value.value, "Horizontal scale") };
     case ControlKind.HorizontalPosition:
@@ -618,7 +693,7 @@ function readMeasurementList(value: unknown): MeasurementSpec[] {
   if (!Array.isArray(value)) throw new Error("measurements must be an array");
   return value.map((item): MeasurementSpec => {
     if (!isRecord(item)) throw new Error("measurement must be an object");
-    return { kind: readMeasurementKind(item.kind), channel: readChannel(item.channel) };
+    return { kind: readMeasurementKind(item.kind), channel: readWaveformSource(item.channel) };
   });
 }
 
@@ -649,9 +724,7 @@ function readViewportRequest(value: Record<string, unknown>): WaveformViewportRe
 }
 
 function readWaveformHeader(frame: Uint8Array): WaveformHeader {
-  if (frame.byteLength < WAVEFORM_HEADER_BYTES) {
-    throw new Error("Waveform frame is shorter than its header");
-  }
+  if (frame.byteLength < WAVEFORM_HEADER_BYTES) throw new Error("Waveform frame is shorter than its header");
   const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
   if (view.getUint32(0, true) !== WAVEFORM_MAGIC) throw new Error("Waveform frame has invalid magic");
   if (view.getUint8(4) !== WAVEFORM_FRAME_VERSION) throw new Error("Waveform frame has unsupported version");
@@ -659,9 +732,12 @@ function readWaveformHeader(frame: Uint8Array): WaveformHeader {
   if (kind !== WaveformKind.Live && kind !== WaveformKind.DeepViewport) {
     throw new Error("Waveform frame has invalid kind");
   }
-  const channel = readChannel(view.getUint8(6));
+  const source = readWaveformSource(view.getUint8(6));
+  if (kind === WaveformKind.DeepViewport && source > WaveformSource.Ch4) {
+    throw new Error("Deep waveform frame has non-physical source");
+  }
   if (view.getUint32(28, true) !== WAVEFORM_HEADER_BYTES) {
     throw new Error("Waveform frame has invalid header length");
   }
-  return { kind, channel, captureId: view.getUint32(12, true) };
+  return { kind, source, captureId: view.getUint32(12, true) };
 }
