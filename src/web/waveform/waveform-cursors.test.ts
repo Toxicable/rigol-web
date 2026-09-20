@@ -1,0 +1,82 @@
+import { describe, expect, it } from "vitest";
+
+import { ChannelUnit, WaveformSource } from "../../shared/scope-types.js";
+import { WaveformKind } from "../../shared/websocket-protocol.js";
+import type { DecodedWaveformFrame } from "./waveform-frame-decoder.js";
+import {
+  initialWaveformCursorState,
+  nearestWaveformPoint,
+  waveformCursorMarkerCount,
+  waveformCursorReducer,
+} from "./waveform-cursors.js";
+
+function frame(): DecodedWaveformFrame {
+  return {
+    kind: WaveformKind.Live,
+    source: WaveformSource.Ch1,
+    unit: ChannelUnit.Volts,
+    sequence: 1,
+    captureId: 0,
+    sourceStartSample: 10,
+    sourceEndSample: 51,
+    xIncrement: 1e-6,
+    xOrigin: 0,
+    xReference: 0,
+    sampleIndices: Uint32Array.from([10, 20, 50]),
+    values: Float32Array.from([1, 2, 5]),
+  };
+}
+
+describe("waveform cursors", () => {
+  it("places A then B and cycles the next placement back to A", () => {
+    const first = waveformCursorReducer(initialWaveformCursorState, {
+      type: "place",
+      marker: { source: WaveformSource.Ch1, x: 1, y: 2 },
+    });
+    const second = waveformCursorReducer(first, {
+      type: "place",
+      marker: { source: WaveformSource.Ch2, x: 3, y: 4 },
+    });
+
+    expect(first.markerA).toEqual({ source: WaveformSource.Ch1, x: 1, y: 2 });
+    expect(first.nextSlot).toBe("B");
+    expect(second.markerB).toEqual({ source: WaveformSource.Ch2, x: 3, y: 4 });
+    expect(second.nextSlot).toBe("A");
+    expect(waveformCursorMarkerCount(second)).toBe(2);
+  });
+
+  it("moves a stored marker without changing the next placement slot", () => {
+    const withA = waveformCursorReducer(initialWaveformCursorState, {
+      type: "place",
+      marker: { source: WaveformSource.Ch1, x: 1, y: 2 },
+    });
+    const moved = waveformCursorReducer(withA, {
+      type: "move",
+      slot: "A",
+      marker: { source: WaveformSource.Math1, x: 5, y: 6 },
+    });
+
+    expect(moved.markerA).toEqual({ source: WaveformSource.Math1, x: 5, y: 6 });
+    expect(moved.nextSlot).toBe("B");
+  });
+
+  it("clears markers but leaves cursor mode armed", () => {
+    const armed = waveformCursorReducer(initialWaveformCursorState, { type: "set-armed", value: true });
+    const withA = waveformCursorReducer(armed, {
+      type: "place",
+      marker: { source: WaveformSource.Ch1, x: 1, y: 2 },
+    });
+    const cleared = waveformCursorReducer(withA, { type: "clear" });
+
+    expect(cleared.armed).toBe(true);
+    expect(cleared.markerA).toBeNull();
+    expect(cleared.markerB).toBeNull();
+    expect(cleared.nextSlot).toBe("A");
+  });
+
+  it("snaps to the nearest delivered waveform sample", () => {
+    expect(nearestWaveformPoint(frame(), 18e-6)).toEqual({ x: 20e-6, y: 2 });
+    expect(nearestWaveformPoint(frame(), -1)).toEqual({ x: 10e-6, y: 1 });
+    expect(nearestWaveformPoint(frame(), 1)).toEqual({ x: 50e-6, y: 5 });
+  });
+});
