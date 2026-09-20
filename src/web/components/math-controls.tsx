@@ -6,7 +6,7 @@ import {
   isArithmeticMathOperator,
   type MathState,
 } from "../../shared/scope-types.js";
-import type { ScopeActions } from "../scope-actions.js";
+import { mathDependents, type ScopeActions } from "../scope-actions.js";
 import { mathAccent } from "../waveform-source-style.js";
 
 interface MathControlsProps {
@@ -78,6 +78,9 @@ export function MathControls({ math, actions }: MathControlsProps) {
         {math.map((state) => {
           const editable = isArithmeticMathOperator(state.operator);
           const sources = editableSources(state);
+          const dependents = mathDependents(math, state.math);
+          const resetBlocked = dependents.length > 0;
+          const dependentLabel = dependents.map((item) => `MATH${item}`).join(", ");
           const style = { "--channel-accent": mathAccent(state.math) } as CSSProperties;
           return (
             <div className="channel-card" style={style} key={state.math}>
@@ -156,6 +159,20 @@ export function MathControls({ math, actions }: MathControlsProps) {
                   onChange={(event) => void actions.setMathOffset(state.math, Number(event.target.value))}
                 />
               </label>
+              <button
+                type="button"
+                className="text-button"
+                disabled={resetBlocked}
+                title={resetBlocked
+                  ? `Change ${dependentLabel} before resetting MATH${state.math}`
+                  : `Disable and reset MATH${state.math} to A + B, CH1/CH2, scale 1, offset 0`}
+                onClick={() => void actions.resetMath(state.math)}
+              >
+                Reset
+              </button>
+              {resetBlocked ? (
+                <p className="muted">Reset blocked: used by {dependentLabel}.</p>
+              ) : null}
               {!editable ? (
                 <p className="muted">Configured on the scope; this operator is display-only in RigolWeb.</p>
               ) : null}
