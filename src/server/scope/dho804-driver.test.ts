@@ -7,12 +7,16 @@ import {
   ChannelCoupling,
   ChannelUnit,
   EdgeSlope,
+  MathChannel,
+  MathOperator,
+  MathSource,
   MeasurementKind,
   ScopeRunState,
   TimebaseMode,
   TriggerCoupling,
   TriggerSweep,
   TriggerType,
+  WaveformSource,
 } from "../../shared/scope-types.js";
 import {
   ScpiOperationKind,
@@ -82,6 +86,25 @@ function respondChannel(
   respond(transport, `${prefix}:PROBe?`, "10");
 }
 
+function respondArithmeticMath(
+  transport: ScriptedTransport,
+  math: MathChannel,
+  enabled: string,
+  operator: string,
+  source1: string,
+  source2: string,
+  scale: string,
+  offset: string,
+): void {
+  const prefix = `:MATH${math}`;
+  respond(transport, `${prefix}:DISPlay?`, enabled);
+  respond(transport, `${prefix}:OPERator?`, operator);
+  respond(transport, `${prefix}:SOURce1?`, source1);
+  respond(transport, `${prefix}:SOURce2?`, source2);
+  respond(transport, `${prefix}:SCALe?`, scale);
+  respond(transport, `${prefix}:OFFSet?`, offset);
+}
+
 function respondHorizontal(
   transport: ScriptedTransport,
   scale: string,
@@ -94,32 +117,36 @@ function respondHorizontal(
   respond(transport, ":TIMebase:MAIN:OFFSet?", position);
 }
 
+function waveformSourceToken(source: WaveformSource): string {
+  return source <= WaveformSource.Ch4 ? `CHANnel${source}` : `MATH${source - 4}`;
+}
+
 function respondMeasurementStatistics(
   transport: ScriptedTransport,
   item: string,
-  channel: Channel,
+  source: WaveformSource,
   values: readonly [string, string, string, string, string, string],
 ): void {
-  const source = `CHANnel${channel}`;
+  const token = waveformSourceToken(source);
   const [current, minimum, maximum, average, deviation, count] = values;
-  respond(transport, `:MEASure:STATistic:ITEM? CURRent,${item},${source}`, current);
-  respond(transport, `:MEASure:STATistic:ITEM? MINimum,${item},${source}`, minimum);
-  respond(transport, `:MEASure:STATistic:ITEM? MAXimum,${item},${source}`, maximum);
-  respond(transport, `:MEASure:STATistic:ITEM? AVERages,${item},${source}`, average);
-  respond(transport, `:MEASure:STATistic:ITEM? DEViation,${item},${source}`, deviation);
-  respond(transport, `:MEASure:STATistic:ITEM? CNT,${item},${source}`, count);
+  respond(transport, `:MEASure:STATistic:ITEM? CURRent,${item},${token}`, current);
+  respond(transport, `:MEASure:STATistic:ITEM? MINimum,${item},${token}`, minimum);
+  respond(transport, `:MEASure:STATistic:ITEM? MAXimum,${item},${token}`, maximum);
+  respond(transport, `:MEASure:STATistic:ITEM? AVERages,${item},${token}`, average);
+  respond(transport, `:MEASure:STATistic:ITEM? DEViation,${item},${token}`, deviation);
+  respond(transport, `:MEASure:STATistic:ITEM? CNT,${item},${token}`, count);
 }
 
-function liveCommand(channel: Channel): string {
-  return `:WAVeform:SOURce CHANnel${channel};:WAVeform:DATA?`;
+function liveCommand(source: WaveformSource): string {
+  return `:WAVeform:SOURce ${waveformSourceToken(source)};:WAVeform:DATA?`;
 }
 
 async function readOneLive(
   driver: Dho804Driver,
-  channel: Channel,
+  source: WaveformSource,
   pointCount: number,
 ) {
-  return driver.readLiveWaveform(channel, pointCount);
+  return driver.readLiveWaveform(source, pointCount);
 }
 
 describe("Dho804Driver", () => {
@@ -156,21 +183,11 @@ describe("Dho804Driver", () => {
 
   it("maps every non-Edge DHO804 trigger token without reading Edge-only fields", async () => {
     const mappings: Array<[string, TriggerType]> = [
-      ["PULS", TriggerType.Pulse],
-      ["SLOP", TriggerType.Slope],
-      ["VID", TriggerType.Video],
-      ["PATT", TriggerType.Pattern],
-      ["DUR", TriggerType.Duration],
-      ["TIM", TriggerType.Timeout],
-      ["RUNT", TriggerType.Runt],
-      ["WIND", TriggerType.Window],
-      ["DEL", TriggerType.Delay],
-      ["SET", TriggerType.SetupHold],
-      ["NEDG", TriggerType.NthEdge],
-      ["RS232", TriggerType.Rs232],
-      ["IIC", TriggerType.I2c],
-      ["SPI", TriggerType.Spi],
-      ["CAN", TriggerType.Can],
+      ["PULS", TriggerType.Pulse], ["SLOP", TriggerType.Slope], ["VID", TriggerType.Video],
+      ["PATT", TriggerType.Pattern], ["DUR", TriggerType.Duration], ["TIM", TriggerType.Timeout],
+      ["RUNT", TriggerType.Runt], ["WIND", TriggerType.Window], ["DEL", TriggerType.Delay],
+      ["SET", TriggerType.SetupHold], ["NEDG", TriggerType.NthEdge], ["RS232", TriggerType.Rs232],
+      ["IIC", TriggerType.I2c], ["SPI", TriggerType.Spi], ["CAN", TriggerType.Can],
     ];
 
     for (const [token, expectedType] of mappings) {
@@ -185,12 +202,76 @@ describe("Dho804Driver", () => {
     }
   });
 
-  it("builds a complete scope snapshot from focused state reads", async () => {
+  it("reads arithmetic, FFT, logic and unary math state without fabricating fields", async () => {
+    const transport = new ScriptedTransport();
+    respondArithmeticMath(transport, MathChannel.Math1, "1", "ADD", "CHAN1", "CHAN2", "0.5", "0.1");
+
+    respond(transport, ":MATH2:DISPlay?", "1");
+    respond(transport, ":MATH2:OPERator?", "FFT");
+    respond(transport, ":MATH2:FFT:SOURce?", "MATH1");
+    respond(transport, ":MATH2:FFT:SCALe?", "20");
+    respond(transport, ":MATH2:FFT:OFFSet?", "-40");
+
+    respond(transport, ":MATH3:DISPlay?", "0");
+    respond(transport, ":MATH3:OPERator?", "AND");
+    respond(transport, ":MATH3:LSOurce1?", "CHAN3");
+    respond(transport, ":MATH3:LSOurce2?", "REF2");
+
+    respond(transport, ":MATH4:DISPlay?", "1");
+    respond(transport, ":MATH4:OPERator?", "ABS");
+    respond(transport, ":MATH4:SOURce1?", "REF10");
+    respond(transport, ":MATH4:SCALe?", "2");
+    respond(transport, ":MATH4:OFFSet?", "-1");
+
+    const driver = scriptedDriver(transport);
+    await expect(driver.readMathState(MathChannel.Math1, ScpiPriority.Background)).resolves.toEqual({
+      math: MathChannel.Math1,
+      enabled: true,
+      operator: MathOperator.Add,
+      source1: MathSource.Ch1,
+      source2: MathSource.Ch2,
+      scale: 0.5,
+      offset: 0.1,
+    });
+    await expect(driver.readMathState(MathChannel.Math2, ScpiPriority.Background)).resolves.toEqual({
+      math: MathChannel.Math2,
+      enabled: true,
+      operator: MathOperator.Fft,
+      source1: MathSource.Math1,
+      source2: null,
+      scale: 20,
+      offset: -40,
+    });
+    await expect(driver.readMathState(MathChannel.Math3, ScpiPriority.Background)).resolves.toEqual({
+      math: MathChannel.Math3,
+      enabled: false,
+      operator: MathOperator.And,
+      source1: MathSource.Ch3,
+      source2: MathSource.Ref2,
+      scale: null,
+      offset: null,
+    });
+    await expect(driver.readMathState(MathChannel.Math4, ScpiPriority.Background)).resolves.toEqual({
+      math: MathChannel.Math4,
+      enabled: true,
+      operator: MathOperator.Abs,
+      source1: MathSource.Ref10,
+      source2: null,
+      scale: 2,
+      offset: -1,
+    });
+  });
+
+  it("builds a complete scope snapshot including all four math channels", async () => {
     const transport = new ScriptedTransport();
     respondChannel(transport, Channel.Ch1, "1", "DC", "VOLT", "20M");
     respondChannel(transport, Channel.Ch2, "0", "AC", "AMP");
     respondChannel(transport, Channel.Ch3, "1", "GND", "WATT");
     respondChannel(transport, Channel.Ch4, "0", "DC", "UNKN");
+    respondArithmeticMath(transport, MathChannel.Math1, "1", "ADD", "CHAN1", "CHAN2", "0.5", "0");
+    respondArithmeticMath(transport, MathChannel.Math2, "0", "SUBT", "MATH1", "CHAN3", "1", "0.1");
+    respondArithmeticMath(transport, MathChannel.Math3, "0", "MULT", "CHAN1", "CHAN2", "2", "-0.2");
+    respondArithmeticMath(transport, MathChannel.Math4, "0", "DIV", "CHAN3", "REF1", "4", "0.3");
     respond(transport, ":TIMebase:XY:ENABle?", "0");
     respond(transport, ":TIMebase:MODE?", "ROLL");
     respond(transport, ":TIMebase:MAIN:SCALe?", "1E-3");
@@ -217,6 +298,17 @@ describe("Dho804Driver", () => {
     expect(state.channels[1].unit).toBe(ChannelUnit.Amps);
     expect(state.channels[2].unit).toBe(ChannelUnit.Watts);
     expect(state.channels[3].unit).toBe(ChannelUnit.Unknown);
+    expect(state.math[0]).toMatchObject({
+      math: MathChannel.Math1,
+      enabled: true,
+      operator: MathOperator.Add,
+      source1: MathSource.Ch1,
+      source2: MathSource.Ch2,
+      scale: 0.5,
+      offset: 0,
+    });
+    expect(state.math[1].source1).toBe(MathSource.Math1);
+    expect(state.math[3].source2).toBe(MathSource.Ref1);
     expect(state.horizontal).toEqual({ mode: TimebaseMode.Roll, scale: 0.001, position: 0.0002 });
     expect(state.acquisition).toEqual({
       type: AcquisitionType.Average,
@@ -241,18 +333,30 @@ describe("Dho804Driver", () => {
     });
   });
 
-  it("exposes trigger setters with the Server Control contract names", async () => {
+  it("exposes trigger and arithmetic math setters with typed contract names", async () => {
     const transport = new ScriptedTransport();
     const driver = scriptedDriver(transport);
     await driver.setTriggerType(TriggerType.Edge, ScpiPriority.Normal);
     await driver.setTriggerSource(Channel.Ch3, ScpiPriority.Normal);
     await driver.setTriggerSlope(EdgeSlope.Falling, ScpiPriority.Normal);
     await driver.setTriggerLevel(0.25, ScpiPriority.Interactive);
+    await driver.setMathEnabled(MathChannel.Math1, true, ScpiPriority.Normal);
+    await driver.setMathOperator(MathChannel.Math1, MathOperator.Subtract, ScpiPriority.Normal);
+    await driver.setMathSource1(MathChannel.Math1, MathSource.Ch3, ScpiPriority.Normal);
+    await driver.setMathSource2(MathChannel.Math1, MathSource.Ch4, ScpiPriority.Normal);
+    await driver.setMathScale(MathChannel.Math1, 0.2, ScpiPriority.Normal);
+    await driver.setMathOffset(MathChannel.Math1, -0.1, ScpiPriority.Normal);
     expect(transport.commands).toEqual([
       ":TRIGger:MODE EDGE",
       ":TRIGger:EDGE:SOURce CHANnel3",
       ":TRIGger:EDGE:SLOPe NEGative",
       ":TRIGger:EDGE:LEVel 0.25",
+      ":MATH1:DISPlay ON",
+      ":MATH1:OPERator SUBTract",
+      ":MATH1:SOURce1 CHANnel3",
+      ":MATH1:SOURce2 CHANnel4",
+      ":MATH1:SCALe 0.2",
+      ":MATH1:OFFSet -0.1",
     ]);
   });
 
@@ -261,10 +365,7 @@ describe("Dho804Driver", () => {
     const driver = scriptedDriver(transport);
     await expect(driver.executeRawScpi(':DISPlay:TEXT "why?"')).resolves.toBe("");
     await expect(driver.executeRawScpi(":DISPlay:TEXT 'still?'" )).resolves.toBe("");
-    expect(transport.commands).toEqual([
-      ':DISPlay:TEXT "why?"',
-      ":DISPlay:TEXT 'still?'",
-    ]);
+    expect(transport.commands).toEqual([':DISPlay:TEXT "why?"', ":DISPlay:TEXT 'still?'"]);
   });
 
   it("still detects an unquoted raw SCPI query marker", async () => {
@@ -273,80 +374,82 @@ describe("Dho804Driver", () => {
     await expect(scriptedDriver(transport).executeRawScpi(":SYSTem:ERRor?")).resolves.toBe("0,No error");
   });
 
-  it("preserves measurement order with native statistics", async () => {
+  it("preserves measurement order across physical and math sources", async () => {
     const transport = new ScriptedTransport();
     respondMeasurementStatistics(
       transport,
       "VPP",
-      Channel.Ch1,
+      WaveformSource.Ch1,
       ["2.5", "2.4", "2.6", "2.51", "0.02", "17"],
     );
     respondMeasurementStatistics(
       transport,
       "FREQuency",
-      Channel.Ch2,
+      WaveformSource.Math1,
       ["1000", "995", "1005", "1000.5", "2.2", "17"],
     );
     const values = await scriptedDriver(transport).readMeasurements([
-      { kind: MeasurementKind.Vpp, channel: Channel.Ch1 },
-      { kind: MeasurementKind.Frequency, channel: Channel.Ch2 },
+      { kind: MeasurementKind.Vpp, channel: WaveformSource.Ch1 },
+      { kind: MeasurementKind.Frequency, channel: WaveformSource.Math1 },
     ], ScpiPriority.Background);
-    expect(values).toEqual([
-      {
-        kind: MeasurementKind.Vpp,
-        channel: Channel.Ch1,
-        statistics: {
-          current: 2.5,
-          minimum: 2.4,
-          maximum: 2.6,
-          average: 2.51,
-          deviation: 0.02,
-          count: 17,
-        },
-      },
-      {
-        kind: MeasurementKind.Frequency,
-        channel: Channel.Ch2,
-        statistics: {
-          current: 1000,
-          minimum: 995,
-          maximum: 1005,
-          average: 1000.5,
-          deviation: 2.2,
-          count: 17,
-        },
-      },
-    ]);
+    expect(values[0]).toMatchObject({
+      kind: MeasurementKind.Vpp,
+      channel: WaveformSource.Ch1,
+      statistics: { current: 2.5, minimum: 2.4, maximum: 2.6, average: 2.51, deviation: 0.02, count: 17 },
+    });
+    expect(values[1]).toMatchObject({
+      kind: MeasurementKind.Frequency,
+      channel: WaveformSource.Math1,
+      statistics: { current: 1000, minimum: 995, maximum: 1005, average: 1000.5, deviation: 2.2, count: 17 },
+    });
   });
 
-  it("configures scope-native statistics for selected measurements", async () => {
+  it("configures scope-native statistics for selected physical and math measurements", async () => {
     const transport = new ScriptedTransport();
     await scriptedDriver(transport).setMeasurements([
-      { kind: MeasurementKind.Vpp, channel: Channel.Ch1 },
+      { kind: MeasurementKind.Vpp, channel: WaveformSource.Ch1 },
+      { kind: MeasurementKind.Vrms, channel: WaveformSource.Math2 },
     ], ScpiPriority.Normal);
     expect(transport.commands).toEqual([
       ":MEASure:CLEar",
       ":MEASure:STATistic:RESet",
       ":MEASure:ITEM VPP,CHANnel1",
       ":MEASure:STATistic:ITEM VPP,CHANnel1",
+      ":MEASure:ITEM VRMS,MATH2",
+      ":MEASure:STATistic:ITEM VRMS,MATH2",
     ]);
   });
 
-  it("combines live source selection and DATA? in one program message", async () => {
+  it("combines live source selection and DATA? for physical channels", async () => {
     const transport = new ScriptedTransport();
     respondChannel(transport, Channel.Ch1, "1", "DC", "VOLT");
     const driver = scriptedDriver(transport);
     await driver.readChannelState(Channel.Ch1, ScpiPriority.Normal);
     respond(transport, ":WAVeform:PREamble?", "0,0,2,1,1e-6,0,0,0.5,10,0");
-    const command = liveCommand(Channel.Ch1);
+    const command = liveCommand(WaveformSource.Ch1);
     transport.binary.set(command, [Uint8Array.from([10, 12])]);
 
-    const waveform = await driver.readLiveWaveform(Channel.Ch1, 2);
+    const waveform = await driver.readLiveWaveform(WaveformSource.Ch1, 2);
 
-    expect(waveform.channel).toBe(Channel.Ch1);
+    expect(waveform.source).toBe(WaveformSource.Ch1);
     expect([...waveform.samples]).toEqual([0, 1]);
     expect(transport.commands.filter((entry) => entry === command)).toHaveLength(1);
-    expect(transport.commands).not.toContain(":WAVeform:SOURce CHANnel1");
+  });
+
+  it("reads native MATH waveforms through the same NORMAL data path", async () => {
+    const transport = new ScriptedTransport();
+    const driver = scriptedDriver(transport);
+    respond(transport, ":WAVeform:PREamble?", "0,0,2,1,1e-6,0,0,0.25,10,0");
+    const command = liveCommand(WaveformSource.Math1);
+    transport.binary.set(command, [Uint8Array.from([10, 14])]);
+
+    const waveform = await driver.readLiveWaveform(WaveformSource.Math1, 2);
+
+    expect(waveform.source).toBe(WaveformSource.Math1);
+    expect(waveform.unit).toBe(ChannelUnit.Unknown);
+    expect([...waveform.samples]).toEqual([0, 1]);
+    expect(transport.commands).toContain(":WAVeform:SOURce MATH1");
+    expect(transport.commands).toContain(command);
   });
 
   it("reuses cached live unit and preamble metadata", async () => {
@@ -355,15 +458,12 @@ describe("Dho804Driver", () => {
     const driver = scriptedDriver(transport);
     await driver.readChannelState(Channel.Ch1, ScpiPriority.Normal);
 
-    const command = liveCommand(Channel.Ch1);
-    transport.binary.set(command, [
-      Uint8Array.from([10, 12]),
-      Uint8Array.from([10, 14]),
-    ]);
+    const command = liveCommand(WaveformSource.Ch1);
+    transport.binary.set(command, [Uint8Array.from([10, 12]), Uint8Array.from([10, 14])]);
     respond(transport, ":WAVeform:PREamble?", "0,0,2,1,1e-6,0,0,0.5,10,0");
 
-    const first = await readOneLive(driver, Channel.Ch1, 2);
-    const second = await readOneLive(driver, Channel.Ch1, 2);
+    const first = await readOneLive(driver, WaveformSource.Ch1, 2);
+    const second = await readOneLive(driver, WaveformSource.Ch1, 2);
 
     expect(first.unit).toBe(ChannelUnit.Volts);
     expect([...first.samples]).toEqual([0, 1]);
@@ -379,16 +479,13 @@ describe("Dho804Driver", () => {
     const driver = scriptedDriver(transport);
     await driver.readChannelState(Channel.Ch1, ScpiPriority.Normal);
 
-    const command = liveCommand(Channel.Ch1);
-    transport.binary.set(command, [
-      Uint8Array.from([10, 12]),
-      Uint8Array.from([10, 12]),
-    ]);
+    const command = liveCommand(WaveformSource.Ch1);
+    transport.binary.set(command, [Uint8Array.from([10, 12]), Uint8Array.from([10, 12])]);
     respond(transport, ":WAVeform:PREamble?", "0,0,2,1,1e-6,0,0,0.5,0,10");
 
-    const first = await readOneLive(driver, Channel.Ch1, 2);
+    const first = await readOneLive(driver, WaveformSource.Ch1, 2);
     await driver.setChannelScale(Channel.Ch1, 0.2, ScpiPriority.Normal);
-    const second = await readOneLive(driver, Channel.Ch1, 2);
+    const second = await readOneLive(driver, WaveformSource.Ch1, 2);
 
     expect([...first.samples]).toEqual([0, 1]);
     expect([...second.samples]).toEqual([0, 2]);
@@ -402,16 +499,13 @@ describe("Dho804Driver", () => {
     const driver = scriptedDriver(transport);
     await driver.readChannelState(Channel.Ch1, ScpiPriority.Normal);
 
-    const command = liveCommand(Channel.Ch1);
-    transport.binary.set(command, [
-      Uint8Array.from([12]),
-      Uint8Array.from([12]),
-    ]);
+    const command = liveCommand(WaveformSource.Ch1);
+    transport.binary.set(command, [Uint8Array.from([12]), Uint8Array.from([12])]);
     respond(transport, ":WAVeform:PREamble?", "0,0,1,1,1e-6,0,0,0.5,0,10");
 
-    const first = await readOneLive(driver, Channel.Ch1, 1);
+    const first = await readOneLive(driver, WaveformSource.Ch1, 1);
     await driver.setChannelOffset(Channel.Ch1, 0.5, ScpiPriority.Normal);
-    const second = await readOneLive(driver, Channel.Ch1, 1);
+    const second = await readOneLive(driver, WaveformSource.Ch1, 1);
 
     expect(first.samples[0]).toBe(1);
     expect(second.samples[0]).toBe(0.5);
@@ -424,11 +518,8 @@ describe("Dho804Driver", () => {
     const driver = scriptedDriver(transport);
     await driver.readHorizontalState(ScpiPriority.Normal);
 
-    const command = liveCommand(Channel.Ch1);
-    transport.binary.set(command, [
-      Uint8Array.from([10]),
-      Uint8Array.from([10]),
-    ]);
+    const command = liveCommand(WaveformSource.Ch1);
+    transport.binary.set(command, [Uint8Array.from([10]), Uint8Array.from([10])]);
     respond(
       transport,
       ":WAVeform:PREamble?",
@@ -438,9 +529,9 @@ describe("Dho804Driver", () => {
     respond(transport, ":TIMebase:MAIN:OFFSet?", "4e-4");
     respond(transport, ":CHANnel1:UNITs?", "VOLT");
 
-    const first = await readOneLive(driver, Channel.Ch1, 1);
+    const first = await readOneLive(driver, WaveformSource.Ch1, 1);
     await driver.setHorizontalPosition(4e-4, ScpiPriority.Interactive);
-    const second = await readOneLive(driver, Channel.Ch1, 1);
+    const second = await readOneLive(driver, WaveformSource.Ch1, 1);
 
     expect(first.xOrigin).toBeCloseTo(-4.8e-3);
     expect(second.xOrigin).toBeCloseTo(-4.6e-3);
@@ -454,11 +545,8 @@ describe("Dho804Driver", () => {
     const driver = scriptedDriver(transport);
     await driver.readHorizontalState(ScpiPriority.Normal);
 
-    const command = liveCommand(Channel.Ch1);
-    transport.binary.set(command, [
-      Uint8Array.from([10]),
-      Uint8Array.from([10]),
-    ]);
+    const command = liveCommand(WaveformSource.Ch1);
+    transport.binary.set(command, [Uint8Array.from([10]), Uint8Array.from([10])]);
     respond(
       transport,
       ":WAVeform:PREamble?",
@@ -468,9 +556,9 @@ describe("Dho804Driver", () => {
     respond(transport, ":TIMebase:MAIN:SCALe?", "2e-3");
     respond(transport, ":CHANnel1:UNITs?", "VOLT");
 
-    const first = await readOneLive(driver, Channel.Ch1, 1);
+    const first = await readOneLive(driver, WaveformSource.Ch1, 1);
     await driver.setHorizontalScale(2e-3, ScpiPriority.Interactive);
-    const second = await readOneLive(driver, Channel.Ch1, 1);
+    const second = await readOneLive(driver, WaveformSource.Ch1, 1);
 
     expect(first.xOrigin).toBeCloseTo(-4.8e-3);
     expect(second.xOrigin).toBeCloseTo(-9.8e-3);
@@ -487,11 +575,8 @@ describe("Dho804Driver", () => {
     const driver = scriptedDriver(transport);
     await driver.readHorizontalState(ScpiPriority.Normal);
 
-    const command = liveCommand(Channel.Ch1);
-    transport.binary.set(command, [
-      Uint8Array.from([10]),
-      Uint8Array.from([10]),
-    ]);
+    const command = liveCommand(WaveformSource.Ch1);
+    transport.binary.set(command, [Uint8Array.from([10]), Uint8Array.from([10])]);
     respond(
       transport,
       ":WAVeform:PREamble?",
@@ -501,20 +586,21 @@ describe("Dho804Driver", () => {
     respond(transport, ":TIMebase:MAIN:SCALe?", "2e-3");
     respond(transport, ":CHANnel1:UNITs?", "VOLT");
 
-    await readOneLive(driver, Channel.Ch1, 1);
+    await readOneLive(driver, WaveformSource.Ch1, 1);
     await driver.setHorizontalScale(2e-3, ScpiPriority.Normal);
-    const second = await readOneLive(driver, Channel.Ch1, 1);
+    const second = await readOneLive(driver, WaveformSource.Ch1, 1);
 
     expect(second.xIncrement).toBeCloseTo(2e-5);
     expect(transport.commands.filter((entry) => entry === ":WAVeform:PREamble?")).toHaveLength(2);
   });
 
-  it("assembles RAW WORD chunks without exposing native codes", async () => {
+  it("assembles RAW WORD chunks for physical channels without exposing native codes", async () => {
     const transport = new ScriptedTransport();
     transport.binary.set(":WAVeform:DATA?", [Uint8Array.from([1, 0, 2, 0, 3, 0])]);
     respond(transport, ":WAVeform:PREamble?", "1,0,3,1,1e-6,0,0,1,0,0");
     respond(transport, ":CHANnel1:UNITs?", "VOLT");
     const waveform = await scriptedDriver(transport).readRawWaveform(Channel.Ch1, 3);
+    expect(waveform.source).toBe(WaveformSource.Ch1);
     expect([...waveform.samples]).toEqual([1, 2, 3]);
     expect(transport.commands).toContain(":WAVeform:STARt 1");
     expect(transport.commands).toContain(":WAVeform:STOP 3");

@@ -1,15 +1,18 @@
 import {
-  Channel,
   ScopeRunState,
   TimebaseMode,
+  waveformSourceForChannel,
+  waveformSourceForMath,
+  waveformSourceUnit,
   type ScopeState,
+  type WaveformSource,
 } from "../../shared/scope-types.js";
 import { WaveformKind } from "../../shared/websocket-protocol.js";
 import type { Dho804Waveform } from "../scope/dho804-driver.js";
 import { encodeWaveformFrame } from "./waveform-frame-encoder.js";
 
 export interface LiveWaveformDriver {
-  readLiveWaveform(channel: Channel, pointCount: number): Promise<Dho804Waveform>;
+  readLiveWaveform(source: WaveformSource, pointCount: number): Promise<Dho804Waveform>;
 }
 
 export interface LiveWaveformServiceOptions {
@@ -19,10 +22,8 @@ export interface LiveWaveformServiceOptions {
   reportError?: (error: unknown) => void;
 }
 
-// The DHO804 returns 999 bytes for the NORMAL/BYTE live path.
-// Lower NORMAL point counts crop the visible waveform span rather than
-// decimating the whole screen, so live acquisition uses the maximum count.
 const LIVE_POINT_COUNT = 999;
+
 function nextUint32(value: number): number {
   return (value + 1) >>> 0;
 }
@@ -36,7 +37,7 @@ export class LiveWaveformService {
   private readonly getScopeState: () => ScopeState;
   private readonly publishFrame: (frame: Uint8Array) => void;
   private readonly reportError: (error: unknown) => void;
-  private readonly sequences = new Uint32Array(5);
+  private readonly sequences = new Uint32Array(9);
   private liveWanted = false;
   private paused = false;
   private freshWanted = false;
@@ -71,28 +72,20 @@ export class LiveWaveformService {
   }
 
   public requestFresh(): void {
-    if (!this.liveWanted || this.paused) {
-      return;
-    }
+    if (!this.liveWanted || this.paused) return;
     this.freshWanted = true;
     this.ensureLoop();
   }
 
   public async waitForIdle(): Promise<void> {
-    while (this.loopPromise !== null) {
-      await this.loopPromise;
-    }
+    while (this.loopPromise !== null) await this.loopPromise;
   }
 
   private ensureLoop(): void {
-    if (this.loopPromise !== null) {
-      return;
-    }
+    if (this.loopPromise !== null) return;
     this.loopPromise = this.runLoop().finally(() => {
       this.loopPromise = null;
-      if (this.liveWanted && this.freshWanted) {
-        this.ensureLoop();
-      }
+      if (this.liveWanted && this.freshWanted) this.ensureLoop();
     });
   }
 
@@ -103,19 +96,10 @@ export class LiveWaveformService {
       try {
         shouldContinue = await this.acquireCycle();
       } catch (error) {
-        // Horizontal writes can make the scope finish an already-running
-        // waveform request with a transient empty block. The write path has
-        // paused live acquisition, so do not report that in-flight transition
-        // as an application error or immediately retry it.
-        if (!this.paused) {
-          this.reportError(error);
-        }
+        if (!this.paused) this.reportError(error);
         shouldContinue = !this.paused;
       }
-
-      if (!shouldContinue) {
-        return;
-      }
+      if (!shouldContinue) return;
       if (this.liveWanted && !this.paused) {
         this.freshWanted = true;
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -125,47 +109,41 @@ export class LiveWaveformService {
 
   private async acquireCycle(): Promise<boolean> {
     const state = this.getScopeState();
-    if (
-      state.runState === ScopeRunState.Stopped ||
-      state.horizontal.mode === TimebaseMode.Xy
-    ) {
+    if (state.runState === ScopeRunState.Stopped || state.horizontal.mode === TimebaseMode.Xy) {
       return false;
     }
 
-    const enabledChannels = state.channels
-      .filter((channelState) => channelState.enabled)
-      .map((channelState) => channelState.channel);
-    if (enabledChannels.length === 0) {
-      return false;
-    }
+    const sources: WaveformSource[] = [
+      ...state.channels
+        .filter((channelState) => channelState.enabled)
+        .map((channelState) => waveformSourceForChannel(channelState.channel)),
+      ...state.math
+        .filter((mathState) => mathState.enabled)
+        .map((mathState) => waveformSourceForMath(mathState.math)),
+    ];
+    if (sources.length === 0) return false;
 
-    for (const channel of enabledChannels) {
-      if (!this.liveWanted || this.paused) {
-        return false;
+    for (const source of sources) {
+      if (!this.liveWanted || this.paused) return false;
+      const waveform = await this.driver.readLiveWaveform(source, LIVE_POINT_COUNT);
+      if (!this.liveWanted || this.paused) return false;
+      if (waveform.source !== source) {
+        throw new Error(`Driver returned waveform source ${waveform.source} while reading ${source}`);
       }
-      const waveform = await this.driver.readLiveWaveform(channel, LIVE_POINT_COUNT);
-      if (!this.liveWanted || this.paused) {
-        return false;
-      }
-      if (waveform.channel !== channel) {
-        throw new Error(`Driver returned CH${waveform.channel} while reading CH${channel}`);
-      }
-      this.publishWaveform(waveform);
+      this.publishWaveform(waveform, waveformSourceUnit(state, source));
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
     return true;
   }
 
-  private publishWaveform(waveform: Dho804Waveform): void {
+  private publishWaveform(waveform: Dho804Waveform, unit: Dho804Waveform["unit"]): void {
     const sampleIndices = new Uint32Array(waveform.samples.length);
-    for (let index = 0; index < sampleIndices.length; index += 1) {
-      sampleIndices[index] = index;
-    }
-    const sequence = nextUint32(this.sequences[waveform.channel]!);
+    for (let index = 0; index < sampleIndices.length; index += 1) sampleIndices[index] = index;
+    const sequence = nextUint32(this.sequences[waveform.source]!);
     const frame = encodeWaveformFrame({
       kind: WaveformKind.Live,
-      channel: waveform.channel,
-      unit: waveform.unit,
+      source: waveform.source,
+      unit,
       sequence,
       captureId: 0,
       sourceStartSample: 0,
@@ -177,6 +155,6 @@ export class LiveWaveformService {
       values: waveform.samples,
     });
     this.publishFrame(frame);
-    this.sequences[waveform.channel] = sequence;
+    this.sequences[waveform.source] = sequence;
   }
 }

@@ -12,6 +12,104 @@ export enum Channel {
   Ch4 = 4,
 }
 
+export enum WaveformSource {
+  Ch1 = 1,
+  Ch2 = 2,
+  Ch3 = 3,
+  Ch4 = 4,
+  Math1 = 5,
+  Math2 = 6,
+  Math3 = 7,
+  Math4 = 8,
+}
+
+export enum MathChannel {
+  Math1 = 1,
+  Math2 = 2,
+  Math3 = 3,
+  Math4 = 4,
+}
+
+export enum MathSource {
+  Ch1 = 1,
+  Ch2 = 2,
+  Ch3 = 3,
+  Ch4 = 4,
+  Math1 = 5,
+  Math2 = 6,
+  Math3 = 7,
+  Math4 = 8,
+  Ref1 = 101,
+  Ref2 = 102,
+  Ref3 = 103,
+  Ref4 = 104,
+  Ref5 = 105,
+  Ref6 = 106,
+  Ref7 = 107,
+  Ref8 = 108,
+  Ref9 = 109,
+  Ref10 = 110,
+}
+
+export enum MathOperator {
+  Add = 1,
+  Subtract = 2,
+  Multiply = 3,
+  Divide = 4,
+  And = 5,
+  Or = 6,
+  Xor = 7,
+  Not = 8,
+  Fft = 9,
+  Integrate = 10,
+  Differentiate = 11,
+  SquareRoot = 12,
+  Log10 = 13,
+  NaturalLog = 14,
+  Exp = 15,
+  Abs = 16,
+  LowPass = 17,
+  HighPass = 18,
+  BandPass = 19,
+  BandStop = 20,
+  AxB = 21,
+}
+
+export function isArithmeticMathOperator(operator: MathOperator): boolean {
+  return operator === MathOperator.Add ||
+    operator === MathOperator.Subtract ||
+    operator === MathOperator.Multiply ||
+    operator === MathOperator.Divide;
+}
+
+export function waveformSourceForChannel(channel: Channel): WaveformSource {
+  return channel as number as WaveformSource;
+}
+
+export function waveformSourceForMath(math: MathChannel): WaveformSource {
+  return (math + 4) as WaveformSource;
+}
+
+export function channelForWaveformSource(source: WaveformSource): Channel | null {
+  return source >= WaveformSource.Ch1 && source <= WaveformSource.Ch4
+    ? source as number as Channel
+    : null;
+}
+
+export function mathForWaveformSource(source: WaveformSource): MathChannel | null {
+  return source >= WaveformSource.Math1 && source <= WaveformSource.Math4
+    ? (source - 4) as MathChannel
+    : null;
+}
+
+export function mathSourceForChannel(channel: Channel): MathSource {
+  return channel as number as MathSource;
+}
+
+export function mathSourceForMath(math: MathChannel): MathSource {
+  return (math + 4) as MathSource;
+}
+
 export enum ChannelCoupling {
   Ac = 1,
   Dc = 2,
@@ -47,6 +145,18 @@ export type ChannelStates = [
   ChannelState,
   ChannelState,
 ];
+
+export interface MathState {
+  math: MathChannel;
+  enabled: boolean;
+  operator: MathOperator;
+  source1: MathSource;
+  source2: MathSource | null;
+  scale: number | null;
+  offset: number | null;
+}
+
+export type MathStates = [MathState, MathState, MathState, MathState];
 
 export enum TimebaseMode {
   Main = 1,
@@ -153,10 +263,73 @@ export type TriggerState =
 
 export interface ScopeState {
   channels: ChannelStates;
+  math: MathStates;
   horizontal: HorizontalState;
   acquisition: AcquisitionState;
   runState: ScopeRunState;
   trigger: TriggerState;
+}
+
+function mathSourceUnit(
+  state: ScopeState,
+  source: MathSource,
+  visited: Set<MathChannel>,
+): ChannelUnit {
+  if (source >= MathSource.Ch1 && source <= MathSource.Ch4) {
+    return state.channels[source - 1]?.unit ?? ChannelUnit.Unknown;
+  }
+  if (source >= MathSource.Math1 && source <= MathSource.Math4) {
+    return mathOutputUnit(state, (source - 4) as MathChannel, visited);
+  }
+  return ChannelUnit.Unknown;
+}
+
+function mathOutputUnit(
+  state: ScopeState,
+  math: MathChannel,
+  visited: Set<MathChannel>,
+): ChannelUnit {
+  if (visited.has(math)) return ChannelUnit.Unknown;
+  const mathState = state.math[math - 1];
+  if (mathState === undefined || mathState.math !== math) return ChannelUnit.Unknown;
+  const nextVisited = new Set(visited);
+  nextVisited.add(math);
+  const first = mathSourceUnit(state, mathState.source1, nextVisited);
+  const second = mathState.source2 === null
+    ? ChannelUnit.Unknown
+    : mathSourceUnit(state, mathState.source2, nextVisited);
+
+  switch (mathState.operator) {
+    case MathOperator.Add:
+    case MathOperator.Subtract:
+      return first === second ? first : ChannelUnit.Unknown;
+    case MathOperator.Multiply:
+      if (
+        (first === ChannelUnit.Volts && second === ChannelUnit.Amps) ||
+        (first === ChannelUnit.Amps && second === ChannelUnit.Volts)
+      ) return ChannelUnit.Watts;
+      return ChannelUnit.Unknown;
+    case MathOperator.Divide:
+      if (first === ChannelUnit.Watts && second === ChannelUnit.Amps) return ChannelUnit.Volts;
+      if (first === ChannelUnit.Watts && second === ChannelUnit.Volts) return ChannelUnit.Amps;
+      return ChannelUnit.Unknown;
+    case MathOperator.Abs:
+    case MathOperator.LowPass:
+    case MathOperator.HighPass:
+    case MathOperator.BandPass:
+    case MathOperator.BandStop:
+    case MathOperator.AxB:
+      return first;
+    default:
+      return ChannelUnit.Unknown;
+  }
+}
+
+export function waveformSourceUnit(state: ScopeState, source: WaveformSource): ChannelUnit {
+  const channel = channelForWaveformSource(source);
+  if (channel !== null) return state.channels[channel - 1]?.unit ?? ChannelUnit.Unknown;
+  const math = mathForWaveformSource(source);
+  return math === null ? ChannelUnit.Unknown : mathOutputUnit(state, math, new Set());
 }
 
 export enum MeasurementKind {
@@ -187,7 +360,7 @@ export enum MeasurementKind {
 
 export interface MeasurementSpec {
   kind: MeasurementKind;
-  channel: Channel;
+  channel: WaveformSource;
 }
 
 export interface MeasurementStatistics {

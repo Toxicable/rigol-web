@@ -1,6 +1,6 @@
 import {
-  Channel,
   MeasurementKind,
+  WaveformSource,
   type MeasurementSpec,
   type MeasurementStatistics,
   type MeasurementValue,
@@ -38,37 +38,22 @@ interface RunningStatistics {
 }
 
 export interface LocalWaveformSource {
-  getFrame(channel: Channel): DecodedWaveformFrame | undefined;
+  getFrame(source: WaveformSource): DecodedWaveformFrame | undefined;
 }
 
 function extrema(values: Float32Array): Extrema | null {
-  if (values.length === 0) {
-    return null;
-  }
-
+  if (values.length === 0) return null;
   let minimum = values[0];
   let maximum = values[0];
-  if (minimum === undefined || maximum === undefined) {
-    return null;
-  }
+  if (minimum === undefined || maximum === undefined) return null;
   let minimumIndex = 0;
   let maximumIndex = 0;
-
   for (let index = 1; index < values.length; index += 1) {
     const value = values[index];
-    if (value === undefined) {
-      continue;
-    }
-    if (value < minimum) {
-      minimum = value;
-      minimumIndex = index;
-    }
-    if (value > maximum) {
-      maximum = value;
-      maximumIndex = index;
-    }
+    if (value === undefined) continue;
+    if (value < minimum) { minimum = value; minimumIndex = index; }
+    if (value > maximum) { maximum = value; maximumIndex = index; }
   }
-
   return { minimum, maximum, minimumIndex, maximumIndex };
 }
 
@@ -81,10 +66,7 @@ function histogramLevel(
   fallback: number,
 ): number {
   const range = maximum - minimum;
-  if (!(range > 0)) {
-    return fallback;
-  }
-
+  if (!(range > 0)) return fallback;
   const counts = new Uint32Array(HISTOGRAM_BINS);
   const sums = new Float64Array(HISTOGRAM_BINS);
   for (const value of values) {
@@ -94,73 +76,39 @@ function histogramLevel(
     counts[bin] = (counts[bin] ?? 0) + 1;
     sums[bin] = (sums[bin] ?? 0) + value;
   }
-
   let selected = -1;
   let selectedCount = 0;
   for (let bin = startBin; bin < endBin; bin += 1) {
     const count = counts[bin] ?? 0;
-    if (count > selectedCount) {
-      selected = bin;
-      selectedCount = count;
-    }
+    if (count > selectedCount) { selected = bin; selectedCount = count; }
   }
-
-  if (selected < 0 || selectedCount === 0) {
-    return fallback;
-  }
+  if (selected < 0 || selectedCount === 0) return fallback;
   const sum = sums[selected];
   return sum === undefined ? fallback : sum / selectedCount;
 }
 
 function levels(values: Float32Array): Levels | null {
   const bounds = extrema(values);
-  if (bounds === null) {
-    return null;
-  }
-
+  if (bounds === null) return null;
   if (!(bounds.maximum > bounds.minimum)) {
-    return {
-      ...bounds,
-      base: bounds.minimum,
-      top: bounds.maximum,
-      amplitude: 0,
-      lower: bounds.minimum,
-      middle: bounds.minimum,
-      upper: bounds.minimum,
-    };
+    return { ...bounds, base: bounds.minimum, top: bounds.maximum, amplitude: 0, lower: bounds.minimum, middle: bounds.minimum, upper: bounds.minimum };
   }
-
   const midpoint = Math.floor(HISTOGRAM_BINS / 2);
-  const base = histogramLevel(
-    values,
-    bounds.minimum,
-    bounds.maximum,
-    0,
-    midpoint,
-    bounds.minimum,
-  );
-  const top = histogramLevel(
-    values,
-    bounds.minimum,
-    bounds.maximum,
-    midpoint,
-    HISTOGRAM_BINS,
-    bounds.maximum,
-  );
+  const base = histogramLevel(values, bounds.minimum, bounds.maximum, 0, midpoint, bounds.minimum);
+  const top = histogramLevel(values, bounds.minimum, bounds.maximum, midpoint, HISTOGRAM_BINS, bounds.maximum);
   const amplitude = top - base;
-
   if (!(amplitude > 0)) {
+    const range = bounds.maximum - bounds.minimum;
     return {
       ...bounds,
       base: bounds.minimum,
       top: bounds.maximum,
-      amplitude: bounds.maximum - bounds.minimum,
-      lower: bounds.minimum + (bounds.maximum - bounds.minimum) * LOWER_THRESHOLD,
-      middle: bounds.minimum + (bounds.maximum - bounds.minimum) * MIDDLE_THRESHOLD,
-      upper: bounds.minimum + (bounds.maximum - bounds.minimum) * UPPER_THRESHOLD,
+      amplitude: range,
+      lower: bounds.minimum + range * LOWER_THRESHOLD,
+      middle: bounds.minimum + range * MIDDLE_THRESHOLD,
+      upper: bounds.minimum + range * UPPER_THRESHOLD,
     };
   }
-
   return {
     ...bounds,
     base,
@@ -174,60 +122,39 @@ function levels(values: Float32Array): Levels | null {
 
 function timeAt(frame: DecodedWaveformFrame, index: number): number | null {
   const sampleIndex = frame.sampleIndices[index];
-  if (sampleIndex === undefined) {
-    return null;
-  }
+  if (sampleIndex === undefined) return null;
   return frame.xOrigin + (sampleIndex - frame.xReference) * frame.xIncrement;
 }
 
-function crossings(
-  frame: DecodedWaveformFrame,
-  threshold: number,
-  rising: boolean,
-): number[] {
+function crossings(frame: DecodedWaveformFrame, threshold: number, rising: boolean): number[] {
   const result: number[] = [];
   const values = frame.values;
-
   for (let index = 1; index < values.length; index += 1) {
     const previous = values[index - 1];
     const current = values[index];
-    if (previous === undefined || current === undefined) {
-      continue;
-    }
+    if (previous === undefined || current === undefined) continue;
     const crossed = rising
       ? previous < threshold && current >= threshold
       : previous > threshold && current <= threshold;
-    if (!crossed || current === previous) {
-      continue;
-    }
-
+    if (!crossed || current === previous) continue;
     const previousTime = timeAt(frame, index - 1);
     const currentTime = timeAt(frame, index);
-    if (previousTime === null || currentTime === null || !(currentTime > previousTime)) {
-      continue;
-    }
+    if (previousTime === null || currentTime === null || !(currentTime > previousTime)) continue;
     const ratio = (threshold - previous) / (current - previous);
     result.push(previousTime + ratio * (currentTime - previousTime));
   }
-
   return result;
 }
 
 function average(values: readonly number[]): number | null {
-  if (values.length === 0) {
-    return null;
-  }
+  if (values.length === 0) return null;
   let sum = 0;
-  for (const value of values) {
-    sum += value;
-  }
+  for (const value of values) sum += value;
   return sum / values.length;
 }
 
 function averageIntervals(points: readonly number[]): number | null {
-  if (points.length < 2) {
-    return null;
-  }
+  if (points.length < 2) return null;
   let sum = 0;
   let count = 0;
   for (let index = 1; index < points.length; index += 1) {
@@ -241,20 +168,13 @@ function averageIntervals(points: readonly number[]): number | null {
   return count === 0 ? null : sum / count;
 }
 
-function averagePairedIntervals(
-  starts: readonly number[],
-  ends: readonly number[],
-): number | null {
+function averagePairedIntervals(starts: readonly number[], ends: readonly number[]): number | null {
   let endIndex = 0;
   const intervals: number[] = [];
   for (const start of starts) {
-    while (endIndex < ends.length && (ends[endIndex] ?? Number.NEGATIVE_INFINITY) <= start) {
-      endIndex += 1;
-    }
+    while (endIndex < ends.length && (ends[endIndex] ?? Number.NEGATIVE_INFINITY) <= start) endIndex += 1;
     const end = ends[endIndex];
-    if (end === undefined) {
-      break;
-    }
+    if (end === undefined) break;
     intervals.push(end - start);
     endIndex += 1;
   }
@@ -262,33 +182,22 @@ function averagePairedIntervals(
 }
 
 function period(frame: DecodedWaveformFrame, measurementLevels: Levels): number | null {
-  const rising = crossings(frame, measurementLevels.middle, true);
-  const risingPeriod = averageIntervals(rising);
-  if (risingPeriod !== null) {
-    return risingPeriod;
-  }
+  const risingPeriod = averageIntervals(crossings(frame, measurementLevels.middle, true));
+  if (risingPeriod !== null) return risingPeriod;
   return averageIntervals(crossings(frame, measurementLevels.middle, false));
 }
 
 function mean(values: Float32Array): number | null {
-  if (values.length === 0) {
-    return null;
-  }
+  if (values.length === 0) return null;
   let sum = 0;
-  for (const value of values) {
-    sum += value;
-  }
+  for (const value of values) sum += value;
   return sum / values.length;
 }
 
 function rms(values: Float32Array): number | null {
-  if (values.length === 0) {
-    return null;
-  }
+  if (values.length === 0) return null;
   let sumSquares = 0;
-  for (const value of values) {
-    sumSquares += value * value;
-  }
+  for (const value of values) sumSquares += value * value;
   return Math.sqrt(sumSquares / values.length);
 }
 
@@ -297,39 +206,24 @@ export function calculateLocalMeasurement(
   kind: MeasurementKind,
 ): number | null {
   const measurementLevels = levels(frame.values);
-  if (measurementLevels === null) {
-    return null;
-  }
-
+  if (measurementLevels === null) return null;
   switch (kind) {
-    case MeasurementKind.Vpp:
-      return measurementLevels.maximum - measurementLevels.minimum;
-    case MeasurementKind.Vmax:
-      return measurementLevels.maximum;
-    case MeasurementKind.Vmin:
-      return measurementLevels.minimum;
-    case MeasurementKind.Vavg:
-      return mean(frame.values);
-    case MeasurementKind.Vrms:
-      return rms(frame.values);
+    case MeasurementKind.Vpp: return measurementLevels.maximum - measurementLevels.minimum;
+    case MeasurementKind.Vmax: return measurementLevels.maximum;
+    case MeasurementKind.Vmin: return measurementLevels.minimum;
+    case MeasurementKind.Vavg: return mean(frame.values);
+    case MeasurementKind.Vrms: return rms(frame.values);
     case MeasurementKind.Frequency: {
       const measuredPeriod = period(frame, measurementLevels);
       return measuredPeriod === null || !(measuredPeriod > 0) ? null : 1 / measuredPeriod;
     }
-    case MeasurementKind.Period:
-      return period(frame, measurementLevels);
-    case MeasurementKind.Vtop:
-      return measurementLevels.top;
-    case MeasurementKind.Vbase:
-      return measurementLevels.base;
-    case MeasurementKind.Vamp:
-      return measurementLevels.amplitude;
-    case MeasurementKind.Vupper:
-      return measurementLevels.upper;
-    case MeasurementKind.Vmid:
-      return measurementLevels.middle;
-    case MeasurementKind.Vlower:
-      return measurementLevels.lower;
+    case MeasurementKind.Period: return period(frame, measurementLevels);
+    case MeasurementKind.Vtop: return measurementLevels.top;
+    case MeasurementKind.Vbase: return measurementLevels.base;
+    case MeasurementKind.Vamp: return measurementLevels.amplitude;
+    case MeasurementKind.Vupper: return measurementLevels.upper;
+    case MeasurementKind.Vmid: return measurementLevels.middle;
+    case MeasurementKind.Vlower: return measurementLevels.lower;
     case MeasurementKind.Overshoot:
       return measurementLevels.amplitude > 0
         ? ((measurementLevels.maximum - measurementLevels.top) / measurementLevels.amplitude) * 100
@@ -339,61 +233,30 @@ export function calculateLocalMeasurement(
         ? ((measurementLevels.base - measurementLevels.minimum) / measurementLevels.amplitude) * 100
         : null;
     case MeasurementKind.RiseTime:
-      return averagePairedIntervals(
-        crossings(frame, measurementLevels.lower, true),
-        crossings(frame, measurementLevels.upper, true),
-      );
+      return averagePairedIntervals(crossings(frame, measurementLevels.lower, true), crossings(frame, measurementLevels.upper, true));
     case MeasurementKind.FallTime:
-      return averagePairedIntervals(
-        crossings(frame, measurementLevels.upper, false),
-        crossings(frame, measurementLevels.lower, false),
-      );
+      return averagePairedIntervals(crossings(frame, measurementLevels.upper, false), crossings(frame, measurementLevels.lower, false));
     case MeasurementKind.PositiveWidth:
-      return averagePairedIntervals(
-        crossings(frame, measurementLevels.middle, true),
-        crossings(frame, measurementLevels.middle, false),
-      );
+      return averagePairedIntervals(crossings(frame, measurementLevels.middle, true), crossings(frame, measurementLevels.middle, false));
     case MeasurementKind.NegativeWidth:
-      return averagePairedIntervals(
-        crossings(frame, measurementLevels.middle, false),
-        crossings(frame, measurementLevels.middle, true),
-      );
+      return averagePairedIntervals(crossings(frame, measurementLevels.middle, false), crossings(frame, measurementLevels.middle, true));
     case MeasurementKind.PositiveDuty: {
       const measuredPeriod = period(frame, measurementLevels);
-      const width = averagePairedIntervals(
-        crossings(frame, measurementLevels.middle, true),
-        crossings(frame, measurementLevels.middle, false),
-      );
-      return measuredPeriod === null || width === null || !(measuredPeriod > 0)
-        ? null
-        : (width / measuredPeriod) * 100;
+      const width = averagePairedIntervals(crossings(frame, measurementLevels.middle, true), crossings(frame, measurementLevels.middle, false));
+      return measuredPeriod === null || width === null || !(measuredPeriod > 0) ? null : (width / measuredPeriod) * 100;
     }
     case MeasurementKind.NegativeDuty: {
       const measuredPeriod = period(frame, measurementLevels);
-      const width = averagePairedIntervals(
-        crossings(frame, measurementLevels.middle, false),
-        crossings(frame, measurementLevels.middle, true),
-      );
-      return measuredPeriod === null || width === null || !(measuredPeriod > 0)
-        ? null
-        : (width / measuredPeriod) * 100;
+      const width = averagePairedIntervals(crossings(frame, measurementLevels.middle, false), crossings(frame, measurementLevels.middle, true));
+      return measuredPeriod === null || width === null || !(measuredPeriod > 0) ? null : (width / measuredPeriod) * 100;
     }
-    case MeasurementKind.Tvmax:
-      return timeAt(frame, measurementLevels.maximumIndex);
-    case MeasurementKind.Tvmin:
-      return timeAt(frame, measurementLevels.minimumIndex);
+    case MeasurementKind.Tvmax: return timeAt(frame, measurementLevels.maximumIndex);
+    case MeasurementKind.Tvmin: return timeAt(frame, measurementLevels.minimumIndex);
   }
 }
 
 function emptyStatistics(): MeasurementStatistics {
-  return {
-    current: Number.NaN,
-    minimum: Number.NaN,
-    maximum: Number.NaN,
-    average: Number.NaN,
-    deviation: Number.NaN,
-    count: 0,
-  };
+  return { current: Number.NaN, minimum: Number.NaN, maximum: Number.NaN, average: Number.NaN, deviation: Number.NaN, count: 0 };
 }
 
 function statisticsValue(stats: RunningStatistics): MeasurementStatistics {
@@ -407,21 +270,10 @@ function statisticsValue(stats: RunningStatistics): MeasurementStatistics {
   };
 }
 
-function updateStatistics(
-  current: RunningStatistics | undefined,
-  value: number,
-): RunningStatistics {
+function updateStatistics(current: RunningStatistics | undefined, value: number): RunningStatistics {
   if (current === undefined) {
-    return {
-      current: value,
-      minimum: value,
-      maximum: value,
-      mean: value,
-      m2: 0,
-      count: 1,
-    };
+    return { current: value, minimum: value, maximum: value, mean: value, m2: 0, count: 1 };
   }
-
   const count = current.count + 1;
   const delta = value - current.mean;
   const mean = current.mean + delta / count;
@@ -460,8 +312,8 @@ function frameContextKey(frame: DecodedWaveformFrame): string {
 export class LocalMeasurementAccumulator {
   private readonly running = new Map<string, RunningStatistics>();
   private readonly current = new Map<string, MeasurementValue>();
-  private readonly frameKeys = new Map<Channel, string>();
-  private readonly frameContexts = new Map<Channel, string>();
+  private readonly frameKeys = new Map<WaveformSource, string>();
+  private readonly frameContexts = new Map<WaveformSource, string>();
 
   public reset(): void {
     this.running.clear();
@@ -470,48 +322,35 @@ export class LocalMeasurementAccumulator {
     this.frameContexts.clear();
   }
 
-  private clearChannel(channel: Channel): void {
-    const prefix = `${channel}:`;
-    for (const key of this.running.keys()) {
-      if (key.startsWith(prefix)) {
-        this.running.delete(key);
-      }
-    }
-    for (const key of this.current.keys()) {
-      if (key.startsWith(prefix)) {
-        this.current.delete(key);
-      }
-    }
+  private clearSource(source: WaveformSource): void {
+    const prefix = `${source}:`;
+    for (const key of this.running.keys()) if (key.startsWith(prefix)) this.running.delete(key);
+    for (const key of this.current.keys()) if (key.startsWith(prefix)) this.current.delete(key);
   }
 
   public update(
     specs: readonly MeasurementSpec[],
     waveforms: LocalWaveformSource,
   ): MeasurementValue[] {
-    const changedChannels = new Set<Channel>();
-    const channels = new Set(specs.map((spec) => spec.channel));
-
-    for (const channel of channels) {
-      const frame = waveforms.getFrame(channel);
+    const changedSources = new Set<WaveformSource>();
+    const sources = new Set(specs.map((spec) => spec.channel));
+    for (const source of sources) {
+      const frame = waveforms.getFrame(source);
       if (frame === undefined) {
-        this.frameKeys.delete(channel);
-        if (this.frameContexts.delete(channel)) {
-          this.clearChannel(channel);
-        }
+        this.frameKeys.delete(source);
+        if (this.frameContexts.delete(source)) this.clearSource(source);
         continue;
       }
-
       const context = frameContextKey(frame);
-      if (this.frameContexts.get(channel) !== context) {
-        this.clearChannel(channel);
-        this.frameContexts.set(channel, context);
-        this.frameKeys.delete(channel);
+      if (this.frameContexts.get(source) !== context) {
+        this.clearSource(source);
+        this.frameContexts.set(source, context);
+        this.frameKeys.delete(source);
       }
-
       const key = frameKey(frame);
-      if (this.frameKeys.get(channel) !== key) {
-        this.frameKeys.set(channel, key);
-        changedChannels.add(channel);
+      if (this.frameKeys.get(source) !== key) {
+        this.frameKeys.set(source, key);
+        changedSources.add(source);
       }
     }
 
@@ -525,22 +364,18 @@ export class LocalMeasurementAccumulator {
         values.push(missing);
         continue;
       }
-
-      if (changedChannels.has(spec.channel) || !this.current.has(key)) {
+      if (changedSources.has(spec.channel) || !this.current.has(key)) {
         const measured = calculateLocalMeasurement(frame, spec.kind);
         if (measured === null || !Number.isFinite(measured)) {
-          const invalid = { ...spec, statistics: emptyStatistics() };
-          this.current.set(key, invalid);
+          this.current.set(key, { ...spec, statistics: emptyStatistics() });
         } else {
           const running = updateStatistics(this.running.get(key), measured);
           this.running.set(key, running);
           this.current.set(key, { ...spec, statistics: statisticsValue(running) });
         }
       }
-
       values.push(this.current.get(key) ?? { ...spec, statistics: emptyStatistics() });
     }
-
     return values;
   }
 }

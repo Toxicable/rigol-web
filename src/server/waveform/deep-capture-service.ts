@@ -1,6 +1,7 @@
 import {
   Channel,
   ScopeRunState,
+  waveformSourceForChannel,
   type ScopeState,
 } from "../../shared/scope-types.js";
 import {
@@ -31,7 +32,9 @@ export interface DeepViewportRequest {
   pixelWidth: number;
 }
 
-interface DeepChannelCapture extends Dho804Waveform {}
+interface DeepChannelCapture extends Dho804Waveform {
+  channel: Channel;
+}
 
 interface DeepCapture {
   id: number;
@@ -49,9 +52,7 @@ function nextUint32(value: number): number {
 }
 
 function requirePositiveInteger(value: number, name: string): void {
-  if (!Number.isSafeInteger(value) || value < 1) {
-    throw new Error(`${name} must be a positive integer`);
-  }
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} must be a positive integer`);
 }
 
 export class DeepCaptureService {
@@ -66,27 +67,25 @@ export class DeepCaptureService {
     if (state.runState !== ScopeRunState.Stopped) {
       throw new Error("Deep capture requires the scope to be stopped");
     }
-
     const enabledChannels = state.channels
       .filter((channelState) => channelState.enabled)
       .map((channelState) => channelState.channel);
-    if (enabledChannels.length === 0) {
-      throw new Error("Deep capture requires at least one enabled channel");
-    }
+    if (enabledChannels.length === 0) throw new Error("Deep capture requires at least one enabled channel");
     requirePositiveInteger(state.acquisition.memoryDepth, "Scope memory depth");
 
     const channels: DeepChannelCapture[] = [];
     for (const channel of enabledChannels) {
       const waveform = await this.driver.readRawWaveform(channel, state.acquisition.memoryDepth);
-      if (waveform.channel !== channel) {
-        throw new Error(`Driver returned CH${waveform.channel} while reading CH${channel}`);
+      const expectedSource = waveformSourceForChannel(channel);
+      if (waveform.source !== expectedSource) {
+        throw new Error(`Driver returned source ${waveform.source} while reading CH${channel}`);
       }
       if (waveform.samples.length !== state.acquisition.memoryDepth) {
         throw new Error(
           `Deep waveform CH${channel} returned ${waveform.samples.length} samples instead of ${state.acquisition.memoryDepth}`,
         );
       }
-      channels.push(waveform);
+      channels.push({ ...waveform, channel });
     }
 
     const captureId = nextPositiveUint32(this.lastCaptureId);
@@ -137,11 +136,8 @@ export class DeepCaptureService {
       expandedStart = Math.max(0, expandedEnd - wantedWidth);
     }
     expandedEnd = Math.min(channelCapture.samples.length, expandedStart + wantedWidth);
-
     const expandedWidth = expandedEnd - expandedStart;
-    const effectivePixels = Math.ceil(
-      request.pixelWidth * expandedWidth / visibleWidth,
-    );
+    const effectivePixels = Math.ceil(request.pixelWidth * expandedWidth / visibleWidth);
     const downsampled = downsampleWaveform(
       channelCapture.samples,
       expandedStart,
@@ -152,7 +148,7 @@ export class DeepCaptureService {
     this.frameSequence = nextUint32(this.frameSequence);
     return encodeWaveformFrame({
       kind: WaveformKind.DeepViewport,
-      channel: channelCapture.channel,
+      source: waveformSourceForChannel(channelCapture.channel),
       unit: channelCapture.unit,
       sequence: this.frameSequence,
       captureId: capture.id,

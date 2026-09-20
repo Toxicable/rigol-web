@@ -1,7 +1,5 @@
-import { Channel, ChannelUnit } from "../../shared/scope-types.js";
-import {
-  WaveformKind,
-} from "../../shared/websocket-protocol.js";
+import { ChannelUnit, WaveformSource } from "../../shared/scope-types.js";
+import { WaveformKind } from "../../shared/websocket-protocol.js";
 import {
   WAVEFORM_FRAME_VERSION,
   WAVEFORM_HEADER_BYTES,
@@ -12,7 +10,7 @@ import {
 
 export interface WaveformFrameInput {
   kind: WaveformKind;
-  channel: Channel;
+  source: WaveformSource;
   unit: ChannelUnit;
   sequence: number;
   captureId: number;
@@ -34,14 +32,12 @@ function requireUint32(value: number, name: string): void {
 }
 
 function requireFinite(value: number, name: string): void {
-  if (!Number.isFinite(value)) {
-    throw new Error(`${name} must be finite`);
-  }
+  if (!Number.isFinite(value)) throw new Error(`${name} must be finite`);
 }
 
-function requireChannel(channel: Channel): void {
-  if (channel < Channel.Ch1 || channel > Channel.Ch4) {
-    throw new Error(`Unsupported waveform channel: ${channel}`);
+function requireSource(source: WaveformSource): void {
+  if (source < WaveformSource.Ch1 || source > WaveformSource.Math4) {
+    throw new Error(`Unsupported waveform source: ${source}`);
   }
 }
 
@@ -55,7 +51,10 @@ export function encodeWaveformFrame(input: WaveformFrameInput): Uint8Array {
   if (input.kind !== WaveformKind.Live && input.kind !== WaveformKind.DeepViewport) {
     throw new Error(`Unsupported waveform kind: ${input.kind}`);
   }
-  requireChannel(input.channel);
+  requireSource(input.source);
+  if (input.kind === WaveformKind.DeepViewport && input.source > WaveformSource.Ch4) {
+    throw new Error("Deep waveform frames only support physical channel sources");
+  }
   requireUnit(input.unit);
   requireUint32(input.sequence, "sequence");
   requireUint32(input.captureId, "captureId");
@@ -81,24 +80,19 @@ export function encodeWaveformFrame(input: WaveformFrameInput): Uint8Array {
   for (let index = 0; index < input.values.length; index += 1) {
     const sampleIndex = input.sampleIndices[index];
     const value = input.values[index];
-    if (sampleIndex === undefined || value === undefined) {
-      throw new Error("Waveform payload is incomplete");
-    }
+    if (sampleIndex === undefined || value === undefined) throw new Error("Waveform payload is incomplete");
     if (sampleIndex < input.sourceStartSample || sampleIndex >= input.sourceEndSample) {
       throw new Error(`Waveform sample index ${sampleIndex} is outside the represented source range`);
     }
     requireFinite(value, `values[${index}]`);
   }
 
-  const output = new Uint8Array(
-    WAVEFORM_HEADER_BYTES + input.values.length * WAVEFORM_POINT_BYTES,
-  );
+  const output = new Uint8Array(WAVEFORM_HEADER_BYTES + input.values.length * WAVEFORM_POINT_BYTES);
   const view = new DataView(output.buffer, output.byteOffset, output.byteLength);
-
   view.setUint32(0, WAVEFORM_MAGIC, true);
   view.setUint8(4, WAVEFORM_FRAME_VERSION);
   view.setUint8(5, input.kind);
-  view.setUint8(6, input.channel);
+  view.setUint8(6, input.source);
   view.setUint8(7, WaveformEncoding.IndexedFloat32);
   view.setUint32(8, input.sequence, true);
   view.setUint32(12, input.captureId, true);
@@ -116,6 +110,5 @@ export function encodeWaveformFrame(input: WaveformFrameInput): Uint8Array {
     view.setUint32(offset, input.sampleIndices[index]!, true);
     view.setFloat32(offset + 4, input.values[index]!, true);
   }
-
   return output;
 }

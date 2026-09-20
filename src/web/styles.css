@@ -91,6 +91,12 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   font-size: 0.78rem;
 }
 .toolbar-actions { display: flex; gap: 0.4rem; margin-left: auto; }
+.cursor-mode-button.is-active {
+  border-color: #9aa6ff;
+  background: #262c52;
+  color: #e1e4ff;
+  box-shadow: inset 0 0 0 1px #9aa6ff;
+}
 .acquisition-state-button.is-running {
   border-color: #2ecc71;
   background: #153923;
@@ -175,6 +181,107 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
 .ch3 { --channel-accent: #3498db; }
 .ch4 { --channel-accent: #e74c3c; }
 .channel-marker, .channel-heading { color: var(--channel-accent); }
+.waveform-cursor-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  overflow: hidden;
+  border-radius: 8px;
+  pointer-events: none;
+}
+.waveform-cursor-capture {
+  position: absolute;
+  z-index: 1;
+  cursor: crosshair;
+  pointer-events: auto;
+  touch-action: none;
+}
+.waveform-cursor-crosshair,
+.waveform-cursor-line {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.waveform-cursor-line.is-vertical {
+  width: 0;
+  border-left: 1px dotted var(--cursor-accent);
+}
+.waveform-cursor-line.is-horizontal {
+  height: 0;
+  border-top: 1px dotted var(--cursor-accent);
+}
+.waveform-cursor-crosshair.is-preview .waveform-cursor-line {
+  opacity: 0.72;
+}
+.waveform-cursor-crosshair.is-marker .waveform-cursor-line {
+  opacity: 0.9;
+}
+.waveform-cursor-handle {
+  position: absolute;
+  z-index: 4;
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  border-color: var(--cursor-accent);
+  background: #0b0d10;
+  color: var(--cursor-accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1;
+  pointer-events: auto;
+  touch-action: none;
+}
+.waveform-cursor-handle:disabled { pointer-events: none; opacity: 0.8; }
+.waveform-cursor-readout {
+  position: absolute;
+  top: 0.7rem;
+  right: 2.7rem;
+  z-index: 6;
+  min-width: 285px;
+  max-width: calc(100% - 5.4rem);
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #303741;
+  border-radius: 5px;
+  background: rgb(7 9 11 / 92%);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 35%);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.waveform-cursor-readout-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 0.25rem;
+  color: #a7b1bc;
+}
+.waveform-cursor-readout-heading strong { color: #e8edf2; }
+.waveform-cursor-readout-row {
+  display: grid;
+  grid-template-columns: 1.2rem minmax(3.7rem, auto) minmax(8.5rem, 1fr) minmax(8.5rem, 1fr);
+  gap: 0.45rem;
+  align-items: baseline;
+  padding: 0.12rem 0;
+}
+.waveform-cursor-readout-row strong { color: #e8edf2; }
+.waveform-cursor-source { color: var(--channel-accent); font-weight: 700; }
+.waveform-cursor-delta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.8rem;
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid #242a31;
+  color: #d7e0e8;
+}
+.waveform-cursor-hover {
+  margin-top: 0.25rem;
+  color: #a7b1bc;
+}
 .measurement-overlay {
   position: absolute;
   top: 0.7rem;
@@ -377,4 +484,14 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   }
   .measurement-overlay-item { font-size: 0.72rem; }
   .measurement-overlay-stats { font-size: 0.65rem; }
+  .waveform-cursor-readout {
+    left: 2.3rem;
+    right: 2.3rem;
+    min-width: 0;
+    max-width: none;
+  }
+  .waveform-cursor-readout-row {
+    grid-template-columns: 1.2rem minmax(3.7rem, auto) 1fr;
+  }
+  .waveform-cursor-readout-row span:last-child { grid-column: 3; }
 }

@@ -3,14 +3,19 @@ import { describe, expect, it } from "vitest";
 import {
   AcquisitionType,
   Channel,
+  ChannelBandwidthLimit,
   ChannelCoupling,
   ChannelUnit,
   EdgeSlope,
+  MathChannel,
+  MathOperator,
+  MathSource,
   ScopeRunState,
   TimebaseMode,
   TriggerCoupling,
   TriggerSweep,
   TriggerType,
+  waveformSourceForChannel,
   type ScopeState,
 } from "../../shared/scope-types.js";
 import { WaveformKind } from "../../shared/websocket-protocol.js";
@@ -24,11 +29,21 @@ function createState(runState = ScopeRunState.Stopped): ScopeState {
       channel,
       enabled: channel === Channel.Ch1 || channel === Channel.Ch2,
       coupling: ChannelCoupling.Dc,
+      bandwidthLimit: ChannelBandwidthLimit.Off,
       unit: ChannelUnit.Volts,
       scale: 1,
       offset: 0,
       probeRatio: 1,
     })) as ScopeState["channels"],
+    math: [MathChannel.Math1, MathChannel.Math2, MathChannel.Math3, MathChannel.Math4].map((math) => ({
+      math,
+      enabled: math === MathChannel.Math1,
+      operator: MathOperator.Add,
+      source1: MathSource.Ch1,
+      source2: MathSource.Ch2,
+      scale: 1,
+      offset: 0,
+    })) as ScopeState["math"],
     horizontal: { mode: TimebaseMode.Main, scale: 1e-3, position: 0 },
     acquisition: {
       type: AcquisitionType.Normal,
@@ -50,7 +65,7 @@ function createState(runState = ScopeRunState.Stopped): ScopeState {
 
 function waveform(channel: Channel, samples = 100): Dho804Waveform {
   return {
-    channel,
+    source: waveformSourceForChannel(channel),
     unit: ChannelUnit.Volts,
     samples: Float32Array.from({ length: samples }, (_, index) => index),
     xIncrement: 1e-6,
@@ -71,9 +86,7 @@ class FakeDriver implements DeepCaptureDriver {
 
   public async readRawWaveform(channel: Channel, sampleCount: number): Promise<Dho804Waveform> {
     this.calls.push(`raw:${channel}:${sampleCount}`);
-    if (this.failChannel === channel) {
-      throw new Error("raw failed");
-    }
+    if (this.failChannel === channel) throw new Error("raw failed");
     return waveform(channel, sampleCount);
   }
 }
@@ -83,7 +96,7 @@ function header(frame: Uint8Array): DataView {
 }
 
 describe("DeepCaptureService", () => {
-  it("reads fresh state then captures every enabled channel sequentially", async () => {
+  it("reads fresh state then captures every enabled physical channel only", async () => {
     const driver = new FakeDriver();
     const service = new DeepCaptureService(driver);
     const info = await service.capture();
@@ -92,7 +105,7 @@ describe("DeepCaptureService", () => {
     expect(driver.calls).toEqual(["state:2", "raw:1:100", "raw:2:100"]);
   });
 
-  it("rejects running scopes and scopes with no enabled channels", async () => {
+  it("rejects running scopes and scopes with no enabled physical channels", async () => {
     const running = new FakeDriver();
     running.state = createState(ScopeRunState.Running);
     await expect(new DeepCaptureService(running).capture()).rejects.toThrow(/stopped/);
@@ -133,7 +146,7 @@ describe("DeepCaptureService", () => {
     })).toThrow(/not the retained capture/);
   });
 
-  it("encodes an overscanned viewport with proportional output density", async () => {
+  it("encodes an overscanned physical-channel viewport with proportional output density", async () => {
     const driver = new FakeDriver();
     const service = new DeepCaptureService(driver);
     const info = await service.capture();
@@ -146,6 +159,7 @@ describe("DeepCaptureService", () => {
     });
     const view = header(frame);
     expect(view.getUint8(5)).toBe(WaveformKind.DeepViewport);
+    expect(view.getUint8(6)).toBe(waveformSourceForChannel(Channel.Ch1));
     expect(view.getUint32(12, true)).toBe(info.captureId);
     expect(view.getUint32(16, true)).toBe(20);
     expect(view.getUint32(20, true)).toBe(60);

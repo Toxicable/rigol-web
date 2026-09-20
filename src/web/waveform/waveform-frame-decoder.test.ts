@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { Channel, ChannelUnit } from "../../shared/scope-types.js";
+import { ChannelUnit, WaveformSource } from "../../shared/scope-types.js";
 import { WaveformKind } from "../../shared/websocket-protocol.js";
 import {
   WAVEFORM_FRAME_VERSION,
@@ -11,16 +11,16 @@ import {
 } from "../../shared/waveform-protocol.js";
 import { decodeWaveformFrame } from "./waveform-frame-decoder.js";
 
-function fixture(): ArrayBuffer {
+function fixture(source = WaveformSource.Ch2, kind = WaveformKind.DeepViewport): ArrayBuffer {
   const buffer = new ArrayBuffer(WAVEFORM_HEADER_BYTES + 2 * WAVEFORM_POINT_BYTES);
   const view = new DataView(buffer);
   view.setUint32(0, WAVEFORM_MAGIC, true);
   view.setUint8(4, WAVEFORM_FRAME_VERSION);
-  view.setUint8(5, WaveformKind.DeepViewport);
-  view.setUint8(6, Channel.Ch2);
+  view.setUint8(5, kind);
+  view.setUint8(6, source);
   view.setUint8(7, WaveformEncoding.IndexedFloat32);
   view.setUint32(8, 0x10203040, true);
-  view.setUint32(12, 9, true);
+  view.setUint32(12, kind === WaveformKind.Live ? 0 : 9, true);
   view.setUint32(16, 100, true);
   view.setUint32(20, 200, true);
   view.setUint32(24, 2, true);
@@ -37,10 +37,10 @@ function fixture(): ArrayBuffer {
 }
 
 describe("waveform frame decoder", () => {
-  it("parses every fixed v1 header field and strided little-endian records", () => {
+  it("parses every fixed v2 header field and strided little-endian records", () => {
     const frame = decodeWaveformFrame(fixture());
     expect(frame.kind).toBe(WaveformKind.DeepViewport);
-    expect(frame.channel).toBe(Channel.Ch2);
+    expect(frame.source).toBe(WaveformSource.Ch2);
     expect(frame.unit).toBe(ChannelUnit.Amps);
     expect(frame.sequence).toBe(0x10203040);
     expect(frame.captureId).toBe(9);
@@ -51,6 +51,13 @@ describe("waveform frame decoder", () => {
     expect(frame.xReference).toBe(12.5);
     expect([...frame.sampleIndices]).toEqual([101, 199]);
     expect([...frame.values]).toEqual([-1.5, 3.25]);
+  });
+
+  it("accepts math sources for live frames and rejects them for deep frames", () => {
+    expect(decodeWaveformFrame(fixture(WaveformSource.Math3, WaveformKind.Live)).source)
+      .toBe(WaveformSource.Math3);
+    expect(() => decodeWaveformFrame(fixture(WaveformSource.Math3, WaveformKind.DeepViewport)))
+      .toThrow(/physical channel/);
   });
 
   it("rejects a frame length mismatch", () => {

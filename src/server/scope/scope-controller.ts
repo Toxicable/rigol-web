@@ -1,23 +1,26 @@
-import type {
-  AcquisitionState,
-  ChannelState,
-  HorizontalState,
-  MeasurementSpec,
-  MeasurementValue,
-  ScopeState,
-  TriggerState,
-} from "../../shared/scope-types.js";
 import {
   AcquisitionType,
   Channel,
   ChannelBandwidthLimit,
   ChannelCoupling,
   EdgeSlope,
+  MathChannel,
+  MathSource,
   ScopeRunState,
   TimebaseMode,
   TriggerCoupling,
   TriggerSweep,
   TriggerType,
+  isArithmeticMathOperator,
+  type AcquisitionState,
+  type ChannelState,
+  type HorizontalState,
+  type MathOperator,
+  type MathState,
+  type MeasurementSpec,
+  type MeasurementValue,
+  type ScopeState,
+  type TriggerState,
 } from "../../shared/scope-types.js";
 import type { NonEmptyArray } from "../../shared/websocket-protocol.js";
 import {
@@ -39,6 +42,7 @@ const DHO804_MEMORY_DEPTHS = [1_000, 10_000, 100_000, 1_000_000, 5_000_000, 10_0
 export interface ScopeControllerDriver {
   readScopeState(priority: ScopeDriverPriority): Promise<ScopeState>;
   readChannelState(channel: Channel, priority: ScopeDriverPriority): Promise<ChannelState>;
+  readMathState(math: MathChannel, priority: ScopeDriverPriority): Promise<MathState>;
   readHorizontalState(priority: ScopeDriverPriority): Promise<HorizontalState>;
   readAcquisitionState(priority: ScopeDriverPriority): Promise<AcquisitionState>;
   readTriggerState(priority: ScopeDriverPriority): Promise<TriggerState>;
@@ -47,6 +51,12 @@ export interface ScopeControllerDriver {
   setChannelEnabled(channel: Channel, enabled: boolean, priority: ScopeDriverPriority): Promise<void>;
   setChannelScale(channel: Channel, scale: number, priority: ScopeDriverPriority): Promise<void>;
   setChannelOffset(channel: Channel, offset: number, priority: ScopeDriverPriority): Promise<void>;
+  setMathEnabled(math: MathChannel, enabled: boolean, priority: ScopeDriverPriority): Promise<void>;
+  setMathOperator(math: MathChannel, operator: MathOperator, priority: ScopeDriverPriority): Promise<void>;
+  setMathSource1(math: MathChannel, source: MathSource, priority: ScopeDriverPriority): Promise<void>;
+  setMathSource2(math: MathChannel, source: MathSource, priority: ScopeDriverPriority): Promise<void>;
+  setMathScale(math: MathChannel, scale: number, priority: ScopeDriverPriority): Promise<void>;
+  setMathOffset(math: MathChannel, offset: number, priority: ScopeDriverPriority): Promise<void>;
   setHorizontalScale(scale: number, priority: ScopeDriverPriority): Promise<void>;
   setHorizontalPosition(position: number, priority: ScopeDriverPriority): Promise<void>;
   setTriggerType(type: TriggerType.Edge, priority: ScopeDriverPriority): Promise<void>;
@@ -76,6 +86,19 @@ function replaceChannel(state: ScopeState, channel: Channel, replacement: Channe
   }
 }
 
+function replaceMath(state: ScopeState, math: MathChannel, replacement: MathState): ScopeState {
+  if (replacement.math !== math) {
+    throw new Error(`Driver returned MATH${replacement.math} while reading MATH${math}`);
+  }
+  const current = state.math;
+  switch (math) {
+    case MathChannel.Math1: return { ...state, math: [replacement, current[1], current[2], current[3]] };
+    case MathChannel.Math2: return { ...state, math: [current[0], replacement, current[2], current[3]] };
+    case MathChannel.Math3: return { ...state, math: [current[0], current[1], replacement, current[3]] };
+    case MathChannel.Math4: return { ...state, math: [current[0], current[1], current[2], replacement] };
+  }
+}
+
 function updateChannel(
   state: ScopeState,
   channel: Channel,
@@ -86,6 +109,18 @@ function updateChannel(
     throw new Error(`Scope state is missing CH${channel}`);
   }
   return replaceChannel(state, channel, updater(current));
+}
+
+function updateMath(
+  state: ScopeState,
+  math: MathChannel,
+  updater: (mathState: MathState) => MathState,
+): ScopeState {
+  const current = state.math[math - 1];
+  if (current === undefined || current.math !== math) {
+    throw new Error(`Scope state is missing MATH${math}`);
+  }
+  return replaceMath(state, math, updater(current));
 }
 
 function requireFinite(value: number, name: string): void {
@@ -102,6 +137,32 @@ function requireEdgeTrigger(state: ScopeState): Extract<TriggerState, { type: Tr
     throw new Error("Edge trigger control requires TriggerType.Edge");
   }
   return state.trigger;
+}
+
+function requireArithmeticMath(state: ScopeState, math: MathChannel): MathState {
+  const mathState = state.math[math - 1];
+  if (mathState === undefined || mathState.math !== math) {
+    throw new Error(`Scope state is missing MATH${math}`);
+  }
+  if (!isArithmeticMathOperator(mathState.operator)) {
+    throw new Error(`MATH${math} editing currently supports arithmetic operators only`);
+  }
+  return mathState;
+}
+
+function mathSourceAllowed(math: MathChannel, source: MathSource): boolean {
+  if (source >= MathSource.Ch1 && source <= MathSource.Ch4) return true;
+  if (source >= MathSource.Ref1 && source <= MathSource.Ref10) return true;
+  if (source >= MathSource.Math1 && source <= MathSource.Math4) {
+    return source - 4 < math;
+  }
+  return false;
+}
+
+function requireMathSource(math: MathChannel, source: MathSource): void {
+  if (!mathSourceAllowed(math, source)) {
+    throw new Error(`MATH${math} cannot use math source ${source}`);
+  }
 }
 
 function isPowerOfTwo(value: number): boolean {
@@ -193,6 +254,14 @@ export class ScopeController {
       case ControlKind.ChannelProbeRatio:
       case ControlKind.ChannelBandwidthLimit:
         await this.reconcileChannel(revision, control.channel, PRIORITY_NORMAL);
+        return;
+      case ControlKind.MathEnabled:
+      case ControlKind.MathOperator:
+      case ControlKind.MathSource1:
+      case ControlKind.MathSource2:
+      case ControlKind.MathScale:
+      case ControlKind.MathOffset:
+        await this.reconcileMath(revision, control.math, PRIORITY_NORMAL);
         return;
       case ControlKind.HorizontalScale:
       case ControlKind.HorizontalMode:
@@ -311,6 +380,16 @@ export class ScopeController {
     return channelState;
   }
 
+  private async reconcileMath(
+    revision: number,
+    math: MathChannel,
+    priority: ScopeDriverPriority,
+  ): Promise<MathState> {
+    const mathState = await this.driver.readMathState(math, priority);
+    this.applyReconciledUpdate(revision, (state) => replaceMath(state, math, mathState));
+    return mathState;
+  }
+
   private async reconcileHorizontal(
     revision: number,
     priority: ScopeDriverPriority,
@@ -358,6 +437,26 @@ export class ScopeController {
         return;
       case ControlKind.ChannelBandwidthLimit:
         channelBandwidthLimitToken(control.value);
+        return;
+      case ControlKind.MathEnabled:
+        return;
+      case ControlKind.MathOperator:
+        if (!isArithmeticMathOperator(control.value)) {
+          throw new Error("RigolWeb currently writes ADD, SUBT, MULT and DIV math operators only");
+        }
+        return;
+      case ControlKind.MathSource1:
+      case ControlKind.MathSource2:
+        requireArithmeticMath(this.stateStore.getState(), control.math);
+        requireMathSource(control.math, control.value);
+        return;
+      case ControlKind.MathScale:
+        requireArithmeticMath(this.stateStore.getState(), control.math);
+        requirePositive(control.value, "Math scale");
+        return;
+      case ControlKind.MathOffset:
+        requireArithmeticMath(this.stateStore.getState(), control.math);
+        requireFinite(control.value, "Math offset");
         return;
       case ControlKind.HorizontalScale:
         requirePositive(control.value, "Horizontal scale");
@@ -425,6 +524,18 @@ export class ScopeController {
           return updateChannel(state, control.channel, (channelState) => ({ ...channelState, probeRatio: control.value }));
         case ControlKind.ChannelBandwidthLimit:
           return updateChannel(state, control.channel, (channelState) => ({ ...channelState, bandwidthLimit: control.value }));
+        case ControlKind.MathEnabled:
+          return updateMath(state, control.math, (mathState) => ({ ...mathState, enabled: control.value }));
+        case ControlKind.MathOperator:
+          return updateMath(state, control.math, (mathState) => ({ ...mathState, operator: control.value }));
+        case ControlKind.MathSource1:
+          return updateMath(state, control.math, (mathState) => ({ ...mathState, source1: control.value }));
+        case ControlKind.MathSource2:
+          return updateMath(state, control.math, (mathState) => ({ ...mathState, source2: control.value }));
+        case ControlKind.MathScale:
+          return updateMath(state, control.math, (mathState) => ({ ...mathState, scale: control.value }));
+        case ControlKind.MathOffset:
+          return updateMath(state, control.math, (mathState) => ({ ...mathState, offset: control.value }));
         case ControlKind.HorizontalScale:
           return { ...state, horizontal: { ...state.horizontal, scale: control.value } };
         case ControlKind.HorizontalPosition:
@@ -478,6 +589,24 @@ export class ScopeController {
         return;
       case ControlKind.ChannelBandwidthLimit:
         await this.driver.executeRawScpi(`:CHANnel${control.channel}:BWLimit ${channelBandwidthLimitToken(control.value)}`);
+        return;
+      case ControlKind.MathEnabled:
+        await this.driver.setMathEnabled(control.math, control.value, priority);
+        return;
+      case ControlKind.MathOperator:
+        await this.driver.setMathOperator(control.math, control.value, priority);
+        return;
+      case ControlKind.MathSource1:
+        await this.driver.setMathSource1(control.math, control.value, priority);
+        return;
+      case ControlKind.MathSource2:
+        await this.driver.setMathSource2(control.math, control.value, priority);
+        return;
+      case ControlKind.MathScale:
+        await this.driver.setMathScale(control.math, control.value, priority);
+        return;
+      case ControlKind.MathOffset:
+        await this.driver.setMathOffset(control.math, control.value, priority);
         return;
       case ControlKind.HorizontalScale:
         await this.driver.setHorizontalScale(control.value, priority);

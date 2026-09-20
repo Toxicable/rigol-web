@@ -4,10 +4,14 @@ import {
   ChannelBandwidthLimit,
   ChannelCoupling,
   EdgeSlope,
+  MathChannel,
+  MathOperator,
+  MathSource,
   TimebaseMode,
   TriggerCoupling,
   TriggerSweep,
   TriggerType,
+  type MathState,
   type MeasurementSpec,
 } from "../shared/scope-types.js";
 import {
@@ -18,6 +22,7 @@ import {
 } from "../shared/websocket-protocol.js";
 import type { ScopeBinding } from "./scope-binding.js";
 import {
+  BrowserConnectionKind,
   DeepCaptureKind,
   MeasurementSource,
   useScopeStore,
@@ -36,6 +41,17 @@ export type ScopeActionBinding = Pick<
   | "readMeasurements"
   | "setMeasurements"
 >;
+
+export function mathDependents(
+  mathStates: readonly MathState[],
+  math: MathChannel,
+): MathChannel[] {
+  const source = (MathSource.Math1 + math - MathChannel.Math1) as MathSource;
+  return mathStates
+    .filter((state) =>
+      state.math > math && (state.source1 === source || state.source2 === source))
+    .map((state) => state.math);
+}
 
 export class ScopeActions {
   private pendingInteraction: InteractiveControl | null = null;
@@ -63,16 +79,12 @@ export class ScopeActions {
   }
 
   public setChannelScale(channel: Channel, value: number): Promise<void> {
-    if (!Number.isFinite(value) || value <= 0) {
-      return Promise.resolve();
-    }
+    if (!Number.isFinite(value) || value <= 0) return Promise.resolve();
     return this.setControl({ kind: ControlKind.ChannelScale, channel, value });
   }
 
   public setChannelOffset(channel: Channel, value: number): Promise<void> {
-    if (!Number.isFinite(value)) {
-      return Promise.resolve();
-    }
+    if (!Number.isFinite(value)) return Promise.resolve();
     return this.setControl({ kind: ControlKind.ChannelOffset, channel, value });
   }
 
@@ -81,23 +93,67 @@ export class ScopeActions {
   }
 
   public setChannelProbeRatio(channel: Channel, value: number): Promise<void> {
-    if (value !== 1 && value !== 10) {
-      return Promise.resolve();
-    }
+    if (value !== 1 && value !== 10) return Promise.resolve();
     return this.setControl({ kind: ControlKind.ChannelProbeRatio, channel, value });
   }
 
-  public setChannelBandwidthLimit(
-    channel: Channel,
-    value: ChannelBandwidthLimit,
-  ): Promise<void> {
+  public setChannelBandwidthLimit(channel: Channel, value: ChannelBandwidthLimit): Promise<void> {
     return this.setControl({ kind: ControlKind.ChannelBandwidthLimit, channel, value });
   }
 
-  public setHorizontalScale(value: number): Promise<void> {
-    if (!Number.isFinite(value) || value <= 0) {
-      return Promise.resolve();
+  public setMathEnabled(math: MathChannel, value: boolean): Promise<void> {
+    return this.setControl({ kind: ControlKind.MathEnabled, math, value });
+  }
+
+  public setMathOperator(math: MathChannel, value: MathOperator): Promise<void> {
+    return this.setControl({ kind: ControlKind.MathOperator, math, value });
+  }
+
+  public setMathSource1(math: MathChannel, value: MathSource): Promise<void> {
+    return this.setControl({ kind: ControlKind.MathSource1, math, value });
+  }
+
+  public setMathSource2(math: MathChannel, value: MathSource): Promise<void> {
+    return this.setControl({ kind: ControlKind.MathSource2, math, value });
+  }
+
+  public setMathScale(math: MathChannel, value: number): Promise<void> {
+    if (!Number.isFinite(value) || value <= 0) return Promise.resolve();
+    return this.setControl({ kind: ControlKind.MathScale, math, value });
+  }
+
+  public setMathOffset(math: MathChannel, value: number): Promise<void> {
+    if (!Number.isFinite(value)) return Promise.resolve();
+    return this.setControl({ kind: ControlKind.MathOffset, math, value });
+  }
+
+  public async resetMath(math: MathChannel): Promise<void> {
+    const connection = useScopeStore.getState().connection;
+    if (connection.kind !== BrowserConnectionKind.ScopeConnected) return;
+
+    const dependents = mathDependents(connection.scope.math, math);
+    if (dependents.length > 0) {
+      this.surfaceError(
+        `MATH${math} is used by ${dependents.map((item) => `MATH${item}`).join(", ")}; change those sources before resetting it`,
+      );
+      return;
     }
+
+    const controls: ControlChange[] = [
+      { kind: ControlKind.MathEnabled, math, value: false },
+      { kind: ControlKind.MathOperator, math, value: MathOperator.Add },
+      { kind: ControlKind.MathSource1, math, value: MathSource.Ch1 },
+      { kind: ControlKind.MathSource2, math, value: MathSource.Ch2 },
+      { kind: ControlKind.MathScale, math, value: 1 },
+      { kind: ControlKind.MathOffset, math, value: 0 },
+    ];
+    for (const control of controls) {
+      if (!await this.trySetControl(control)) return;
+    }
+  }
+
+  public setHorizontalScale(value: number): Promise<void> {
+    if (!Number.isFinite(value) || value <= 0) return Promise.resolve();
     const deepCapture = useScopeStore.getState().deepCapture;
     if (deepCapture.kind === DeepCaptureKind.Ready) {
       useScopeStore.getState().setDeepHorizontal(deepCapture.position, value);
@@ -107,9 +163,7 @@ export class ScopeActions {
   }
 
   public setHorizontalPosition(value: number): Promise<void> {
-    if (!Number.isFinite(value)) {
-      return Promise.resolve();
-    }
+    if (!Number.isFinite(value)) return Promise.resolve();
     const deepCapture = useScopeStore.getState().deepCapture;
     if (deepCapture.kind === DeepCaptureKind.Ready) {
       useScopeStore.getState().setDeepHorizontal(value, deepCapture.scale);
@@ -134,9 +188,7 @@ export class ScopeActions {
   }
 
   public setAcquisitionMemoryDepth(value: number): Promise<void> {
-    if (!Number.isSafeInteger(value) || value <= 0) {
-      return Promise.resolve();
-    }
+    if (!Number.isSafeInteger(value) || value <= 0) return Promise.resolve();
     return this.setControl({ kind: ControlKind.AcquisitionMemoryDepth, value });
   }
 
@@ -153,9 +205,7 @@ export class ScopeActions {
   }
 
   public setTriggerLevel(value: number): Promise<void> {
-    if (!Number.isFinite(value)) {
-      return Promise.resolve();
-    }
+    if (!Number.isFinite(value)) return Promise.resolve();
     return this.setControl({ kind: ControlKind.TriggerLevel, value });
   }
 
@@ -214,10 +264,7 @@ export class ScopeActions {
   }
 
   public async sleep(): Promise<void> {
-    if (useScopeStore.getState().sleepPending) {
-      return;
-    }
-
+    if (useScopeStore.getState().sleepPending) return;
     const generation = this.sleepGeneration + 1;
     this.sleepGeneration = generation;
     useScopeStore.setState({ sleepPending: true });
@@ -226,9 +273,7 @@ export class ScopeActions {
     } catch (error) {
       this.surfaceError(error);
     } finally {
-      if (this.sleepGeneration === generation) {
-        useScopeStore.setState({ sleepPending: false });
-      }
+      if (this.sleepGeneration === generation) useScopeStore.setState({ sleepPending: false });
     }
   }
 
@@ -246,25 +291,17 @@ export class ScopeActions {
     const measurements = source === MeasurementSource.Scope
       ? useScopeStore.getState().measurementSpecs
       : [];
-    void this.binding.setMeasurements(measurements).catch((error: unknown) => {
-      this.surfaceError(error);
-    });
+    void this.binding.setMeasurements(measurements).catch((error: unknown) => this.surfaceError(error));
   }
 
   public setMeasurementSpecs(measurements: MeasurementSpec[]): void {
     useScopeStore.getState().setMeasurementSpecs(measurements);
-    if (useScopeStore.getState().measurementSource !== MeasurementSource.Scope) {
-      return;
-    }
-    void this.binding.setMeasurements(measurements).catch((error: unknown) => {
-      this.surfaceError(error);
-    });
+    if (useScopeStore.getState().measurementSource !== MeasurementSource.Scope) return;
+    void this.binding.setMeasurements(measurements).catch((error: unknown) => this.surfaceError(error));
   }
 
   public startMeasurementPolling(intervalMs = 1000): () => void {
-    const poll = () => {
-      void this.pollMeasurementsOnce();
-    };
+    const poll = () => { void this.pollMeasurementsOnce(); };
     poll();
     const timer = window.setInterval(poll, intervalMs);
     return () => window.clearInterval(timer);
@@ -276,15 +313,9 @@ export class ScopeActions {
       store.measurementSource !== MeasurementSource.Scope ||
       store.measurementSpecs.length === 0 ||
       this.measurementInFlight
-    ) {
-      return;
-    }
-
+    ) return;
     const [first, ...rest] = store.measurementSpecs;
-    if (first === undefined) {
-      return;
-    }
-
+    if (first === undefined) return;
     this.measurementInFlight = true;
     try {
       const response = await this.binding.readMeasurements([first, ...rest]);
@@ -296,27 +327,30 @@ export class ScopeActions {
     }
   }
 
-  private setControl(control: ControlChange): Promise<void> {
+  private async setControl(control: ControlChange): Promise<void> {
+    await this.trySetControl(control);
+  }
+
+  private async trySetControl(control: ControlChange): Promise<boolean> {
     useScopeStore.getState().applyOptimisticControl(control);
-    return this.binding.setControl(control).catch((error: unknown) => {
+    try {
+      await this.binding.setControl(control);
+      return true;
+    } catch (error) {
       this.surfaceError(error);
-    });
+      return false;
+    }
   }
 
   private previewInteraction(control: InteractiveControl): void {
     useScopeStore.getState().applyOptimisticControl(control);
     this.pendingInteraction = control;
-    if (this.interactionTimer !== null) {
-      return;
-    }
-
+    if (this.interactionTimer !== null) return;
     this.interactionTimer = window.setTimeout(() => {
       this.interactionTimer = null;
       const pending = this.pendingInteraction;
       this.pendingInteraction = null;
-      if (pending === null) {
-        return;
-      }
+      if (pending === null) return;
       try {
         this.binding.interactionUpdate(pending);
       } catch (error) {
@@ -328,20 +362,14 @@ export class ScopeActions {
   private commitInteraction(control: InteractiveControl): Promise<void> {
     this.cancelPendingInteraction();
     useScopeStore.getState().applyOptimisticControl(control);
-    return this.binding.interactionCommit(control).catch((error: unknown) => {
-      this.surfaceError(error);
-    });
+    return this.binding.interactionCommit(control).catch((error: unknown) => this.surfaceError(error));
   }
 
   private runAcquisition(action: AcquisitionAction): Promise<void> {
-    return this.binding.acquisition(action).catch((error: unknown) => {
-      this.surfaceError(error);
-    });
+    return this.binding.acquisition(action).catch((error: unknown) => this.surfaceError(error));
   }
 
   private surfaceError(error: unknown): void {
-    useScopeStore.getState().setError(
-      error instanceof Error ? error.message : String(error),
-    );
+    useScopeStore.getState().setError(error instanceof Error ? error.message : String(error));
   }
 }
