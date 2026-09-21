@@ -575,6 +575,7 @@ export class Dho804Driver {
   public async readLiveWaveform(
     source: WaveformSource,
     pointCount: number,
+    mode: TimebaseMode = TimebaseMode.Main,
   ): Promise<Dho804Waveform> {
     if (!Number.isInteger(pointCount) || pointCount < 1 || pointCount > 1_000) {
       throw new Error("Live waveform pointCount must be an integer from 1 to 1000");
@@ -595,15 +596,28 @@ export class Dho804Driver {
         // The source is configured above. Keep DATA? as its own program
         // message; combining a source write with DATA? makes the DHO804's
         // first Roll response intermittently truncate.
-        const payload = await transport.queryBinary(":WAVeform:DATA?");
+        const payload = await transport.queryBinary(":WAVeform:DATA?", {
+          acceptPartialBinary: mode === TimebaseMode.Roll,
+        });
         this.waveformSetup.source = source;
         recorder.addBinaryBytes(payload.byteLength);
-        if (payload.byteLength !== pointCount) {
+        // The DHO804 can return fewer NORMAL/BYTE samples than requested
+        // immediately after a horizontal-scale change (for example 800 for a
+        // request of 999). Keep the frame so one transient short read does
+        // not stop the live acquisition loop.
+        if (payload.byteLength < 1 || payload.byteLength > 1_000) {
           throw new Error(
-            `Expected ${pointCount} live waveform samples for ${sourceToken}, received ${payload.byteLength}`,
+            `Invalid live waveform sample count for ${sourceToken}: ${payload.byteLength}`,
           );
         }
-        return createWaveform(source, unit, payload, preamble);
+        return createWaveform(
+          source,
+          unit,
+          payload,
+          preamble,
+          mode !== TimebaseMode.Roll,
+          mode === TimebaseMode.Roll,
+        );
       },
     );
   }
@@ -1084,18 +1098,37 @@ function createWaveform(
   unit: ChannelUnit,
   native: Uint8Array | Uint16Array,
   preamble: WaveformPreamble,
+  stretchShortWindow = true,
+  reverseSamples = false,
 ): Dho804Waveform {
-  const samples = new Float32Array(native.length);
-  for (let index = 0; index < native.length; index += 1) {
-    const code = native[index];
+  // A truncated Roll transfer can end with a zero byte that is not a real
+  // sample. Decoding that byte produces a full-scale downward spike. Keep the
+  // rest of the partial frame, but omit that suspicious endpoint.
+  const shortRoll = !stretchShortWindow && native.length < preamble.points;
+  const hasSuspiciousRollTail = shortRoll && native[native.length - 1] === 0;
+  const sampleCount = hasSuspiciousRollTail
+    ? Math.max(1, native.length - 1)
+    : native.length;
+  const samples = new Float32Array(sampleCount);
+  for (let index = 0; index < sampleCount; index += 1) {
+    const nativeIndex = reverseSamples ? sampleCount - index - 1 : index;
+    const code = native[nativeIndex];
     if (code === undefined) throw new Error("Missing native waveform sample");
     samples[index] = (code - preamble.yOrigin - preamble.yReference) * preamble.yIncrement;
   }
+  // Roll data is returned newest-first by the DHO804; reverse it so the
+  // newest samples enter from the right and move toward the left.
+  // A short Main-mode response still represents the preamble's full display
+  // window. Roll responses are a moving partial window, so preserve their
+  // native spacing instead of inventing time between samples.
+  const xIncrement = stretchShortWindow && native.length < preamble.points
+    ? preamble.xIncrement * preamble.points / native.length
+    : preamble.xIncrement;
   return {
     source,
     unit,
     samples,
-    xIncrement: preamble.xIncrement,
+    xIncrement,
     xOrigin: preamble.xOrigin,
     xReference: preamble.xReference,
   };

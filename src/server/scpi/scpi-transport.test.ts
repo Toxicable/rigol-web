@@ -6,6 +6,7 @@ import {
   ScpiTransport,
   ScpiTransportError,
 } from "./scpi-transport.js";
+import { Dho804Emulator } from "./dho804-emulator.js";
 
 const servers: Server[] = [];
 
@@ -66,6 +67,89 @@ describe("ScpiTransport", () => {
     await transport.connect("127.0.0.1", port);
     await expect(transport.queryBinary("BIN?")).resolves.toEqual(Uint8Array.from([1, 2, 3, 4]));
     transport.disconnect();
+  });
+
+  it("replays the DHO804 999-point waveform after a settled timebase change", async () => {
+    const payload = Uint8Array.from({ length: 999 }, (_, index) => index & 0xff);
+    let stoppedAt = 0;
+    const port = await peer((command, write) => {
+      if (command === ":STOP") {
+        stoppedAt = Date.now();
+        return;
+      }
+      if (command === ":TIMebase:MAIN:SCALe 0.00002") {
+        expect(Date.now() - stoppedAt).toBeGreaterThanOrEqual(45);
+        return;
+      }
+      if (command === ":TIMebase:MAIN:SCALe?") {
+        write("2.000000E-5\n");
+        return;
+      }
+      if (command === ":RUN") return;
+      if (command === ":WAVeform:PREamble?") {
+        write("0,0,999,1,2.000000E-7,0,0,0.5,10,0\n");
+        return;
+      }
+      if (command === ":WAVeform:DATA?") {
+        const block = Buffer.concat([
+          Buffer.from("#9000000999"),
+          Buffer.from(payload),
+          Buffer.from("\n"),
+        ]);
+        write(block.subarray(0, 512));
+        setTimeout(() => write(block.subarray(512)), 60);
+      }
+    });
+    const transport = new ScpiTransport(1000);
+    await transport.connect("127.0.0.1", port);
+    await transport.command(":STOP");
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    await transport.command(":TIMebase:MAIN:SCALe 0.00002");
+    await expect(transport.queryText(":TIMebase:MAIN:SCALe?")).resolves.toBe("2.000000E-5");
+    await transport.command(":RUN");
+    await expect(transport.queryText(":WAVeform:PREamble?")).resolves.toContain(",999,");
+    await expect(transport.queryBinary(":WAVeform:DATA?")).resolves.toHaveLength(999);
+    transport.disconnect();
+  });
+
+  it("emulates the DHO804 early-read failure and settled recovery", async () => {
+    const emulator = new Dho804Emulator({ responseChunkDelayMs: 10, earlyDataWindowMs: 50 });
+    const port = await emulator.listen();
+    const transport = new ScpiTransport(1000);
+    await transport.connect("127.0.0.1", port);
+
+    await transport.command(":STOP");
+    await expect(
+      transport.queryBinary(":WAVeform:DATA?", { acceptPartialBinary: true }),
+    ).resolves.toHaveLength(501);
+    expect(transport.isUsable()).toBe(true);
+    await expect(transport.queryText(":TIMebase:MAIN:SCALe?")).resolves.toBe("1.000000e-5");
+    await transport.command(":STOP");
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    await transport.command(":TIMebase:MAIN:SCALe 0.00002");
+    await transport.command(":RUN");
+    await expect(transport.queryText(":WAVeform:PREamble?")).resolves.toContain(",999,");
+    await expect(transport.queryBinary(":WAVeform:DATA?")).resolves.toHaveLength(999);
+
+    transport.disconnect();
+    await emulator.close();
+  });
+
+  it("discards a partial Main waveform without killing the SCPI socket", async () => {
+    const emulator = new Dho804Emulator({ responseChunkDelayMs: 10, earlyDataWindowMs: 50 });
+    const port = await emulator.listen();
+    const transport = new ScpiTransport(1000);
+    await transport.connect("127.0.0.1", port);
+
+    await transport.command(":STOP");
+    await expect(transport.queryBinary(":WAVeform:DATA?")).rejects.toThrow(
+      "Discarded incomplete live waveform frame",
+    );
+    expect(transport.isUsable()).toBe(true);
+    await expect(transport.queryText(":TIMebase:MAIN:SCALe?")).resolves.toBe("1.000000e-5");
+
+    transport.disconnect();
+    await emulator.close();
   });
 
   it("accepts a complete binary block without a trailing line terminator", async () => {

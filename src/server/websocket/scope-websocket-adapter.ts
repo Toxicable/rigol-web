@@ -76,6 +76,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
   private readonly clients = new WeakMap<WebSocketSession, ScopeClientState>();
   private readonly latestLiveFrames = new Map<WaveformSource, Uint8Array>();
   private interactionOwner: WebSocketSession | null = null;
+  private horizontalControlQueue: Promise<void> = Promise.resolve();
 
   public constructor(private readonly scopeService: ScopeApplicationService) {
     this.connection = scopeService.getConnection();
@@ -124,22 +125,28 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
           control.kind === ControlKind.HorizontalScale ||
           control.kind === ControlKind.HorizontalPosition ||
           control.kind === ControlKind.HorizontalMode;
-        if (pausesLive) await this.scopeService.pauseLiveWaveform();
-        console.info("Scope control requested", {
-          kind: control.kind,
-          value: control.value,
-          channel: "channel" in control ? control.channel : undefined,
-          math: "math" in control ? control.math : undefined,
-          pausesLive,
-        });
-        try {
-          await this.scopeService.setControl(control);
-          this.requireConnectionRevision(revision);
-          // Complete the UI request immediately. The live reader remains
-          // paused until the control write has completed.
-          host.sendCompleted(session, requestId);
-        } finally {
-          if (pausesLive && this.interactionOwner === null) this.scopeService.resumeLiveWaveform();
+        const execute = async (): Promise<void> => {
+          if (pausesLive) await this.scopeService.pauseLiveWaveform();
+          console.info("Scope control requested", {
+            kind: control.kind,
+            value: control.value,
+            channel: "channel" in control ? control.channel : undefined,
+            math: "math" in control ? control.math : undefined,
+            pausesLive,
+          });
+          try {
+            await this.scopeService.setControl(control);
+            this.requireConnectionRevision(revision);
+            // Complete the UI request only after this control has completed.
+            host.sendCompleted(session, requestId);
+          } finally {
+            if (pausesLive && this.interactionOwner === null) this.scopeService.resumeLiveWaveform();
+          }
+        };
+        if (pausesLive) {
+          await this.enqueueHorizontalControl(execute);
+        } else {
+          await execute();
         }
         return true;
       }
@@ -261,6 +268,12 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
       default:
         return false;
     }
+  }
+
+  private enqueueHorizontalControl(operation: () => Promise<void>): Promise<void> {
+    const queued = this.horizontalControlQueue.then(operation, operation);
+    this.horizontalControlQueue = queued.then(() => undefined, () => undefined);
+    return queued;
   }
 
   public sendInitialPublications(session: WebSocketSession): void {

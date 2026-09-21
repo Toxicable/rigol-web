@@ -162,6 +162,29 @@ failures and query timeouts remain errors. A waveform timeout also reports how
 many TCP bytes arrived and how many remained buffered, which helps distinguish
 a scope that sent nothing from a partial/malformed binary response.
 
+## DHO804 waveform recovery
+
+The DHO804's `:WAVeform:DATA?` response can declare 999 NORMAL/BYTE samples
+and stop after fewer bytes. The transport waits 100 ms after the last byte to
+distinguish a TCP-split complete block from this early-stop behavior.
+
+Short Roll frames are expected: they are accepted, kept in native sample
+spacing, and reversed because the DHO804 returns Roll samples newest-first.
+A suspicious trailing zero is omitted to avoid drawing a false full-scale
+spike. Short Main frames are discarded without closing the SCPI socket; the
+next acquisition retries normally. A genuinely late or malformed response
+still goes through normal SCPI framing recovery.
+
+Useful log events are:
+
+- `query:partial-binary-accepted`: a short Roll frame was rendered.
+- `query:partial-binary-discarded`: a short Main frame was dropped.
+- `query:timeout`: the transport did not complete a response before its full
+  timeout; inspect `receivedBytes`, `bufferedBytes`, and `recentTrace`.
+
+The TypeScript replay/emulator procedure is documented in
+[`scripts/README.md`](scripts/README.md).
+
 ```bash
 docker compose up --build --detach
 ```

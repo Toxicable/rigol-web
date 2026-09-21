@@ -13,8 +13,16 @@ export type ScpiResponse =
 export class ScpiResponseTypeError extends Error {}
 export class ScpiTransportError extends Error {}
 
+// The DHO804 can occasionally send the header for a 999-byte NORMAL waveform
+// and then stop sending. Do not apply this recovery to arbitrary binary
+// transfers; it is enabled only for that specific live waveform below.
+const LIVE_WAVEFORM_COMMAND = ":WAVeform:DATA?";
+const LIVE_WAVEFORM_EXPECTED_BYTES = 999;
+const LIVE_WAVEFORM_IDLE_RECOVERY_MS = 100;
+
 interface PendingResponseBase {
   command: string;
+  acceptPartialBinary: boolean;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
   startedAt: number;
@@ -37,8 +45,31 @@ interface ParsedBinaryBlock {
   end: number;
 }
 
+interface BinaryBlockHeader {
+  payloadStart: number;
+  payloadLength: number;
+}
+
+interface ScpiTraceEntry {
+  sequence: number;
+  timestamp: string;
+  kind: "command" | "query";
+  command: string;
+}
+
 function scpiDebug(event: string, detail: Record<string, unknown>): void {
   if (!isRigolScpiLoggingEnabled()) {
+    return;
+  }
+  // Routine polling produces several successful query log lines per second.
+  // Keep every query in recentTrace, but leave successful readback traffic out
+  // of the container log. Mutating commands remain visible for replay, and
+  // failures still print the full recentTrace.
+  if (
+    typeof detail.command === "string" &&
+    detail.command.endsWith("?") &&
+    (event === "query:start" || event === "query:data" || event === "query:complete" || event === "query:binary-progress")
+  ) {
     return;
   }
   console.debug(`[SCPI] ${event} ${JSON.stringify(detail)}`);
@@ -52,8 +83,11 @@ export class ScpiTransport {
   private socket: Socket | null = null;
   private pending: PendingResponse | null = null;
   private receiveBuffer = Buffer.alloc(0);
+  private partialBinaryTimer: NodeJS.Timeout | null = null;
   private usable = false;
   private cancelPendingConnect: ((error: Error) => void) | null = null;
+  private traceSequence = 0;
+  private readonly recentTrace: ScpiTraceEntry[] = [];
 
   public constructor(private readonly responseTimeoutMs = 5_000) {
     if (!Number.isFinite(responseTimeoutMs) || responseTimeoutMs <= 0) {
@@ -162,10 +196,12 @@ export class ScpiTransport {
       bufferedBytes: this.receiveBuffer.length,
       socketBytesRead: socket?.bytesRead ?? 0,
       socketBytesWritten: socket?.bytesWritten ?? 0,
+      recentTrace: this.recentTrace,
     });
     this.socket = null;
     this.usable = false;
     this.receiveBuffer = Buffer.alloc(0);
+    this.clearPartialBinaryTimer();
     if (pending !== null) {
       this.pending = null;
       clearTimeout(pending.timer);
@@ -176,12 +212,14 @@ export class ScpiTransport {
 
   public async command(command: string): Promise<void> {
     this.assertReadyForTransaction();
+    this.recordTrace("command", command);
     scpiDebug("command", { command });
     await this.writeProgramMessage(command);
   }
 
-  public async query(command: string): Promise<ScpiResponse> {
+  public async query(command: string, options: { acceptPartialBinary?: boolean } = {}): Promise<ScpiResponse> {
     this.assertReadyForTransaction();
+    this.recordTrace("query", command);
     if (this.pending !== null) {
       throw new ScpiTransportError("A SCPI response is already pending");
     }
@@ -200,6 +238,7 @@ export class ScpiTransport {
       this.pending = {
         kind: "single",
         command,
+        acceptPartialBinary: options.acceptPartialBinary ?? false,
         resolve,
         reject,
         timer,
@@ -220,8 +259,11 @@ export class ScpiTransport {
     return response.value;
   }
 
-  public async queryBinary(command: string): Promise<Uint8Array> {
-    const response = await this.query(command);
+  public async queryBinary(
+    command: string,
+    options: { acceptPartialBinary?: boolean } = {},
+  ): Promise<Uint8Array> {
+    const response = await this.query(command, options);
     if (response.kind !== ScpiResponseKind.Binary) {
       throw new ScpiResponseTypeError(`Expected binary response for ${command}, received text`);
     }
@@ -252,6 +294,7 @@ export class ScpiTransport {
       this.pending = {
         kind: "binary-blocks",
         command,
+        acceptPartialBinary: false,
         expectedBlocks,
         resolve,
         reject,
@@ -291,6 +334,7 @@ export class ScpiTransport {
         bufferedBytes,
         bufferPrefixHex: this.receiveBuffer.subarray(0, 24).toString("hex"),
         pendingCommand: pending?.command ?? null,
+        recentTrace: this.recentTrace,
       });
       this.invalidate(new ScpiTransportError(
         `SCPI query timed out after ${this.responseTimeoutMs} ms while waiting for ${command} ` +
@@ -312,6 +356,16 @@ export class ScpiTransport {
     if (!this.usable || this.socket === null) {
       throw new ScpiTransportError("SCPI transport is not usable");
     }
+  }
+
+  private recordTrace(kind: ScpiTraceEntry["kind"], command: string): void {
+    this.recentTrace.push({
+      sequence: ++this.traceSequence,
+      timestamp: new Date().toISOString(),
+      kind,
+      command,
+    });
+    if (this.recentTrace.length > 40) this.recentTrace.splice(0, this.recentTrace.length - 40);
   }
 
   private async writeProgramMessage(command: string): Promise<void> {
@@ -353,10 +407,13 @@ export class ScpiTransport {
       if (pending.kind === "single") {
         const response = this.tryParseResponse();
         if (response === null) {
+          this.clearPartialBinaryTimer();
+          this.schedulePartialBinaryRecovery(pending);
           return;
         }
         this.pending = null;
         clearTimeout(pending.timer);
+        this.clearPartialBinaryTimer();
         scpiDebug("query:complete", {
           command: pending.command,
           elapsedMs: Number((performance.now() - pending.startedAt).toFixed(3)),
@@ -376,6 +433,7 @@ export class ScpiTransport {
       }
       this.pending = null;
       clearTimeout(pending.timer);
+      this.clearPartialBinaryTimer();
       scpiDebug("query:complete", {
         command: pending.command,
         elapsedMs: Number((performance.now() - pending.startedAt).toFixed(3)),
@@ -470,32 +528,9 @@ export class ScpiTransport {
   }
 
   private tryParseBinaryBlockAt(start: number): ParsedBinaryBlock | null {
-    if (this.receiveBuffer.length <= start + 1) {
-      return null;
-    }
-    if (this.receiveBuffer[start] !== 0x23) {
-      throw new ScpiTransportError(`Expected IEEE/TMC binary block at byte ${start}`);
-    }
-
-    const digitByte = this.receiveBuffer[start + 1];
-    if (digitByte === undefined || digitByte < 0x31 || digitByte > 0x39) {
-      throw new ScpiTransportError("Malformed IEEE/TMC binary block digit count");
-    }
-    const digitCount = digitByte - 0x30;
-    const lengthStart = start + 2;
-    const payloadStart = lengthStart + digitCount;
-    if (this.receiveBuffer.length < payloadStart) {
-      return null;
-    }
-
-    const lengthText = this.receiveBuffer.subarray(lengthStart, payloadStart).toString("ascii");
-    if (!/^\d+$/.test(lengthText)) {
-      throw new ScpiTransportError("Malformed IEEE/TMC binary block payload length");
-    }
-    const payloadLength = Number(lengthText);
-    if (!Number.isSafeInteger(payloadLength) || payloadLength < 0) {
-      throw new ScpiTransportError("Invalid IEEE/TMC binary block payload length");
-    }
+    const header = this.tryParseBinaryBlockHeaderAt(start);
+    if (header === null) return null;
+    const { payloadStart, payloadLength } = header;
 
     const payloadEnd = payloadStart + payloadLength;
     if (this.receiveBuffer.length < payloadEnd) {
@@ -512,6 +547,93 @@ export class ScpiTransport {
       payload: Uint8Array.from(this.receiveBuffer.subarray(payloadStart, payloadEnd)),
       end: payloadEnd,
     };
+  }
+
+  private tryParseBinaryBlockHeaderAt(start: number): BinaryBlockHeader | null {
+    if (this.receiveBuffer.length <= start + 1) return null;
+    if (this.receiveBuffer[start] !== 0x23) {
+      throw new ScpiTransportError(`Expected IEEE/TMC binary block at byte ${start}`);
+    }
+
+    const digitByte = this.receiveBuffer[start + 1];
+    if (digitByte === undefined || digitByte < 0x31 || digitByte > 0x39) {
+      throw new ScpiTransportError("Malformed IEEE/TMC binary block digit count");
+    }
+    const digitCount = digitByte - 0x30;
+    const lengthStart = start + 2;
+    const payloadStart = lengthStart + digitCount;
+    if (this.receiveBuffer.length < payloadStart) return null;
+
+    const lengthText = this.receiveBuffer.subarray(lengthStart, payloadStart).toString("ascii");
+    if (!/^\d+$/.test(lengthText)) {
+      throw new ScpiTransportError("Malformed IEEE/TMC binary block payload length");
+    }
+    const payloadLength = Number(lengthText);
+    if (!Number.isSafeInteger(payloadLength) || payloadLength < 0) {
+      throw new ScpiTransportError("Invalid IEEE/TMC binary block payload length");
+    }
+    return { payloadStart, payloadLength };
+  }
+
+  private schedulePartialBinaryRecovery(pending: PendingResponse): void {
+    if (
+      pending.kind !== "single" ||
+      pending.command !== LIVE_WAVEFORM_COMMAND ||
+      this.partialBinaryTimer !== null
+    ) {
+      return;
+    }
+    const header = this.tryParseBinaryBlockHeaderAt(0);
+    if (header === null || header.payloadLength !== LIVE_WAVEFORM_EXPECTED_BYTES) return;
+    const bufferedPayloadBytes = this.receiveBuffer.length - header.payloadStart;
+    if (bufferedPayloadBytes <= 0 || bufferedPayloadBytes >= header.payloadLength) return;
+
+    this.partialBinaryTimer = setTimeout(() => {
+      this.partialBinaryTimer = null;
+      if (this.pending !== pending || this.receiveBuffer.length === 0) return;
+      const currentHeader = this.tryParseBinaryBlockHeaderAt(0);
+      if (
+        currentHeader === null ||
+        currentHeader.payloadLength !== LIVE_WAVEFORM_EXPECTED_BYTES
+      ) return;
+      const payloadBytes = this.receiveBuffer.length - currentHeader.payloadStart;
+      if (payloadBytes <= 0 || payloadBytes >= currentHeader.payloadLength) return;
+
+      const payload = Uint8Array.from(this.receiveBuffer.subarray(currentHeader.payloadStart));
+      this.pending = null;
+      clearTimeout(pending.timer);
+      scpiError("query:partial-binary-recovered", {
+        command: pending.command,
+        expectedBytes: currentHeader.payloadLength,
+        receivedPayloadBytes: payload.byteLength,
+        bufferedBytes: this.receiveBuffer.length,
+        idleMs: LIVE_WAVEFORM_IDLE_RECOVERY_MS,
+      });
+      // A short live waveform is expected in ROLL mode. Callers explicitly
+      // opt into accepting it; Main-mode callers discard it and retry the
+      // next acquisition without plotting fabricated geometry.
+      this.receiveBuffer = Buffer.alloc(0);
+      const accepted = pending.acceptPartialBinary;
+      scpiError(accepted ? "query:partial-binary-accepted" : "query:partial-binary-discarded", {
+        command: pending.command,
+        expectedBytes: currentHeader.payloadLength,
+        receivedPayloadBytes: payload.byteLength,
+        bufferedBytes: this.receiveBuffer.length,
+        idleMs: LIVE_WAVEFORM_IDLE_RECOVERY_MS,
+      });
+      if (accepted) {
+        pending.resolve({ kind: ScpiResponseKind.Binary, value: payload });
+      } else {
+        pending.reject(new ScpiTransportError("Discarded incomplete live waveform frame"));
+      }
+    }, LIVE_WAVEFORM_IDLE_RECOVERY_MS);
+  }
+
+  private clearPartialBinaryTimer(): void {
+    if (this.partialBinaryTimer !== null) {
+      clearTimeout(this.partialBinaryTimer);
+      this.partialBinaryTimer = null;
+    }
   }
 
   private tryConsumeBinaryBlockSeparator(position: number): number | null {
@@ -571,6 +693,7 @@ export class ScpiTransport {
     this.socket = null;
     this.usable = false;
     this.receiveBuffer = Buffer.alloc(0);
+    this.clearPartialBinaryTimer();
 
     if (pending !== null) {
       this.pending = null;

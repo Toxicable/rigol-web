@@ -44,11 +44,15 @@ export class InstrumentRegistry {
   }
 
   public async startAll(): Promise<void> {
-    await Promise.all(
-      [...this.entries].map(([instrument, entry]) =>
-        this.queueTransition(instrument, entry, true),
-      ),
-    );
+    await Promise.all([...this.entries].map(([instrument]) => this.start(instrument)));
+  }
+
+  public start(instrument: SupportedInstrument): Promise<void> {
+    return this.queueTransitionFor(instrument, true);
+  }
+
+  public stop(instrument: SupportedInstrument): Promise<void> {
+    return this.queueTransitionFor(instrument, false);
   }
 
   public async stopAll(): Promise<void> {
@@ -63,6 +67,12 @@ export class InstrumentRegistry {
     if (failure !== undefined) {
       throw failure.reason;
     }
+  }
+
+  private queueTransitionFor(instrument: SupportedInstrument, shouldRun: boolean): Promise<void> {
+    const entry = this.entries.get(instrument);
+    if (entry === undefined) throw new Error(`Unknown instrument: ${instrument}`);
+    return this.queueTransition(instrument, entry, shouldRun);
   }
 
   private createEntry(runtime: InstrumentRuntime): InstrumentEntry {

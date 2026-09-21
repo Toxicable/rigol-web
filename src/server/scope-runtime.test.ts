@@ -116,10 +116,17 @@ function responseFor(command: string, connectionIndex: number): string | undefin
   }
   if (/^:CHANnel[1-4]:DISPlay\?$/.test(command)) return "0";
   if (/^:CHANnel[1-4]:COUPling\?$/.test(command)) return "DC";
+  if (/^:CHANnel[1-4]:BWLimit\?$/.test(command)) return "OFF";
   if (/^:CHANnel[1-4]:UNITs\?$/.test(command)) return "VOLT";
   if (/^:CHANnel[1-4]:SCALe\?$/.test(command)) return "1";
   if (/^:CHANnel[1-4]:OFFSet\?$/.test(command)) return "0";
   if (/^:CHANnel[1-4]:PROBe\?$/.test(command)) return "1";
+  if (/^:MATH[1-4]:DISPlay\?$/.test(command)) return "0";
+  if (/^:MATH[1-4]:OPERator\?$/.test(command)) return "ADD";
+  if (/^:MATH[1-4]:SOURce1\?$/.test(command)) return "CHAN1";
+  if (/^:MATH[1-4]:SOURce2\?$/.test(command)) return "CHAN2";
+  if (/^:MATH[1-4]:SCALe\?$/.test(command)) return "1";
+  if (/^:MATH[1-4]:OFFSet\?$/.test(command)) return "0";
   switch (command) {
     case ":TIMebase:MAIN:SCALe?;:TIMebase:MAIN:OFFSet?": return "0.001;0";
     case ":TIMebase:XY:ENABle?": return "0";

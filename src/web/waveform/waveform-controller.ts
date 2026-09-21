@@ -44,7 +44,6 @@ interface DesiredViewport extends DeepViewportRequest {
   visibleEndSample: number;
 }
 
-const PHYSICAL_CHANNELS = [Channel.Ch1, Channel.Ch2, Channel.Ch3, Channel.Ch4] as const;
 const ALL_SOURCES = [
   WaveformSource.Ch1,
   WaveformSource.Ch2,
@@ -276,7 +275,7 @@ export class WaveformController {
     return [
       null,
       ...ALL_SOURCES.map((source) => liveSeries(source)),
-    ] as WaveformPlotData;
+    ] as unknown as WaveformPlotData;
   }
 
   public getFrame(source: WaveformSource): DecodedWaveformFrame | undefined {

@@ -34,6 +34,10 @@ export interface WebSocketGatewayOptions {
   scopeAdapter: WebSocketInstrumentAdapter;
   dmmAdapter: WebSocketInstrumentAdapter;
   ppk2Adapter: WebSocketInstrumentAdapter;
+  instrumentLifecycle?: {
+    start(instrument: SupportedInstrument): Promise<void>;
+    stop(instrument: SupportedInstrument): Promise<void>;
+  };
 }
 
 interface ClientState extends WebSocketSession {
@@ -115,6 +119,7 @@ export class WebSocketGateway implements WebSocketAdapterHost {
     WebSocketInstrumentAdapter
   >;
   private nextClientId = 1;
+  private readonly instrumentLifecycle: WebSocketGatewayOptions["instrumentLifecycle"];
 
   public constructor(
     server: HttpServer,
@@ -136,6 +141,7 @@ export class WebSocketGateway implements WebSocketAdapterHost {
       "ppk2Adapter",
     );
     this.acquisitionAdapter = options.acquisitionAdapter;
+    this.instrumentLifecycle = options.instrumentLifecycle;
     this.adapters = [options.scopeAdapter, options.dmmAdapter, options.ppk2Adapter];
     this.adaptersByInstrument = new Map<
       SupportedInstrument,
@@ -398,10 +404,10 @@ export class WebSocketGateway implements WebSocketAdapterHost {
       if (commonMessage !== null) {
         switch (commonMessage.type) {
           case MessageType.InstrumentSubscribe:
-            this.subscribeClient(client, commonMessage.instrument);
+            await this.subscribeClient(client, commonMessage.instrument);
             return;
           case MessageType.InstrumentUnsubscribe:
-            this.unsubscribeClient(client, commonMessage.instrument);
+            await this.unsubscribeClient(client, commonMessage.instrument);
             return;
           case MessageType.ProtocolHelloAck:
             return;
@@ -427,14 +433,15 @@ export class WebSocketGateway implements WebSocketAdapterHost {
     }
   }
 
-  private subscribeClient(
+  private async subscribeClient(
     client: ClientState,
     instrument: SupportedInstrument,
-  ): void {
+  ): Promise<void> {
     if (client.subscriptions.has(instrument)) {
       return;
     }
 
+    await this.instrumentLifecycle?.start(instrument);
     client.subscriptions.add(instrument);
     try {
       this.adapterForInstrument(instrument).sendInitialPublications(client);
@@ -445,22 +452,33 @@ export class WebSocketGateway implements WebSocketAdapterHost {
     }
   }
 
-  private unsubscribeClient(
+  private async unsubscribeClient(
     client: ClientState,
     instrument: SupportedInstrument,
-  ): void {
+  ): Promise<void> {
     if (!client.subscriptions.delete(instrument)) {
       return;
     }
 
     this.adapterForInstrument(instrument).sessionUnsubscribed(client);
+    if (!this.hasSubscribers(instrument)) await this.instrumentLifecycle?.stop(instrument);
   }
 
-  private releaseClientSubscriptions(client: ClientState): void {
-    for (const instrument of client.subscriptions) {
+  private async releaseClientSubscriptions(client: ClientState): Promise<void> {
+    const instruments = [...client.subscriptions];
+    for (const instrument of instruments) {
       this.adapterForInstrument(instrument).sessionUnsubscribed(client);
+      client.subscriptions.delete(instrument);
+      if (!this.hasSubscribers(instrument)) await this.instrumentLifecycle?.stop(instrument);
     }
     client.subscriptions.clear();
+  }
+
+  private hasSubscribers(instrument: SupportedInstrument): boolean {
+    for (const client of this.clients.values()) {
+      if (client.subscriptions.has(instrument)) return true;
+    }
+    return false;
   }
 
   private adapterForInstrument(

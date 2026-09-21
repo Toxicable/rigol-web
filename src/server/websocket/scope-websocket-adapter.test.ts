@@ -172,6 +172,42 @@ describe("ScopeWebSocketAdapter", () => {
     harness.adapter.detach();
   });
 
+  it("serializes overlapping horizontal controls", async () => {
+    const harness = createHarness();
+    let active = 0;
+    let maximumActive = 0;
+    harness.setControl.mockImplementation(async () => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+    });
+
+    await Promise.all([
+      harness.adapter.tryDispatch({ id: 20 }, {
+        type: MessageType.ControlSet,
+        requestId: 20,
+        control: { kind: ControlKind.HorizontalScale, value: 2e-5 },
+      }),
+      harness.adapter.tryDispatch({ id: 21 }, {
+        type: MessageType.ControlSet,
+        requestId: 21,
+        control: { kind: ControlKind.HorizontalScale, value: 5e-5 },
+      }),
+    ]);
+
+    expect(maximumActive).toBe(1);
+    expect(harness.setControl).toHaveBeenNthCalledWith(1, {
+      kind: ControlKind.HorizontalScale,
+      value: 2e-5,
+    });
+    expect(harness.setControl).toHaveBeenNthCalledWith(2, {
+      kind: ControlKind.HorizontalScale,
+      value: 5e-5,
+    });
+    harness.adapter.detach();
+  });
+
   it("projects scope state publications through the adapter host", () => {
     const harness = createHarness();
     const state = { ...createState(), runState: ScopeRunState.Stopped };

@@ -12,7 +12,7 @@ import type { Dho804Waveform } from "../scope/dho804-driver.js";
 import { encodeWaveformFrame } from "./waveform-frame-encoder.js";
 
 export interface LiveWaveformDriver {
-  readLiveWaveform(source: WaveformSource, pointCount: number): Promise<Dho804Waveform>;
+  readLiveWaveform(source: WaveformSource, pointCount: number, mode?: TimebaseMode): Promise<Dho804Waveform>;
 }
 
 export interface LiveWaveformServiceOptions {
@@ -22,7 +22,9 @@ export interface LiveWaveformServiceOptions {
   reportError?: (error: unknown) => void;
 }
 
-// The DHO804's native normal-mode live response is 999 BYTE samples.
+// 999 samples is the full-width display waveform. The scope can transiently
+// return fewer samples after a timebase change, so the driver preserves the
+// 999-point time geometry for those frames instead of reducing this request.
 const LIVE_POINT_COUNT = 999;
 // Keep a small floor so a very short timebase does not turn into a busy loop.
 const LIVE_POLL_MIN_INTERVAL_MS = 100;
@@ -129,7 +131,7 @@ export class LiveWaveformService {
     if (sources.length === 0) return false;
     for (const source of sources) {
       if (!this.liveWanted || this.paused) return false;
-      const waveform = await this.driver.readLiveWaveform(source, LIVE_POINT_COUNT);
+      const waveform = await this.driver.readLiveWaveform(source, LIVE_POINT_COUNT, state.horizontal.mode);
       if (!this.liveWanted || this.paused) return false;
       if (waveform.source !== source) {
         throw new Error(`Driver returned waveform source ${waveform.source} while reading ${source}`);

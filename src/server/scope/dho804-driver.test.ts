@@ -437,6 +437,62 @@ describe("Dho804Driver", () => {
     expect(transport.commands.filter((entry) => entry === command)).toHaveLength(1);
   });
 
+  it("accepts a shorter NORMAL waveform returned after a timebase change", async () => {
+    const transport = new ScriptedTransport();
+    const driver = scriptedDriver(transport);
+    respond(transport, ":CHANnel1:UNITs?", "VOLT");
+    respond(transport, ":WAVeform:PREamble?", "0,0,999,1,2e-5,0,0,0.5,10,0");
+    const command = liveCommand(WaveformSource.Ch1);
+    transport.binary.set(command, [new Uint8Array(800).fill(128)]);
+
+    const waveform = await driver.readLiveWaveform(WaveformSource.Ch1, 999);
+
+    expect(waveform.samples).toHaveLength(800);
+    expect(waveform.xIncrement).toBeCloseTo(2e-5 * 999 / 800);
+  });
+
+  it("keeps native spacing for a short Roll waveform", async () => {
+    const transport = new ScriptedTransport();
+    const driver = scriptedDriver(transport);
+    respond(transport, ":CHANnel1:UNITs?", "VOLT");
+    respond(transport, ":WAVeform:PREamble?", "0,0,999,1,2e-5,0,0,0.5,10,0");
+    const command = liveCommand(WaveformSource.Ch1);
+    transport.binary.set(command, [new Uint8Array(800).fill(128)]);
+
+    const waveform = await driver.readLiveWaveform(WaveformSource.Ch1, 999, TimebaseMode.Roll);
+
+    expect(waveform.samples).toHaveLength(800);
+    expect(waveform.xIncrement).toBe(2e-5);
+  });
+
+  it("drops a zero endpoint from a short Roll waveform", async () => {
+    const transport = new ScriptedTransport();
+    const driver = scriptedDriver(transport);
+    respond(transport, ":CHANnel1:UNITs?", "VOLT");
+    respond(transport, ":WAVeform:PREamble?", "0,0,999,1,2e-5,0,0,1,0,128");
+    const command = liveCommand(WaveformSource.Ch1);
+    transport.binary.set(command, [Uint8Array.from([128, 129, 0])]);
+
+    const waveform = await driver.readLiveWaveform(WaveformSource.Ch1, 999, TimebaseMode.Roll);
+
+    expect(waveform.samples).toHaveLength(2);
+    expect([...waveform.samples]).toEqual([1, 0]);
+  });
+
+  it("plots Roll samples newest-to-oldest from right to left", async () => {
+    const transport = new ScriptedTransport();
+    const driver = scriptedDriver(transport);
+    respond(transport, ":CHANnel1:UNITs?", "VOLT");
+    respond(transport, ":WAVeform:PREamble?", "0,0,999,1,2e-5,0,0,1,0,128");
+    const command = liveCommand(WaveformSource.Ch1);
+    transport.binary.set(command, [Uint8Array.from([128, 129, 130])]);
+
+    const waveform = await driver.readLiveWaveform(WaveformSource.Ch1, 999, TimebaseMode.Roll);
+
+    expect([...waveform.samples]).toEqual([2, 1, 0]);
+    expect(waveform.xIncrement).toBe(2e-5);
+  });
+
   it("reads native MATH waveforms through the same NORMAL data path", async () => {
     const transport = new ScriptedTransport();
     const driver = scriptedDriver(transport);

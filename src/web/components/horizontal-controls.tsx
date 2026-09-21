@@ -1,4 +1,4 @@
-import type { ChangeEvent } from "react";
+import { useEffect, useRef, type ChangeEvent } from "react";
 
 import { TimebaseMode, type ScopeState } from "../../shared/scope-types.js";
 import { formatSampleRate, formatSamples, formatSeconds } from "../format-value.js";
@@ -19,6 +19,8 @@ const TIMEBASE_STEPS = Array.from({ length: 33 }, (_, index) => {
   return multiplier * 10 ** exponent;
 });
 
+const TIMEBASE_STEP_DEBOUNCE_MS = 150;
+
 function nearestTimebaseIndex(value: number): number {
   let nearest = 0;
   let distance = Number.POSITIVE_INFINITY;
@@ -38,16 +40,29 @@ interface HorizontalControlsProps {
 }
 
 export function HorizontalControls({ scope, actions }: HorizontalControlsProps) {
+  const scaleTimer = useRef<number | null>(null);
   const deepCapture = useScopeStore((state) => state.deepCapture);
   const isDeep = deepCapture.kind === DeepCaptureKind.Ready;
   const displayedScale = isDeep ? deepCapture.scale : scope.horizontal.scale;
   const displayedPosition = isDeep ? deepCapture.position : scope.horizontal.position;
   const timebaseIndex = nearestTimebaseIndex(displayedScale);
 
+  useEffect(() => () => {
+    if (scaleTimer.current !== null) window.clearTimeout(scaleTimer.current);
+  }, []);
+
+  const scheduleTimebaseStep = (value: number): void => {
+    if (scaleTimer.current !== null) window.clearTimeout(scaleTimer.current);
+    scaleTimer.current = window.setTimeout(() => {
+      scaleTimer.current = null;
+      void actions.setHorizontalScale(value);
+    }, TIMEBASE_STEP_DEBOUNCE_MS);
+  };
+
   const commitTimebaseStep = (index: number): void => {
     const clamped = Math.max(0, Math.min(TIMEBASE_STEPS.length - 1, index));
     const value = TIMEBASE_STEPS[clamped];
-    if (value !== undefined) void actions.setHorizontalScale(value);
+    if (value !== undefined) scheduleTimebaseStep(value);
   };
 
   return (

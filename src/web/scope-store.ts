@@ -86,6 +86,7 @@ function replaceMath(state: ScopeState, math: MathChannel, replacement: MathStat
     case 3: return { ...state, math: [current[0], current[1], replacement, current[3]] };
     case 4: return { ...state, math: [current[0], current[1], current[2], replacement] };
   }
+  throw new Error(`Invalid math channel ${math}`);
 }
 
 function updateMath(

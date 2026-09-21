@@ -38,6 +38,11 @@ const PRIORITY_INTERACTIVE: ScopeDriverPriority = 1;
 const PRIORITY_NORMAL: ScopeDriverPriority = 2;
 const PRIORITY_BACKGROUND: ScopeDriverPriority = 4;
 const ROLL_MIN_SCALE_SECONDS = 0.05;
+// The DHO804 needs a short quiet interval after STOP before accepting a
+// timebase change reliably. Without it, the next NORMAL DATA? can stall after
+// the 512-byte socket chunk even though its header declares 999 samples.
+const TIMEBASE_STOP_SETTLE_MS = 50;
+const TIMEBASE_SETTLE_MS = 100;
 const DHO804_MEMORY_DEPTHS = [1_000, 10_000, 100_000, 1_000_000, 5_000_000, 10_000_000, 25_000_000] as const;
 
 export interface ScopeControllerDriver {
@@ -680,6 +685,7 @@ export class ScopeController {
     }
 
     await this.driver.stop();
+    await new Promise<void>((resolve) => setTimeout(resolve, TIMEBASE_STOP_SETTLE_MS));
     try {
       if (crossingMode) {
         await this.driver.executeRawScpi(`:TIMebase:MODE ${timebaseModeToken(targetMode)}`);
@@ -688,5 +694,6 @@ export class ScopeController {
     } finally {
       await this.driver.run();
     }
+    await new Promise<void>((resolve) => setTimeout(resolve, TIMEBASE_SETTLE_MS));
   }
 }

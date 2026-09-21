@@ -332,6 +332,28 @@ describe("ScopeController", () => {
     ]);
   });
 
+  it("waits for the scope to settle after STOP before changing timebase", async () => {
+    const { controller, driver } = createController();
+    const timestamps = new Map<string, number>();
+    const originalStop = driver.stop.bind(driver);
+    const originalScale = driver.setHorizontalScale.bind(driver);
+    driver.stop = async () => {
+      timestamps.set("stop", performance.now());
+      await originalStop();
+    };
+    driver.setHorizontalScale = async (...args) => {
+      timestamps.set("scale", performance.now());
+      await originalScale(...args);
+    };
+
+    await controller.commitInteraction({
+      kind: ControlKind.HorizontalScale,
+      value: 2e-5,
+    });
+
+    expect((timestamps.get("scale") ?? 0) - (timestamps.get("stop") ?? 0)).toBeGreaterThanOrEqual(45);
+  });
+
   it("keeps the latest optimistic interaction value", async () => {
     const { controller, driver, store } = createController();
 

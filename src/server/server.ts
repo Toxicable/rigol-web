@@ -111,6 +111,7 @@ const gateway = new WebSocketGateway(server, {
   scopeAdapter,
   dmmAdapter,
   ppk2Adapter,
+  instrumentLifecycle: instruments,
 });
 
 let shuttingDown = false;
@@ -159,7 +160,6 @@ server.once("error", (error) => {
   process.exitCode = 1;
 });
 
-await instruments.startAll();
 server.listen(httpPort, () => {
   console.log(`Rigol Web server listening on http://localhost:${httpPort}`);
 });

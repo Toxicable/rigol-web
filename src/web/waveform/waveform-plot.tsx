@@ -76,6 +76,8 @@ const CHANNEL_WHEEL_STEPS = Array.from({ length: 19 }, (_, index) => {
   return multiplier * 10 ** exponent;
 });
 
+const HORIZONTAL_WHEEL_DEBOUNCE_MS = 250;
+
 type DragState =
   | {
       kind: "live-horizontal";
@@ -311,6 +313,8 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const plotRef = useRef<uPlot | null>(null);
   const dragRef = useRef<DragState | null>(null);
+  const wheelScaleTimerRef = useRef<number | null>(null);
+  const pendingWheelScaleRef = useRef<number | null>(null);
   const [layout, setLayout] = useState<PlotLayout>({
     width: 1,
     height: 1,
@@ -694,10 +698,24 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
     }
 
     if (!isDeep && scope.horizontal.mode === TimebaseMode.Xy) return;
-    void actions.setHorizontalScale(
-      steppedWheelValue(horizontalScale, event.deltaY, HORIZONTAL_WHEEL_STEPS),
+    const nextScale = steppedWheelValue(
+      pendingWheelScaleRef.current ?? horizontalScale,
+      event.deltaY,
+      HORIZONTAL_WHEEL_STEPS,
     );
+    pendingWheelScaleRef.current = nextScale;
+    if (wheelScaleTimerRef.current !== null) window.clearTimeout(wheelScaleTimerRef.current);
+    wheelScaleTimerRef.current = window.setTimeout(() => {
+      wheelScaleTimerRef.current = null;
+      pendingWheelScaleRef.current = null;
+      void actions.setHorizontalScale(nextScale);
+    }, HORIZONTAL_WHEEL_DEBOUNCE_MS);
   };
+
+  useEffect(() => () => {
+    if (wheelScaleTimerRef.current !== null) window.clearTimeout(wheelScaleTimerRef.current);
+    pendingWheelScaleRef.current = null;
+  }, []);
 
   useEffect(() => {
     const layer = interactionLayerRef.current;
