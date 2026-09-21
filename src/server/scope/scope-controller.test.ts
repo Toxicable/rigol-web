@@ -283,7 +283,9 @@ describe("ScopeController", () => {
     });
 
     expect(driver.calls).toEqual([
+      "stop",
       "setHorizontalScale:0.002:0",
+      "run",
       "readHorizontalState:0",
     ]);
     expect(store.getState().horizontal.scale).toBe(2e-3);
@@ -301,10 +303,33 @@ describe("ScopeController", () => {
     });
 
     expect(driver.calls).toEqual([
+      "stop",
+      "raw::TIMebase:MODE ROLL",
       "setHorizontalScale:1:0",
+      "run",
       "readHorizontalState:0",
     ]);
     expect(store.getState().horizontal.mode).toBe(TimebaseMode.Roll);
+  });
+
+  it("restarts acquisition around a Roll time scale change", async () => {
+    const { controller, driver } = createController({
+      ...createState(),
+      horizontal: { ...createState().horizontal, mode: TimebaseMode.Roll },
+    });
+
+    await controller.commitInteraction({
+      kind: ControlKind.HorizontalScale,
+      value: 2e-2,
+    });
+
+    expect(driver.calls).toEqual([
+      "stop",
+      "raw::TIMebase:MODE MAIN",
+      "setHorizontalScale:0.02:0",
+      "run",
+      "readHorizontalState:0",
+    ]);
   });
 
   it("keeps the latest optimistic interaction value", async () => {
@@ -396,6 +421,19 @@ describe("ScopeController", () => {
     await controller.performAcquisitionAction(AcquisitionAction.Stop);
     expect(controller.getMutationRevision()).toBe(initialRevision + 2);
     expect(store.getState().runState).toBe(ScopeRunState.Stopped);
+  });
+
+  it("does not overwrite a successful Run with the instrument's transitional STOP status", async () => {
+    const { controller, driver, store } = createController({ ...createState(), runState: ScopeRunState.Stopped });
+    driver.readRunState = async (priority) => {
+      driver.calls.push(`readRunState:${priority}`);
+      return ScopeRunState.Stopped;
+    };
+
+    await controller.performAcquisitionAction(AcquisitionAction.Run);
+
+    expect(driver.calls).toEqual(["run"]);
+    expect(store.getState().runState).toBe(ScopeRunState.Running);
   });
 
   it("reads horizontal mode before Single and reads back the resulting run state", async () => {

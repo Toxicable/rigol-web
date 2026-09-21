@@ -115,6 +115,7 @@ describe("LiveWaveformService", () => {
     expect(frames).toHaveLength(2);
   });
 
+
   it("adds enabled native math traces to the live round-robin", async () => {
     const state = createState();
     state.math = state.math.map((mathState) => ({

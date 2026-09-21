@@ -425,10 +425,12 @@ export class ScpiTransport {
       return null;
     }
     const responseEnd = this.tryConsumeLineTerminator(block.end);
-    if (responseEnd === null) {
+    // Some Rigol waveform sources (notably MATH) omit the optional line
+    // terminator after an otherwise complete IEEE-488.2 binary block.
+    if (responseEnd === null && this.receiveBuffer.length !== block.end) {
       return null;
     }
-    if (responseEnd !== this.receiveBuffer.length) {
+    if (responseEnd !== null && responseEnd !== this.receiveBuffer.length) {
       throw new ScpiTransportError("Unexpected trailing bytes after IEEE/TMC binary response");
     }
     this.receiveBuffer = Buffer.alloc(0);

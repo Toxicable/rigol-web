@@ -64,6 +64,18 @@ const MATH_CHANNELS = [
   MathChannel.Math4,
 ] as const;
 
+const HORIZONTAL_WHEEL_STEPS = Array.from({ length: 33 }, (_, index) => {
+  const exponent = Math.floor(index / 3) - 9;
+  const multiplier = [1, 2, 5][index % 3] ?? 1;
+  return multiplier * 10 ** exponent;
+});
+
+const CHANNEL_WHEEL_STEPS = Array.from({ length: 19 }, (_, index) => {
+  const exponent = Math.floor(index / 3) - 3;
+  const multiplier = [1, 2, 5][index % 3] ?? 1;
+  return multiplier * 10 ** exponent;
+});
+
 type DragState =
   | {
       kind: "live-horizontal";
@@ -167,6 +179,46 @@ function mathAxis(scope: ScopeState, math: MathState): uPlot.Axis | null {
   };
 }
 
+function channelScaleBounds(scope: ScopeState, channel: Channel): { min: number; max: number } {
+  const state = scope.channels[channel - 1];
+  if (state === undefined) return { min: -1, max: 1 };
+  return {
+    min: -state.offset - 4 * state.scale,
+    max: -state.offset + 4 * state.scale,
+  };
+}
+
+function mathScaleBounds(math: MathState): { min: number; max: number } {
+  if (math.scale === null || math.offset === null || !(math.scale > 0)) {
+    return { min: -0.5, max: 1.5 };
+  }
+  return {
+    min: -math.offset - 4 * math.scale,
+    max: -math.offset + 4 * math.scale,
+  };
+}
+
+function fixedScale(bounds: { min: number; max: number }): uPlot.Scale {
+  return {
+    auto: false,
+    range: () => [bounds.min, bounds.max],
+  };
+}
+
+function steppedWheelValue(value: number, deltaY: number, steps: readonly number[]): number {
+  let nearest = 0;
+  let distance = Number.POSITIVE_INFINITY;
+  steps.forEach((step, index) => {
+    const nextDistance = Math.abs(Math.log10(value) - Math.log10(step));
+    if (nextDistance < distance) {
+      nearest = index;
+      distance = nextDistance;
+    }
+  });
+  const direction = deltaY > 0 ? 1 : -1;
+  return steps[Math.max(0, Math.min(steps.length - 1, nearest + direction))] ?? value;
+}
+
 function readPlotLayout(plot: uPlot, width: number, height: number): PlotLayout {
   return {
     width,
@@ -255,6 +307,7 @@ function markerDirectionGlyph(placement: WaveformMarkerPlacement): string | null
 }
 
 export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) {
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const plotRef = useRef<uPlot | null>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -267,6 +320,7 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
     plotHeight: 1,
   });
   const [draggingTrigger, setDraggingTrigger] = useState(false);
+  const interactionLayerRef = useRef<HTMLDivElement>(null);
   const deepCapture = useScopeStore((state) => state.deepCapture);
   const isDeep =
     deepCapture.kind === DeepCaptureKind.Ready &&
@@ -311,14 +365,14 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
       },
       scales: {
         x: { auto: false, time: false },
-        ch1: { auto: false },
-        ch2: { auto: false },
-        ch3: { auto: false },
-        ch4: { auto: false },
-        math1: { auto: false },
-        math2: { auto: false },
-        math3: { auto: false },
-        math4: { auto: false },
+        ch1: fixedScale(channelScaleBounds(scope, Channel.Ch1)),
+        ch2: fixedScale(channelScaleBounds(scope, Channel.Ch2)),
+        ch3: fixedScale(channelScaleBounds(scope, Channel.Ch3)),
+        ch4: fixedScale(channelScaleBounds(scope, Channel.Ch4)),
+        math1: fixedScale(mathScaleBounds(scope.math[0]!)),
+        math2: fixedScale(mathScaleBounds(scope.math[1]!)),
+        math3: fixedScale(mathScaleBounds(scope.math[2]!)),
+        math4: fixedScale(mathScaleBounds(scope.math[3]!)),
       },
       axes: [
         {
@@ -402,7 +456,7 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
       plot.destroy();
       plotRef.current = null;
     };
-  }, [axisConfigSignature, controller, horizontalUnit, scope]);
+  }, [axisConfigSignature, controller, horizontalUnit]);
 
   useEffect(() => {
     const plot = plotRef.current;
@@ -625,17 +679,46 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
     }
   };
 
+  const handleWheel = (event: globalThis.WheelEvent): void => {
+    event.preventDefault();
+    const enabledChannels = scope.channels.filter((channel) => channel.enabled);
+    if (event.ctrlKey || event.metaKey) {
+      if (enabledChannels.length !== 1) return;
+      const channel = enabledChannels[0];
+      if (channel === undefined) return;
+      void actions.setChannelScale(
+        channel.channel,
+        steppedWheelValue(channel.scale, event.deltaY, CHANNEL_WHEEL_STEPS),
+      );
+      return;
+    }
+
+    if (!isDeep && scope.horizontal.mode === TimebaseMode.Xy) return;
+    void actions.setHorizontalScale(
+      steppedWheelValue(horizontalScale, event.deltaY, HORIZONTAL_WHEEL_STEPS),
+    );
+  };
+
+  useEffect(() => {
+    const layer = interactionLayerRef.current;
+    if (layer === null) return;
+
+    layer.addEventListener("wheel", handleWheel, { passive: false });
+    return () => layer.removeEventListener("wheel", handleWheel);
+  }, [handleWheel]);
+
   const triggerPlacement = triggerMarkerPlacement(scope, layout);
   const isPannable = isDeep || scope.horizontal.mode === TimebaseMode.Main;
 
   return (
-    <div className="waveform-shell">
+    <div className="waveform-shell" ref={shellRef}>
       <div
         className={`waveform-host ${isPannable ? "is-pannable" : ""}`}
         ref={hostRef}
       />
       <div
         className="waveform-interaction-layer"
+        ref={interactionLayerRef}
         onPointerDown={beginHorizontalDrag}
         onPointerMove={handlePointerMove}
         onPointerUp={finishPointer}

@@ -107,3 +107,86 @@ export function nearestWaveformPoint(
     y,
   };
 }
+
+export function nearestWaveformTracePoint(
+  frame: DecodedWaveformFrame,
+  targetX: number,
+  targetY: number,
+  xPixelsPerUnit: number,
+  yPixelsPerUnit: number,
+): { x: number; y: number; distance: number } | null {
+  if (
+    frame.sampleIndices.length === 0 ||
+    frame.values.length === 0 ||
+    frame.sampleIndices.length !== frame.values.length ||
+    !Number.isFinite(targetX) ||
+    !Number.isFinite(targetY) ||
+    !Number.isFinite(frame.xIncrement) ||
+    !(frame.xIncrement > 0) ||
+    !(xPixelsPerUnit > 0) ||
+    !(yPixelsPerUnit > 0)
+  ) return null;
+
+  const pointAt = (index: number): { x: number; y: number } | null => {
+    const sampleIndex = frame.sampleIndices[index];
+    const y = frame.values[index];
+    if (sampleIndex === undefined || y === undefined || !Number.isFinite(y)) return null;
+    return {
+      x: frame.xOrigin + (sampleIndex - frame.xReference) * frame.xIncrement,
+      y,
+    };
+  };
+
+  const targetSample = frame.xReference + (targetX - frame.xOrigin) / frame.xIncrement;
+  let low = 0;
+  let high = frame.sampleIndices.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    const sample = frame.sampleIndices[middle];
+    if (sample === undefined) return null;
+    if (sample < targetSample) low = middle + 1;
+    else high = middle;
+  }
+
+  const segmentStart = Math.max(0, low - 2);
+  const segmentEnd = Math.min(frame.sampleIndices.length - 2, low + 1);
+  let selected: { x: number; y: number; distance: number } | null = null;
+
+  for (let index = segmentStart; index <= segmentEnd; index += 1) {
+    const first = pointAt(index);
+    const second = pointAt(index + 1);
+    if (first === null || second === null) continue;
+
+    const firstX = first.x * xPixelsPerUnit;
+    const firstY = first.y * yPixelsPerUnit;
+    const deltaX = (second.x - first.x) * xPixelsPerUnit;
+    const deltaY = (second.y - first.y) * yPixelsPerUnit;
+    const targetPixelX = targetX * xPixelsPerUnit;
+    const targetPixelY = targetY * yPixelsPerUnit;
+    const lengthSquared = deltaX * deltaX + deltaY * deltaY;
+    const fraction = lengthSquared === 0
+      ? 0
+      : Math.max(0, Math.min(1, ((targetPixelX - firstX) * deltaX + (targetPixelY - firstY) * deltaY) / lengthSquared));
+    const point = {
+      x: first.x + (second.x - first.x) * fraction,
+      y: first.y + (second.y - first.y) * fraction,
+    };
+    const distance = Math.hypot(
+      (point.x - targetX) * xPixelsPerUnit,
+      (point.y - targetY) * yPixelsPerUnit,
+    );
+    if (selected === null || distance < selected.distance) {
+      selected = { ...point, distance };
+    }
+  }
+
+  if (selected !== null) return selected;
+  const point = pointAt(Math.min(low, frame.sampleIndices.length - 1));
+  return point === null ? null : {
+    ...point,
+    distance: Math.hypot(
+      (point.x - targetX) * xPixelsPerUnit,
+      (point.y - targetY) * yPixelsPerUnit,
+    ),
+  };
+}

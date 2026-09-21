@@ -13,6 +13,7 @@ import {
   formatStableSeconds,
 } from "../format-value.js";
 import { useScopeStore } from "../scope-store.js";
+import type { ScopeActions } from "../scope-actions.js";
 import { waveformSourceAccent, waveformSourceLabel } from "../waveform-source-style.js";
 
 const KIND_LABELS: Record<MeasurementKind, string> = {
@@ -43,6 +44,7 @@ const KIND_LABELS: Record<MeasurementKind, string> = {
 
 interface MeasurementOverlayProps {
   scope: ScopeState;
+  actions: ScopeActions;
 }
 
 function isTimeMeasurement(kind: MeasurementKind): boolean {
@@ -74,7 +76,7 @@ function formatMeasurement(
   return formatStableAmplitude(value, waveformSourceUnit(scope, source));
 }
 
-export function MeasurementOverlay({ scope }: MeasurementOverlayProps) {
+export function MeasurementOverlay({ scope, actions }: MeasurementOverlayProps) {
   const specs = useScopeStore((state) => state.measurementSpecs);
   const values = useScopeStore((state) => state.measurementValues);
   if (specs.length === 0) return null;
@@ -101,6 +103,14 @@ export function MeasurementOverlay({ scope }: MeasurementOverlayProps) {
               <span className="measurement-overlay-channel">{waveformSourceLabel(spec.channel)}</span>
               <span className="measurement-overlay-kind">{KIND_LABELS[spec.kind]}</span>
               <strong>{statistics === null ? "—" : formatted(statistics.current)}</strong>
+              <button
+                type="button"
+                className="measurement-remove-button"
+                aria-label={`Remove ${waveformSourceLabel(spec.channel)} ${KIND_LABELS[spec.kind]} measurement`}
+                onClick={() => actions.setMeasurementSpecs(specs.filter((_, candidate) => candidate !== index))}
+              >
+                ×
+              </button>
             </div>
             {statistics === null ? null : (
               <dl className="measurement-overlay-stats">

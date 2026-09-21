@@ -3,6 +3,7 @@ import uPlot from "uplot";
 export const SCOPE_HORIZONTAL_DIVISIONS = 10;
 export const SCOPE_VERTICAL_DIVISIONS = 8;
 const SCOPE_GRATICULE_STROKE = "#27313c";
+const ZERO_VOLT_STROKE = "#46515d";
 
 export function graticuleLinePositions(
   origin: number,
@@ -64,5 +65,16 @@ export function drawScopeGraticule(plot: uPlot): void {
   }
 
   ctx.stroke();
+
+  const zeroY = plot.valToPos(0, "ch1", true);
+  if (zeroY >= top && zeroY <= top + height) {
+    ctx.beginPath();
+    ctx.strokeStyle = ZERO_VOLT_STROKE;
+    ctx.setLineDash([4 * uPlot.pxRatio, 4 * uPlot.pxRatio]);
+    ctx.moveTo(left, alignCanvasCoordinate(zeroY, lineWidth));
+    ctx.lineTo(left + width, alignCanvasCoordinate(zeroY, lineWidth));
+    ctx.stroke();
+  }
+
   ctx.restore();
 }

@@ -75,6 +75,7 @@ export function HorizontalControls({ scope, actions }: HorizontalControlsProps) 
             value={displayedScale}
             validate={(value) => value > 0}
             ariaLabel="Time per division"
+            formatValue={formatSeconds}
             onCommit={(value) => { void actions.setHorizontalScale(value); }}
           />
           <span>{formatSeconds(displayedScale)}</span>
@@ -84,6 +85,7 @@ export function HorizontalControls({ scope, actions }: HorizontalControlsProps) 
           <EditableNumberInput
             value={displayedPosition}
             ariaLabel="Horizontal position"
+            formatValue={formatSeconds}
             onCommit={(value) => { void actions.setHorizontalPosition(value); }}
           />
           <span>{formatSeconds(displayedPosition)}</span>

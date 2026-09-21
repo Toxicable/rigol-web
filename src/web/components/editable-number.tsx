@@ -16,7 +16,25 @@ export function parseEditableNumber(value: string): number | null {
     return null;
   }
   const parsed = Number(trimmed);
-  return Number.isFinite(parsed) ? parsed : null;
+  if (Number.isFinite(parsed)) return parsed;
+
+  const match = trimmed.match(/^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*([pnumkMGTµ]?)\s*(?:[a-zA-Z/]+)?$/);
+  if (match === null) return null;
+  const mantissa = Number(match[1]);
+  const multiplier: Record<string, number> = {
+    p: 1e-12,
+    n: 1e-9,
+    u: 1e-6,
+    m: 1e-3,
+    k: 1e3,
+    M: 1e6,
+    G: 1e9,
+    T: 1e12,
+  };
+  const suffix = match[2] ?? "";
+  const factor = suffix === "µ" ? 1e-6 : multiplier[suffix] ?? 1;
+  const result = mantissa * factor;
+  return Number.isFinite(result) ? result : null;
 }
 
 interface EditableNumberInputProps {
@@ -24,6 +42,7 @@ interface EditableNumberInputProps {
   onCommit: (value: number) => void;
   validate?: (value: number) => boolean;
   ariaLabel?: string;
+  formatValue?: (value: number) => string;
 }
 
 export function EditableNumberInput({
@@ -31,6 +50,7 @@ export function EditableNumberInput({
   onCommit,
   validate,
   ariaLabel,
+  formatValue = formatEditableNumber,
 }: EditableNumberInputProps) {
   const [draft, setDraft] = useState(formatEditableNumber(value));
   const [editing, setEditing] = useState(false);
@@ -38,12 +58,12 @@ export function EditableNumberInput({
 
   useEffect(() => {
     if (!editing) {
-      setDraft(formatEditableNumber(value));
+      setDraft(formatValue(value));
     }
-  }, [editing, value]);
+  }, [editing, formatValue, value]);
 
   const reset = (): void => {
-    setDraft(formatEditableNumber(value));
+    setDraft(formatValue(value));
     setEditing(false);
   };
 
@@ -61,7 +81,7 @@ export function EditableNumberInput({
     }
 
     onCommit(parsed);
-    setDraft(formatEditableNumber(parsed));
+    setDraft(formatValue(parsed));
     setEditing(false);
   };
 

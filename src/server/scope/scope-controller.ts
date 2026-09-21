@@ -37,6 +37,7 @@ const PRIORITY_IMMEDIATE: ScopeDriverPriority = 0;
 const PRIORITY_INTERACTIVE: ScopeDriverPriority = 1;
 const PRIORITY_NORMAL: ScopeDriverPriority = 2;
 const PRIORITY_BACKGROUND: ScopeDriverPriority = 4;
+const ROLL_MIN_SCALE_SECONDS = 0.05;
 const DHO804_MEMORY_DEPTHS = [1_000, 10_000, 100_000, 1_000_000, 5_000_000, 10_000_000, 25_000_000] as const;
 
 export interface ScopeControllerDriver {
@@ -307,10 +308,12 @@ export class ScopeController {
     switch (action) {
       case AcquisitionAction.Run:
         await this.driver.run();
-        break;
+        this.applyReconciledUpdate(revision, (state) => ({ ...state, runState: ScopeRunState.Running }));
+        return;
       case AcquisitionAction.Stop:
         await this.driver.stop();
-        break;
+        this.applyReconciledUpdate(revision, (state) => ({ ...state, runState: ScopeRunState.Stopped }));
+        return;
       case AcquisitionAction.Single: {
         const horizontal = await this.driver.readHorizontalState(PRIORITY_IMMEDIATE);
         this.applyReconciledUpdate(revision, (state) => ({ ...state, horizontal }));
@@ -609,12 +612,23 @@ export class ScopeController {
         await this.driver.setMathOffset(control.math, control.value, priority);
         return;
       case ControlKind.HorizontalScale:
-        await this.driver.setHorizontalScale(control.value, priority);
+        await this.writeRollTimebaseControl(
+          () => this.driver.setHorizontalScale(control.value, priority),
+          control.value >= ROLL_MIN_SCALE_SECONDS ? TimebaseMode.Roll : TimebaseMode.Main,
+          true,
+        );
         return;
       case ControlKind.HorizontalPosition:
-        await this.driver.setHorizontalPosition(control.value, priority);
+        await this.writeRollTimebaseControl(
+          () => this.driver.setHorizontalPosition(control.value, priority),
+        );
         return;
       case ControlKind.HorizontalMode:
+        await this.driver.executeRawScpi(
+          control.value === TimebaseMode.Xy
+            ? ":TIMebase:XY:ENABle ON"
+            : ":TIMebase:XY:ENABle OFF",
+        );
         await this.driver.executeRawScpi(`:TIMebase:MODE ${timebaseModeToken(control.value)}`);
         return;
       case ControlKind.AcquisitionType:
@@ -644,6 +658,35 @@ export class ScopeController {
       case ControlKind.TriggerCoupling:
         await this.driver.executeRawScpi(`:TRIGger:COUPling ${triggerCouplingToken(control.value)}`);
         return;
+    }
+  }
+
+  private async writeRollTimebaseControl(
+    write: () => Promise<void>,
+    targetMode: TimebaseMode | null = null,
+    restartWhileRunning = false,
+  ): Promise<void> {
+    const state = this.stateStore.getState();
+    const crossingMode = targetMode !== null && state.horizontal.mode !== targetMode;
+    const restartAcquisition =
+      state.runState !== ScopeRunState.Stopped &&
+      (restartWhileRunning || state.horizontal.mode === TimebaseMode.Roll || crossingMode);
+    if (!restartAcquisition) {
+      if (crossingMode) {
+        await this.driver.executeRawScpi(`:TIMebase:MODE ${timebaseModeToken(targetMode)}`);
+      }
+      await write();
+      return;
+    }
+
+    await this.driver.stop();
+    try {
+      if (crossingMode) {
+        await this.driver.executeRawScpi(`:TIMebase:MODE ${timebaseModeToken(targetMode)}`);
+      }
+      await write();
+    } finally {
+      await this.driver.run();
     }
   }
 }

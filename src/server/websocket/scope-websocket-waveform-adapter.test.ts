@@ -192,6 +192,21 @@ describe("ScopeWebSocketAdapter waveform delivery", () => {
     harness.adapter.detach();
   });
 
+  it("replays the latest live frame to a subscriber that joins while stopped", () => {
+    const harness = createHarness();
+    const session = { id: 3 };
+    const frame = createWaveformFrame(WaveformKind.Live, WaveformSource.Ch1, 0, 8);
+
+    harness.publishWaveform(frame);
+    harness.adapter.sendInitialPublications(session);
+
+    expect(harness.host.sendJson).toHaveBeenCalledOnce();
+    expect(harness.host.sendBinarySpy).toHaveBeenCalledOnce();
+    expect(harness.host.sendBinarySpy.mock.calls[0]?.[0]).toBe(session);
+    expect(sequence(harness.host.sendBinarySpy.mock.calls[0]?.[1] as Uint8Array)).toBe(8);
+    harness.adapter.detach();
+  });
+
   it("maps deep viewport requests through the scope service and sends the physical-channel frame", async () => {
     const harness = createHarness();
     const session = { id: 2 };

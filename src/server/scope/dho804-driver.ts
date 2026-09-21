@@ -592,8 +592,10 @@ export class Dho804Driver {
         const unit = channel === null
           ? ChannelUnit.Unknown
           : await this.channelUnit(transport, channel);
-        const command = `:WAVeform:SOURce ${sourceToken};:WAVeform:DATA?`;
-        const payload = await transport.queryBinary(command);
+        // The source is configured above. Keep DATA? as its own program
+        // message; combining a source write with DATA? makes the DHO804's
+        // first Roll response intermittently truncate.
+        const payload = await transport.queryBinary(":WAVeform:DATA?");
         this.waveformSetup.source = source;
         recorder.addBinaryBytes(payload.byteLength);
         if (payload.byteLength !== pointCount) {

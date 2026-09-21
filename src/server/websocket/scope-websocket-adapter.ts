@@ -38,6 +38,7 @@ import {
   ScopeConnectionKind,
   type ScopeConnection,
 } from "../instruments/instrument-connection.js";
+
 import type { ScopeApplicationService } from "../scope/scope-service.js";
 import type {
   WebSocketAdapterHost,
@@ -73,6 +74,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
   private connectionRevision = 0;
   private unsubscribeServices: Array<() => void> = [];
   private readonly clients = new WeakMap<WebSocketSession, ScopeClientState>();
+  private readonly latestLiveFrames = new Map<WaveformSource, Uint8Array>();
   private interactionOwner: WebSocketSession | null = null;
 
   public constructor(private readonly scopeService: ScopeApplicationService) {
@@ -86,6 +88,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
       this.scopeService.subscribeConnection((connection) => {
         this.connection = connection;
         this.connectionRevision += 1;
+        this.latestLiveFrames.clear();
         if (connection.kind === ScopeConnectionKind.Disconnected) this.releaseInteractionOwner();
         host.broadcastJson(this.instrument, this.lifecycleMessage(connection));
       }),
@@ -132,6 +135,8 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
         try {
           await this.scopeService.setControl(control);
           this.requireConnectionRevision(revision);
+          // Complete the UI request immediately. The live reader remains
+          // paused until the control write has completed.
           host.sendCompleted(session, requestId);
         } finally {
           if (pausesLive && this.interactionOwner === null) this.scopeService.resumeLiveWaveform();
@@ -259,7 +264,11 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
   }
 
   public sendInitialPublications(session: WebSocketSession): void {
-    this.requireHost().sendJson(session, this.lifecycleMessage(this.connection));
+    const host = this.requireHost();
+    host.sendJson(session, this.lifecycleMessage(this.connection));
+    for (const [source, frame] of this.latestLiveFrames) {
+      this.queueLiveFrame(session, source, frame);
+    }
   }
 
   public sessionUnsubscribed(session: WebSocketSession): void {
@@ -331,6 +340,7 @@ export class ScopeWebSocketAdapter implements WebSocketInstrumentAdapter {
     if (header.kind !== WaveformKind.Live || header.captureId !== 0) {
       throw new Error("Scope waveform publication only accepts live waveform frames");
     }
+    this.latestLiveFrames.set(header.source, frame.slice());
     this.requireHost().forEachSubscribed(this.instrument, (session) => {
       this.queueLiveFrame(session, header.source, frame);
     });

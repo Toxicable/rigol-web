@@ -282,9 +282,51 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   margin-top: 0.25rem;
   color: #a7b1bc;
 }
-.measurement-overlay {
+.measurement-toolbar {
   position: absolute;
   top: 0.7rem;
+  left: 0.7rem;
+  z-index: 6;
+}
+.measurement-add-button {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid #46515d;
+  border-radius: 5px;
+  background: rgb(13 17 22 / 92%);
+  color: #d7e0e8;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 35%);
+}
+.measurement-add-button span:first-child { color: #8fdaa8; font-size: 1.1rem; line-height: 0.8; }
+.measurement-flyout {
+  display: grid;
+  gap: 0.5rem;
+  width: 220px;
+  margin-top: 0.35rem;
+  padding: 0.65rem;
+  border: 1px solid #46515d;
+  border-radius: 6px;
+  background: #111419;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 45%);
+}
+.measurement-flyout-heading { display: flex; justify-content: space-between; align-items: center; color: #e8edf2; }
+.measurement-flyout label { display: grid; gap: 0.2rem; color: #a7b1bc; font-size: 0.75rem; }
+.measurement-close-button,
+.measurement-remove-button {
+  border: 0;
+  background: transparent;
+  color: #9aa6b2;
+  padding: 0.1rem 0.25rem;
+  font-size: 1rem;
+  line-height: 1;
+}
+.measurement-close-button:hover,
+.measurement-remove-button:hover { color: #fff; }
+.measurement-overlay {
+  position: absolute;
+  top: 3.15rem;
   left: 2.7rem;
   z-index: 3;
   display: flex;
@@ -307,7 +349,7 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
 }
 .measurement-overlay-primary {
   display: grid;
-  grid-template-columns: auto auto auto;
+  grid-template-columns: auto auto auto auto;
   align-items: baseline;
   gap: 0.4rem;
 }
@@ -315,6 +357,7 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
 .measurement-overlay-primary strong {
   color: var(--channel-accent);
 }
+.measurement-remove-button { pointer-events: auto; }
 .measurement-overlay-kind { color: #a7b1bc; }
 .measurement-overlay-primary strong {
   min-width: 10ch;
@@ -358,7 +401,7 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   padding: 0.8rem;
 }
 .panel h2 { margin: 0 0 0.7rem; font-size: 0.95rem; }
-.channel-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.55rem; }
+.channel-grid { display: grid; grid-template-columns: 1fr; gap: 0.55rem; }
 .channel-card {
   position: relative;
   border-left: 3px solid var(--channel-accent);
@@ -366,6 +409,20 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
   border-radius: 5px;
   padding: 0.6rem;
 }
+.channel-card-disabled {
+  grid-column: 1 / -1;
+  padding-top: 0.35rem;
+  padding-bottom: 0.35rem;
+}
+.channel-card-disabled > label:not(.channel-heading),
+.channel-card-disabled > .compact-details { display: none !important; }
+.math-card-disabled {
+  padding-top: 0.35rem;
+  padding-bottom: 0.35rem;
+}
+.math-card-disabled > label,
+.math-card-disabled > button,
+.math-card-disabled > .muted { display: none !important; }
 .channel-card:has(.channel-menu[open]) { z-index: 20; }
 .channel-menu {
   position: static;
@@ -421,6 +478,7 @@ input, select { padding: 0.35rem 0.45rem; min-width: 0; }
 .compact-details dt, .compact-details dd { margin: 0; }
 .control-row { display: grid; gap: 0.4rem; }
 .timebase-control { display: flex; gap: 0.35rem; }
+.scale-step-control { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0.25rem; align-items: center; }
 .step-button { min-width: 1.7rem; padding: 0.1rem 0.35rem; }
 .horizontal-details { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
 .horizontal-details div { display: block; }

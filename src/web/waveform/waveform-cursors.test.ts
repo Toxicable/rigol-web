@@ -6,6 +6,7 @@ import type { DecodedWaveformFrame } from "./waveform-frame-decoder.js";
 import {
   initialWaveformCursorState,
   nearestWaveformPoint,
+  nearestWaveformTracePoint,
   waveformCursorMarkerCount,
   waveformCursorReducer,
 } from "./waveform-cursors.js";
@@ -89,5 +90,19 @@ describe("waveform cursors", () => {
     expect(first?.y).toBe(1);
     expect(last?.x).toBeCloseTo(50e-6);
     expect(last?.y).toBe(5);
+  });
+
+  it("snaps onto a vertical trace segment instead of choosing an endpoint", () => {
+    const vertical = {
+      ...frame(),
+      sampleIndices: Uint32Array.from([10, 20, 30]),
+      values: Float32Array.from([1, 1, 5]),
+    };
+
+    const point = nearestWaveformTracePoint(vertical, 25e-6, 3, 1e6, 10);
+
+    expect(point?.x).toBeCloseTo(25e-6);
+    expect(point?.y).toBeCloseTo(3);
+    expect(point?.distance).toBeCloseTo(0);
   });
 });

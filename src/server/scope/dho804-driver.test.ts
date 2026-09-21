@@ -38,6 +38,7 @@ class ScriptedTransport {
     this.commands.push(command);
     const values = this.text.get(command);
     const value = values?.shift();
+    if (value === undefined && command === ":TIMebase:MODE?") return "MAIN";
     if (value === undefined) throw new Error(`No scripted text response for ${command}`);
     return value;
   };
@@ -138,7 +139,7 @@ function respondMeasurementStatistics(
 }
 
 function liveCommand(source: WaveformSource): string {
-  return `:WAVeform:SOURce ${waveformSourceToken(source)};:WAVeform:DATA?`;
+  return ":WAVeform:DATA?";
 }
 
 async function readOneLive(

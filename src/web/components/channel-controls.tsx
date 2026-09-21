@@ -21,6 +21,24 @@ const BANDWIDTH_LABELS: Record<ChannelBandwidthLimit, string> = {
 };
 const BANDWIDTH_LIMITS = [ChannelBandwidthLimit.Off, ChannelBandwidthLimit.Mhz20] as const;
 const PROBE_RATIOS = [1, 10] as const;
+const CHANNEL_SCALE_STEPS = Array.from({ length: 19 }, (_, index) => {
+  const exponent = Math.floor(index / 3) - 3;
+  const multiplier = [1, 2, 5][index % 3] ?? 1;
+  return multiplier * 10 ** exponent;
+});
+
+function nearestScaleIndex(value: number): number {
+  let nearest = 0;
+  let distance = Number.POSITIVE_INFINITY;
+  CHANNEL_SCALE_STEPS.forEach((step, index) => {
+    const nextDistance = Math.abs(Math.log10(value) - Math.log10(step));
+    if (nextDistance < distance) {
+      nearest = index;
+      distance = nextDistance;
+    }
+  });
+  return nearest;
+}
 
 interface ChannelControlsProps {
   channels: readonly ChannelState[];
@@ -35,7 +53,7 @@ export function ChannelControls({ channels, actions }: ChannelControlsProps) {
         {channels.map((channel) => {
           const knownProbeRatio = PROBE_RATIOS.some((ratio) => ratio === channel.probeRatio);
           return (
-            <div className={`channel-card ch${channel.channel}`} key={channel.channel}>
+            <div className={`channel-card ch${channel.channel}${channel.enabled ? "" : " channel-card-disabled"}`} key={channel.channel}>
               <label className="channel-heading">
                 <input
                   type="checkbox"
@@ -48,14 +66,37 @@ export function ChannelControls({ channels, actions }: ChannelControlsProps) {
               </label>
               <label>
                 Scale
+                <span className="scale-step-control">
+                  <button
+                    type="button"
+                    className="step-button"
+                    aria-label={`Decrease CH${channel.channel} scale`}
+                    onClick={() => {
+                      const index = Math.max(0, nearestScaleIndex(channel.scale) - 1);
+                      const value = CHANNEL_SCALE_STEPS[index];
+                      if (value !== undefined) void actions.setChannelScale(channel.channel, value);
+                    }}
+                  >−</button>
                 <EditableNumberInput
                   value={channel.scale}
                   validate={(value) => value > 0}
                   ariaLabel={`CH${channel.channel} scale`}
+                  formatValue={(value) => formatAmplitude(value, channel.unit)}
                   onCommit={(value) => {
                     void actions.setChannelScale(channel.channel, value);
                   }}
                 />
+                  <button
+                    type="button"
+                    className="step-button"
+                    aria-label={`Increase CH${channel.channel} scale`}
+                    onClick={() => {
+                      const index = Math.min(CHANNEL_SCALE_STEPS.length - 1, nearestScaleIndex(channel.scale) + 1);
+                      const value = CHANNEL_SCALE_STEPS[index];
+                      if (value !== undefined) void actions.setChannelScale(channel.channel, value);
+                    }}
+                  >+</button>
+                </span>
                 <span>{channelUnitSymbol(channel.unit)}/div</span>
               </label>
               <label>
@@ -63,6 +104,7 @@ export function ChannelControls({ channels, actions }: ChannelControlsProps) {
                 <EditableNumberInput
                   value={channel.offset}
                   ariaLabel={`CH${channel.channel} offset`}
+                  formatValue={(value) => formatAmplitude(value, channel.unit)}
                   onCommit={(value) => {
                     void actions.setChannelOffset(channel.channel, value);
                   }}

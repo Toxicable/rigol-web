@@ -22,7 +22,11 @@ export interface LiveWaveformServiceOptions {
   reportError?: (error: unknown) => void;
 }
 
+// The DHO804's native normal-mode live response is 999 BYTE samples.
 const LIVE_POINT_COUNT = 999;
+// Keep a small floor so a very short timebase does not turn into a busy loop.
+const LIVE_POLL_MIN_INTERVAL_MS = 100;
+const LIVE_POLL_MARGIN_MS = 50;
 
 function nextUint32(value: number): number {
   return (value + 1) >>> 0;
@@ -42,6 +46,7 @@ export class LiveWaveformService {
   private paused = false;
   private freshWanted = false;
   private loopPromise: Promise<void> | null = null;
+  private nextPollDelayMs = LIVE_POLL_MIN_INTERVAL_MS;
 
   public constructor(options: LiveWaveformServiceOptions) {
     this.driver = options.driver;
@@ -102,7 +107,7 @@ export class LiveWaveformService {
       if (!shouldContinue) return;
       if (this.liveWanted && !this.paused) {
         this.freshWanted = true;
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        await new Promise<void>((resolve) => setTimeout(resolve, this.nextPollDelayMs));
       }
     }
   }
@@ -122,7 +127,6 @@ export class LiveWaveformService {
         .map((mathState) => waveformSourceForMath(mathState.math)),
     ];
     if (sources.length === 0) return false;
-
     for (const source of sources) {
       if (!this.liveWanted || this.paused) return false;
       const waveform = await this.driver.readLiveWaveform(source, LIVE_POINT_COUNT);
@@ -130,6 +134,12 @@ export class LiveWaveformService {
       if (waveform.source !== source) {
         throw new Error(`Driver returned waveform source ${waveform.source} while reading ${source}`);
       }
+      this.nextPollDelayMs = state.horizontal.mode === TimebaseMode.Roll
+        ? LIVE_POLL_MIN_INTERVAL_MS
+        : Math.max(
+            LIVE_POLL_MIN_INTERVAL_MS,
+            waveform.xIncrement * waveform.samples.length * 1_000 + LIVE_POLL_MARGIN_MS,
+          );
       this.publishWaveform(waveform, waveformSourceUnit(state, source));
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }

@@ -24,6 +24,12 @@ function createDriver(calls: string[]): Dho804Driver {
       if (command === ":CHANnel1:UNITs?") {
         return "VOLT";
       }
+      if (command === ":TIMebase:MAIN:OFFSet?") {
+        return "0.001";
+      }
+      if (command === ":TIMebase:MODE?") {
+        return "MAIN";
+      }
       throw new Error(`Unexpected text query ${command}`);
     },
     queryBinary: async (command: string): Promise<Uint8Array> => {
@@ -62,7 +68,7 @@ describe("Dho804Driver live recovery order", () => {
     await driver.readLiveWaveform(Channel.Ch1, 2);
 
     const preambleIndex = calls.indexOf(":WAVeform:PREamble?");
-    const dataIndex = calls.indexOf(":WAVeform:SOURce CHANnel1;:WAVeform:DATA?");
+    const dataIndex = calls.indexOf(":WAVeform:DATA?");
     expect(preambleIndex).toBeGreaterThanOrEqual(0);
     expect(dataIndex).toBeGreaterThan(preambleIndex);
   });

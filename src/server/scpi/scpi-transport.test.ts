@@ -68,6 +68,16 @@ describe("ScpiTransport", () => {
     transport.disconnect();
   });
 
+  it("accepts a complete binary block without a trailing line terminator", async () => {
+    const port = await peer((_command, write) => {
+      write(Uint8Array.from([0x23, 0x31, 0x34, 1, 2, 3, 4]));
+    });
+    const transport = new ScpiTransport(1000);
+    await transport.connect("127.0.0.1", port);
+    await expect(transport.queryBinary("BIN?")).resolves.toEqual(Uint8Array.from([1, 2, 3, 4]));
+    transport.disconnect();
+  });
+
   it("frames multiple binary query responses from one compound program message", async () => {
     const port = await peer((command, write) => {
       expect(command).toBe("SRC1;DATA?;SRC2;DATA?");

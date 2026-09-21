@@ -83,7 +83,7 @@ export function MathControls({ math, actions }: MathControlsProps) {
           const dependentLabel = dependents.map((item) => `MATH${item}`).join(", ");
           const style = { "--channel-accent": mathAccent(state.math) } as CSSProperties;
           return (
-            <div className="channel-card" style={style} key={state.math}>
+            <div className={`channel-card${state.enabled ? "" : " math-card-disabled"}`} style={style} key={state.math}>
               <div className="channel-heading">
                 <strong>MATH{state.math}</strong>
                 <label>
@@ -172,9 +172,6 @@ export function MathControls({ math, actions }: MathControlsProps) {
               </button>
               {resetBlocked ? (
                 <p className="muted">Reset blocked: used by {dependentLabel}.</p>
-              ) : null}
-              {!editable ? (
-                <p className="muted">Configured on the scope; this operator is display-only in RigolWeb.</p>
               ) : null}
             </div>
           );

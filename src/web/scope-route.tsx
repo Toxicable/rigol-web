@@ -70,8 +70,9 @@ export function ScopeRoute({ binding, actions, controller }: ScopeRouteProps) {
         <div className="scope-layout">
           <div className="waveform-column">
             <section className="waveform-panel">
+              <MeasurementPanel actions={actions} controller={controller} />
               <WaveformPlot scope={connection.scope} controller={controller} actions={actions} />
-              <MeasurementOverlay scope={connection.scope} />
+              <MeasurementOverlay scope={connection.scope} actions={actions} />
               <WaveformCursorOverlay
                 scope={connection.scope}
                 controller={controller}
@@ -79,7 +80,6 @@ export function ScopeRoute({ binding, actions, controller }: ScopeRouteProps) {
                 dispatchCursor={dispatchCursor}
               />
             </section>
-            <MeasurementPanel actions={actions} controller={controller} />
           </div>
           <aside className="control-stack">
             <ChannelControls channels={connection.scope.channels} actions={actions} />

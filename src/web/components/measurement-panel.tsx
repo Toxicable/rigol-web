@@ -9,6 +9,7 @@ import type { ScopeActions } from "../scope-actions.js";
 import { MeasurementSource, useScopeStore } from "../scope-store.js";
 import { waveformSourceLabel } from "../waveform-source-style.js";
 import type { WaveformController } from "../waveform/waveform-controller.js";
+import { Flyout } from "./flyout.js";
 
 const KIND_LABELS: Record<MeasurementKind, string> = {
   [MeasurementKind.Vpp]: "Vpp",
@@ -62,6 +63,7 @@ export function MeasurementPanel({ actions, controller }: MeasurementPanelProps)
   const specs = useScopeStore((state) => state.measurementSpecs);
   const [waveformSource, setWaveformSource] = useState(WaveformSource.Ch1);
   const [kind, setKind] = useState(MeasurementKind.Vpp);
+  const [open, setOpen] = useState(false);
   const [localMeasurements] = useState(() => new LocalMeasurementAccumulator());
 
   useEffect(() => {
@@ -82,12 +84,22 @@ export function MeasurementPanel({ actions, controller }: MeasurementPanelProps)
   const add = () => {
     if (specs.some((spec) => spec.channel === waveformSource && spec.kind === kind)) return;
     actions.setMeasurementSpecs([...specs, { channel: waveformSource, kind }]);
+    setOpen(false);
   };
 
   return (
-    <section className="panel">
-      <h2>Measurements</h2>
-      <div className="measurement-add">
+    <Flyout className="measurement-toolbar" open={open} onClose={() => setOpen(false)}>
+      <button type="button" className="measurement-add-button" aria-label="Add measurement" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <span aria-hidden="true">+</span>
+        <span>Measurement</span>
+      </button>
+      {open ? <div className="measurement-flyout">
+        <div className="measurement-flyout-heading">
+          <strong>Add measurement</strong>
+          <button type="button" className="measurement-close-button" aria-label="Close add measurement" onClick={() => setOpen(false)}>×</button>
+        </div>
+        <label>
+          Calculation
         <select
           aria-label="Measurement calculation source"
           value={source}
@@ -95,9 +107,12 @@ export function MeasurementPanel({ actions, controller }: MeasurementPanelProps)
             actions.setMeasurementSource(Number(event.target.value) as MeasurementSource)
           }
         >
-          <option value={MeasurementSource.Scope}>Source: Scope</option>
-          <option value={MeasurementSource.Local}>Source: Local</option>
+          <option value={MeasurementSource.Scope}>Scope</option>
+          <option value={MeasurementSource.Local}>Local</option>
         </select>
+        </label>
+        <label>
+          Source
         <select
           aria-label="Measurement waveform source"
           value={waveformSource}
@@ -109,6 +124,9 @@ export function MeasurementPanel({ actions, controller }: MeasurementPanelProps)
             <option value={item} key={item}>{waveformSourceLabel(item)}</option>
           ))}
         </select>
+        </label>
+        <label>
+          Measurement
         <select value={kind} onChange={(event: ChangeEvent<HTMLSelectElement>) => setKind(Number(event.target.value) as MeasurementKind)}>
           {MEASUREMENT_GROUPS.map((group) => (
             <optgroup label={group.label} key={group.label}>
@@ -116,24 +134,9 @@ export function MeasurementPanel({ actions, controller }: MeasurementPanelProps)
             </optgroup>
           ))}
         </select>
-        <button type="button" onClick={add}>Add</button>
-      </div>
-      {specs.length === 0 ? <p className="muted">No measurements selected.</p> : (
-        <ul className="measurement-list">
-          {specs.map((spec, index) => (
-            <li key={`${spec.channel}-${spec.kind}`}>
-              <span>{waveformSourceLabel(spec.channel)} {KIND_LABELS[spec.kind]}</span>
-              <button
-                type="button"
-                className="text-button"
-                onClick={() => actions.setMeasurementSpecs(specs.filter((_, candidate) => candidate !== index))}
-              >
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+        </label>
+        <button type="button" onClick={add}>Add measurement</button>
+      </div> : null}
+    </Flyout>
   );
 }

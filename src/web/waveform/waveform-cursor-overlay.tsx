@@ -24,7 +24,7 @@ import { DeepCaptureKind, useScopeStore } from "../scope-store.js";
 import { waveformSourceAccent, waveformSourceLabel } from "../waveform-source-style.js";
 import { WaveformDisplayMode, type WaveformController } from "./waveform-controller.js";
 import {
-  nearestWaveformPoint,
+  nearestWaveformTracePoint,
   type WaveformCursorAction,
   type WaveformCursorMarker,
   type WaveformCursorSlot,
@@ -69,7 +69,7 @@ const ALL_SOURCES = [
   WaveformSource.Math3,
   WaveformSource.Math4,
 ] as const;
-const SNAP_RADIUS_PX = 56;
+const SNAP_RADIUS_PX = 96;
 
 function sourceDomain(scope: ScopeState, source: WaveformSource): { min: number; max: number } | null {
   const channel = channelForWaveformSource(source);
@@ -182,14 +182,21 @@ export function WaveformCursorOverlay({
       const frame = controller.getFrame(source);
       const domain = sourceDomain(scope, source);
       if (frame === undefined || domain === null || !(domain.max > domain.min)) continue;
-      const point = nearestWaveformPoint(frame, targetX);
+      const targetY = domain.max - ((pointer.top - plotRect.top) / plotRect.height) * (domain.max - domain.min);
+      const point = nearestWaveformTracePoint(
+        frame,
+        targetX,
+        targetY,
+        plotRect.width / (xMax - xMin),
+        plotRect.height / (domain.max - domain.min),
+      );
       if (point === null) continue;
       const position = {
         left: plotRect.left + ((point.x - xMin) / (xMax - xMin)) * plotRect.width,
         top: plotRect.top + ((domain.max - point.y) / (domain.max - domain.min)) * plotRect.height,
       };
       if (!inPlot(position, plotRect)) continue;
-      const distance = Math.hypot(position.left - pointer.left, position.top - pointer.top);
+      const distance = point.distance;
       if (distance < selectedDistance) {
         selectedDistance = distance;
         selected = {
