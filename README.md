@@ -115,7 +115,8 @@ attempts while the scope is sleeping. There is no HTTP scope-power endpoint.
 The service then invokes the DHO804's own `Power > Sleep` path instead of
 reproducing Rigol's private shutdown sequence: panel-power key `1073741851` is
 injected, the server waits 1500 ms for the stock power popup, re-checks ADB, and
-launches a tap at the stock Sleep-button centre `(324, 375)`.
+launches a tap at the stock Sleep-button centre `(364, 356)`, measured from a
+real 1024x600 DHO804 framebuffer capture.
 
 The final tap is intentionally a one-way dispatch. Real-scope testing confirmed
 the tap enters native Sleep, but the successful transition can tear down the ADB
@@ -126,8 +127,7 @@ launched; ADB reachability is checked immediately beforehand, and a local
 failure to launch `adb` still fails the WebSocket request. If Sleep fails before
 dispatch, the SCPI runtime is resumed.
 
-That coordinate is derived from the decompiled DHO800 layout and confirmed
-against a real 1024x600 DHO804 framebuffer capture. The earlier `uiautomator`
+That coordinate is confirmed against a real 1024x600 DHO804 framebuffer capture. The earlier `uiautomator`
 discovery path did not click the button reliably on the scope and has been
 removed. The installed Rigol application owns the actual sleep transition after
 the tap, including its CIL, watchdog and `quick_boot_test.sh` behavior.

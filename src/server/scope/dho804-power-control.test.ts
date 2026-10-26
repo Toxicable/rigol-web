@@ -41,10 +41,10 @@ describe("Dho804PowerControl", () => {
       "shell",
       "input",
       "tap",
-      "324",
-      "375",
+      "364",
+      "356",
     ]);
-    expect(log).toHaveBeenCalledWith("[DHO804 sleep] dispatched native Rigol Sleep control at 324,375");
+    expect(log).toHaveBeenCalledWith("[DHO804 sleep] dispatched native Rigol Sleep control at 364,356");
   });
 
   it("fails sleep if the final ADB dispatch cannot be launched", async () => {

@@ -12,8 +12,8 @@ export type Delay = (milliseconds: number) => Promise<void>;
 
 const ADB_TIMEOUT_MS = 5_000;
 const RIGOL_PANEL_POWER_KEYCODE = "1073741851";
-const RIGOL_SLEEP_TAP_X = "324";
-const RIGOL_SLEEP_TAP_Y = "375";
+const RIGOL_SLEEP_TAP_X = "364";
+const RIGOL_SLEEP_TAP_Y = "356";
 const POWER_POPUP_SETTLE_MS = 1_500;
 
 function runAdb(args: readonly string[]): Promise<AdbCommandResult> {
@@ -100,10 +100,8 @@ export class Dho804PowerControl {
     // successful Sleep transition into a false HTTP failure.
     await this.ensureConnected(target);
 
-    // The stock DHO800 power popup is 560x270 dp centred on the fixed
-    // 1024x600 instrument UI. Its 110x35 dp Sleep button is centred in the
-    // left third, placing the button centre at approximately (324, 375).
-    // A real DHO804 framebuffer capture confirmed the popup geometry.
+    // A real DHO804 1024x600 framebuffer capture places the stock Sleep
+    // button centre at approximately (364, 356).
     await this.dispatch([
       "-s",
       target,
