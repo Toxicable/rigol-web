@@ -75,6 +75,11 @@ export enum MathOperator {
   AxB = 21,
 }
 
+export enum MathFftUnit {
+  Vrms = 1,
+  Db = 2,
+}
+
 export function isArithmeticMathOperator(operator: MathOperator): boolean {
   return operator === MathOperator.Add ||
     operator === MathOperator.Subtract ||
@@ -154,6 +159,8 @@ export interface MathState {
   source2: MathSource | null;
   scale: number | null;
   offset: number | null;
+  frequencyRangeHz: { start: number; end: number } | null;
+  fftUnit?: MathFftUnit;
 }
 
 export type MathStates = [MathState, MathState, MathState, MathState];
@@ -330,6 +337,24 @@ export function waveformSourceUnit(state: ScopeState, source: WaveformSource): C
   if (channel !== null) return state.channels[channel - 1]?.unit ?? ChannelUnit.Unknown;
   const math = mathForWaveformSource(source);
   return math === null ? ChannelUnit.Unknown : mathOutputUnit(state, math, new Set());
+}
+
+export function waveformSourceUnitLabel(state: ScopeState, source: WaveformSource): string {
+  const math = mathForWaveformSource(source);
+  if (math !== null) {
+    const mathState = state.math[math - 1];
+    if (mathState?.operator === MathOperator.Fft) {
+      if (mathState.fftUnit === MathFftUnit.Db) return "dBV";
+      if (mathState.fftUnit === MathFftUnit.Vrms) return "Vrms";
+      return "unit";
+    }
+  }
+  switch (waveformSourceUnit(state, source)) {
+    case ChannelUnit.Volts: return "V";
+    case ChannelUnit.Amps: return "A";
+    case ChannelUnit.Watts: return "W";
+    case ChannelUnit.Unknown: return "unit";
+  }
 }
 
 export enum MeasurementKind {

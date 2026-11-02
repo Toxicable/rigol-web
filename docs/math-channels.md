@@ -34,8 +34,14 @@ interface MathState {
   source2: MathSource | null;
   scale: number | null;
   offset: number | null;
+  frequencyRangeHz: { start: number; end: number } | null;
 }
 ```
+
+FFT math states read their visible frequency bounds from the scope's
+`:MATH<n>:FFT:FREQuency:STARt?` and `:MATH<n>:FFT:FREQuency:END?` registers.
+The browser uses those bounds for that math trace's independent X scale;
+ordinary channels and non-FFT math continue to share the timebase X scale.
 
 `MathChannel` is `Math1` through `Math4`.
 
@@ -115,6 +121,8 @@ Each arithmetic math row exposes:
 Use a distinct accent for each math trace, separate from CH1-CH4.
 
 The waveform plot renders enabled math traces exactly like physical traces, including a draggable zero/reference marker if scale/offset interaction is enabled for math.
+
+FFT math traces use the scope-reported frequency coordinates on their own frequency X scale and axis. Arithmetic math traces continue to share the physical-channel time axis. The browser cursor overlay remains limited to time-domain traces.
 
 Do not expose deep-capture controls for math traces in the first implementation.
 

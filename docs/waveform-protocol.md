@@ -64,8 +64,8 @@ Every binary waveform frame begins with exactly 64 bytes.
 | 20 | 4 | `uint32` | `sourceEndSample` | source range end, zero-based exclusive |
 | 24 | 4 | `uint32` | `pointCount` | number of payload records |
 | 28 | 4 | `uint32` | `headerBytes` | must be `64` for version 1 |
-| 32 | 8 | `float64` | `xIncrement` | source sample interval in seconds |
-| 40 | 8 | `float64` | `xOrigin` | source waveform X origin in seconds |
+| 32 | 8 | `float64` | `xIncrement` | source waveform preamble increment |
+| 40 | 8 | `float64` | `xOrigin` | source waveform X origin in the same units as `xIncrement` |
 | 48 | 8 | `float64` | `xReference` | source waveform X reference in sample-index units |
 | 56 | 1 | `uint8` | `yUnit` | `ChannelUnit` |
 | 57 | 7 | bytes | reserved | all zero in version 1 |
@@ -78,6 +78,10 @@ The total frame size must be:
 
 A decoder must reject a frame whose actual byte length does not match that expression.
 
+For DHO FFT math traces, the waveform preamble X values are not the displayed
+frequency coordinates. The browser maps FFT sample positions over the scope's
+reported FFT start and end frequencies from `MathState.frequencyRangeHz`.
+
 ## Sample indexing
 
 Rigol SCPI uses one-based `:WAVeform:STARt` and `:WAVeform:STOP` positions.
@@ -88,7 +92,7 @@ The driver performs the conversion at its boundary.
 
 `sourceStartSample` is inclusive and `sourceEndSample` is exclusive. This matches ordinary TypeScript array slicing and removes fencepost ambiguity from deep viewport requests.
 
-The time corresponding to an individual payload record is:
+The X coordinate corresponding to an individual payload record is:
 
 ```ts
 const x = xOrigin + (sampleIndex - xReference) * xIncrement;

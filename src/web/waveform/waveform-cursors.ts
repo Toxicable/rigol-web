@@ -6,6 +6,8 @@ export type WaveformCursorSlot = "A" | "B";
 export interface WaveformCursorMarker {
   source: WaveformSource;
   unit: ChannelUnit;
+  unitLabel?: string;
+  xUnit?: "s" | "Hz";
   x: number;
   y: number;
 }
@@ -188,5 +190,78 @@ export function nearestWaveformTracePoint(
       (point.x - targetX) * xPixelsPerUnit,
       (point.y - targetY) * yPixelsPerUnit,
     ),
+  };
+}
+
+export function nearestWaveformSeriesPoint(
+  xValues: Float64Array,
+  values: Float32Array,
+  targetX: number,
+  targetY: number,
+  xPixelsPerUnit: number,
+  yPixelsPerUnit: number,
+): { x: number; y: number; distance: number } | null {
+  if (
+    xValues.length === 0 ||
+    values.length === 0 ||
+    xValues.length !== values.length ||
+    !Number.isFinite(targetX) ||
+    !Number.isFinite(targetY) ||
+    !(xPixelsPerUnit > 0) ||
+    !(yPixelsPerUnit > 0)
+  ) return null;
+
+  let low = 0;
+  let high = xValues.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    const x = xValues[middle];
+    if (x === undefined || !Number.isFinite(x)) return null;
+    if (x < targetX) low = middle + 1;
+    else high = middle;
+  }
+
+  const segmentStart = Math.max(0, low - 2);
+  const segmentEnd = Math.min(xValues.length - 2, low + 1);
+  let selected: { x: number; y: number; distance: number } | null = null;
+  for (let index = segmentStart; index <= segmentEnd; index += 1) {
+    const firstX = xValues[index];
+    const firstY = values[index];
+    const secondX = xValues[index + 1];
+    const secondY = values[index + 1];
+    if (
+      firstX === undefined || firstY === undefined ||
+      secondX === undefined || secondY === undefined ||
+      !Number.isFinite(firstX) || !Number.isFinite(firstY) ||
+      !Number.isFinite(secondX) || !Number.isFinite(secondY)
+    ) continue;
+
+    const deltaX = (secondX - firstX) * xPixelsPerUnit;
+    const deltaY = (secondY - firstY) * yPixelsPerUnit;
+    const relativeX = (targetX - firstX) * xPixelsPerUnit;
+    const relativeY = (targetY - firstY) * yPixelsPerUnit;
+    const lengthSquared = deltaX * deltaX + deltaY * deltaY;
+    const fraction = lengthSquared === 0
+      ? 0
+      : Math.max(0, Math.min(1, (relativeX * deltaX + relativeY * deltaY) / lengthSquared));
+    const point = {
+      x: firstX + (secondX - firstX) * fraction,
+      y: firstY + (secondY - firstY) * fraction,
+    };
+    const distance = Math.hypot(
+      (point.x - targetX) * xPixelsPerUnit,
+      (point.y - targetY) * yPixelsPerUnit,
+    );
+    if (selected === null || distance < selected.distance) selected = { ...point, distance };
+  }
+
+  if (selected !== null) return selected;
+  const x = xValues[Math.min(low, xValues.length - 1)];
+  const y = values[Math.min(low, values.length - 1)];
+  if (x === undefined || y === undefined || !Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return {
+    x,
+    y,
+    distance: Math.hypot((x - targetX) * xPixelsPerUnit, (y - targetY) * yPixelsPerUnit),
   };
 }

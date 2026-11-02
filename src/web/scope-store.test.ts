@@ -93,6 +93,7 @@ describe("scope store", () => {
       measurementSpecs: [],
       measurementValues: [],
       deepCapture: { kind: DeepCaptureKind.None },
+      pendingHorizontalScale: null,
       sleepPending: false,
       lastError: null,
     });

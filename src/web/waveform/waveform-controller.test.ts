@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { Channel, ChannelUnit, WaveformSource } from "../../shared/scope-types.js";
+import {
+  Channel,
+  ChannelUnit,
+  MathChannel,
+  MathOperator,
+  MathSource,
+  WaveformSource,
+  type MathState,
+} from "../../shared/scope-types.js";
 import { WaveformKind, type DeepCaptureChannelInfo } from "../../shared/websocket-protocol.js";
 import type { DecodedWaveformFrame } from "./waveform-frame-decoder.js";
 import {
@@ -158,5 +166,23 @@ describe("waveform controller", () => {
     expect(controller.getDisplayMode()).toBe(WaveformDisplayMode.Deep);
     expect(controller.getPlotData()[1][1][0]).toBe(1);
     expect(controller.getPlotData()[5][1]).toHaveLength(0);
+  });
+
+  it("maps FFT sample indices to the scope-reported frequency range", () => {
+    const controller = new WaveformController(() => 0);
+    const fft: MathState = {
+      math: MathChannel.Math1,
+      enabled: true,
+      operator: MathOperator.Fft,
+      source1: MathSource.Ch1,
+      source2: null,
+      scale: 30,
+      offset: 73.89162,
+      frequencyRangeHz: { start: 17.6045, end: 1981.485 },
+    };
+    controller.setLiveSources(ALL_ENABLED as never, [fft]);
+    controller.acceptFrame(frame(WaveformSource.Math1, WaveformKind.Live, 1));
+
+    expect(Array.from(controller.getPlotData()[5][0])).toEqual([17.6045, 1981.485]);
   });
 });

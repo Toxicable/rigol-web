@@ -6,6 +6,7 @@ import {
   ChannelUnit,
   EdgeSlope,
   MathChannel,
+  MathFftUnit,
   MathOperator,
   MathSource,
   MeasurementKind,
@@ -196,10 +197,13 @@ export class Dho804Driver {
 
     let scale: number | null;
     let offset: number | null;
+    let fftUnit: MathFftUnit | undefined;
+    let frequencyRangeHz: MathState["frequencyRangeHz"] = null;
     if (isLogicOperator(operator)) {
       scale = null;
       offset = null;
     } else if (operator === MathOperator.Fft) {
+      fftUnit = parseMathFftUnit(await this.queryText(`${prefix}:FFT:UNIT?`, priority));
       scale = parsePositiveNumber(
         await this.queryText(`${prefix}:FFT:SCALe?`, priority),
         "math FFT scale",
@@ -208,6 +212,18 @@ export class Dho804Driver {
         await this.queryText(`${prefix}:FFT:OFFSet?`, priority),
         "math FFT offset",
       );
+      const start = parseFiniteNumber(
+        await this.queryText(`${prefix}:FFT:FREQuency:STARt?`, priority),
+        "math FFT start frequency",
+      );
+      const end = parseFiniteNumber(
+        await this.queryText(`${prefix}:FFT:FREQuency:END?`, priority),
+        "math FFT end frequency",
+      );
+      if (start < 0 || end <= start) {
+        throw new Error(`Invalid math FFT frequency range: ${start} to ${end} Hz`);
+      }
+      frequencyRangeHz = { start, end };
     } else {
       scale = parsePositiveNumber(
         await this.queryText(`${prefix}:SCALe?`, priority),
@@ -219,7 +235,17 @@ export class Dho804Driver {
       );
     }
 
-    return { math, enabled, operator, source1, source2, scale, offset };
+    return {
+      math,
+      enabled,
+      operator,
+      source1,
+      source2,
+      scale,
+      offset,
+      frequencyRangeHz,
+      ...(fftUnit === undefined ? {} : { fftUnit }),
+    };
   }
 
   public async setMathEnabled(
@@ -753,9 +779,9 @@ export class Dho804Driver {
     source: WaveformSource,
     pointCount: number,
   ): Promise<WaveformPreamble> {
+    await this.ensureWaveformSource(transport, source);
     const cached = this.liveWaveformPreambles.get(source);
     if (cached !== undefined && cached.pointCount === pointCount) return cached.preamble;
-    await this.ensureWaveformSource(transport, source);
     const preamble = parseWaveformPreamble(await transport.queryText(":WAVeform:PREamble?"));
     this.liveWaveformPreambles.set(source, { pointCount, preamble });
     return preamble;
@@ -892,6 +918,14 @@ function parseMathOperator(value: string): MathOperator {
     case "BST": return MathOperator.BandStop;
     case "AXB": return MathOperator.AxB;
     default: return failToken("math operator", value);
+  }
+}
+
+function parseMathFftUnit(value: string): MathFftUnit {
+  switch (value.trim().toUpperCase()) {
+    case "VRMS": return MathFftUnit.Vrms;
+    case "DB": return MathFftUnit.Db;
+    default: return failToken("math FFT unit", value);
   }
 }
 

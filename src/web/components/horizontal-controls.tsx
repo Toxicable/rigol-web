@@ -42,7 +42,9 @@ interface HorizontalControlsProps {
 export function HorizontalControls({ scope, actions }: HorizontalControlsProps) {
   const scaleTimer = useRef<number | null>(null);
   const deepCapture = useScopeStore((state) => state.deepCapture);
+  const pendingHorizontalScale = useScopeStore((state) => state.pendingHorizontalScale);
   const isDeep = deepCapture.kind === DeepCaptureKind.Ready;
+  const timebasePending = pendingHorizontalScale !== null;
   const displayedScale = isDeep ? deepCapture.scale : scope.horizontal.scale;
   const displayedPosition = isDeep ? deepCapture.position : scope.horizontal.position;
   const timebaseIndex = nearestTimebaseIndex(displayedScale);
@@ -82,15 +84,16 @@ export function HorizontalControls({ scope, actions }: HorizontalControlsProps) 
         </label>
         <label>
           Time/div
-          <div className="timebase-control">
-            <button type="button" className="step-button" onClick={() => commitTimebaseStep(timebaseIndex - 1)} aria-label="Decrease time per division">−</button>
-            <button type="button" className="step-button" onClick={() => commitTimebaseStep(timebaseIndex + 1)} aria-label="Increase time per division">+</button>
+          <div className="timebase-control" aria-busy={timebasePending}>
+            <button type="button" className="step-button" disabled={timebasePending} onClick={() => commitTimebaseStep(timebaseIndex - 1)} aria-label="Decrease time per division">−</button>
+            <button type="button" className="step-button" disabled={timebasePending} onClick={() => commitTimebaseStep(timebaseIndex + 1)} aria-label="Increase time per division">+</button>
           </div>
           <EditableNumberInput
             value={displayedScale}
             validate={(value) => value > 0}
             ariaLabel="Time per division"
             formatValue={formatSeconds}
+            disabled={timebasePending}
             onCommit={(value) => { void actions.setHorizontalScale(value); }}
           />
           <span>{formatSeconds(displayedScale)}</span>

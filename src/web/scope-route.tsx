@@ -13,6 +13,9 @@ import type { ScopeActions } from "./scope-actions.js";
 import type { ScopeBinding } from "./scope-binding.js";
 import { bindScopeRoute } from "./scope-route-binding.js";
 import { BrowserConnectionKind, useScopeStore } from "./scope-store.js";
+import { isWaveformSourceVisible, useWaveformVisibilityStore } from "./waveform-visibility-store.js";
+import { useWaveformFocusStore } from "./waveform-focus-store.js";
+import { waveformSourceForChannel, waveformSourceForMath } from "../shared/scope-types.js";
 import type { WaveformController } from "./waveform/waveform-controller.js";
 import { WaveformCursorOverlay } from "./waveform/waveform-cursor-overlay.js";
 import {
@@ -52,6 +55,22 @@ export function ScopeRoute({ binding, actions, controller }: ScopeRouteProps) {
       connection.kind === BrowserConnectionKind.ScopeConnected
     ) {
       controller.setLiveSources(connection.scope.channels, connection.scope.math);
+      const enabledSources = [
+        ...connection.scope.channels
+          .filter((channel) => channel.enabled)
+          .map((channel) => waveformSourceForChannel(channel.channel)),
+        ...connection.scope.math
+          .filter((math) => math.enabled)
+          .map((math) => waveformSourceForMath(math.math)),
+      ];
+      const currentFocus = useWaveformFocusStore.getState().focusedSource;
+      if (currentFocus === null || !enabledSources.includes(currentFocus)) {
+        const { hiddenSources, soloSource } = useWaveformVisibilityStore.getState();
+        const firstVisible = enabledSources.find((source) =>
+          isWaveformSourceVisible(source, hiddenSources, soloSource),
+        );
+        useWaveformFocusStore.getState().setFocusedSource(firstVisible ?? enabledSources[0] ?? null);
+      }
     }
   }, [connection, controller, transport.kind]);
 

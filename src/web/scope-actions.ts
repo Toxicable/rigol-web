@@ -152,14 +152,24 @@ export class ScopeActions {
     }
   }
 
-  public setHorizontalScale(value: number): Promise<void> {
+  public async setHorizontalScale(value: number): Promise<void> {
     if (!Number.isFinite(value) || value <= 0) return Promise.resolve();
     const deepCapture = useScopeStore.getState().deepCapture;
     if (deepCapture.kind === DeepCaptureKind.Ready) {
       useScopeStore.getState().setDeepHorizontal(deepCapture.position, value);
-      return Promise.resolve();
+      return;
     }
-    return this.setControl({ kind: ControlKind.HorizontalScale, value });
+    const store = useScopeStore.getState();
+    const token = store.beginHorizontalScale(value);
+    let accepted = false;
+    try {
+      await this.binding.setControl({ kind: ControlKind.HorizontalScale, value });
+      accepted = true;
+    } catch (error) {
+      this.surfaceError(error);
+    } finally {
+      useScopeStore.getState().finishHorizontalScale(token, accepted);
+    }
   }
 
   public setHorizontalPosition(value: number): Promise<void> {

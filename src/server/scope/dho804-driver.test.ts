@@ -8,6 +8,7 @@ import {
   ChannelUnit,
   EdgeSlope,
   MathChannel,
+  MathFftUnit,
   MathOperator,
   MathSource,
   MeasurementKind,
@@ -210,8 +211,11 @@ describe("Dho804Driver", () => {
     respond(transport, ":MATH2:DISPlay?", "1");
     respond(transport, ":MATH2:OPERator?", "FFT");
     respond(transport, ":MATH2:FFT:SOURce?", "MATH1");
+    respond(transport, ":MATH2:FFT:UNIT?", "DB");
     respond(transport, ":MATH2:FFT:SCALe?", "20");
     respond(transport, ":MATH2:FFT:OFFSet?", "-40");
+    respond(transport, ":MATH2:FFT:FREQuency:STARt?", "1.0E+6");
+    respond(transport, ":MATH2:FFT:FREQuency:END?", "9.0E+6");
 
     respond(transport, ":MATH3:DISPlay?", "0");
     respond(transport, ":MATH3:OPERator?", "AND");
@@ -233,6 +237,7 @@ describe("Dho804Driver", () => {
       source2: MathSource.Ch2,
       scale: 0.5,
       offset: 0.1,
+      frequencyRangeHz: null,
     });
     await expect(driver.readMathState(MathChannel.Math2, ScpiPriority.Background)).resolves.toEqual({
       math: MathChannel.Math2,
@@ -242,6 +247,8 @@ describe("Dho804Driver", () => {
       source2: null,
       scale: 20,
       offset: -40,
+      frequencyRangeHz: { start: 1e6, end: 9e6 },
+      fftUnit: MathFftUnit.Db,
     });
     await expect(driver.readMathState(MathChannel.Math3, ScpiPriority.Background)).resolves.toEqual({
       math: MathChannel.Math3,
@@ -251,6 +258,7 @@ describe("Dho804Driver", () => {
       source2: MathSource.Ref2,
       scale: null,
       offset: null,
+      frequencyRangeHz: null,
     });
     await expect(driver.readMathState(MathChannel.Math4, ScpiPriority.Background)).resolves.toEqual({
       math: MathChannel.Math4,
@@ -260,6 +268,7 @@ describe("Dho804Driver", () => {
       source2: null,
       scale: 2,
       offset: -1,
+      frequencyRangeHz: null,
     });
   });
 
@@ -527,6 +536,39 @@ describe("Dho804Driver", () => {
     expect([...second.samples]).toEqual([0, 2]);
     expect(transport.commands.filter((entry) => entry === ":WAVeform:PREamble?")).toHaveLength(1);
     expect(transport.commands.filter((entry) => entry === ":CHANnel1:UNITs?")).toHaveLength(1);
+  });
+
+  it("reselects a live source when its cached preamble is reused", async () => {
+    const transport = new ScriptedTransport();
+    const driver = scriptedDriver(transport);
+    respond(transport, ":CHANnel1:UNITs?", "VOLT");
+    respond(transport, ":CHANnel2:UNITs?", "VOLT");
+    const command = liveCommand(WaveformSource.Ch1);
+    transport.binary.set(command, [
+      Uint8Array.from([10]),
+      Uint8Array.from([11]),
+      Uint8Array.from([12]),
+      Uint8Array.from([13]),
+    ]);
+    respond(
+      transport,
+      ":WAVeform:PREamble?",
+      "0,0,1,1,1e-6,0,0,1,0,10",
+      "0,0,1,1,1e-6,0,0,1,0,10",
+      "0,0,1,1,1e-6,0,0,1,0,10",
+    );
+
+    await readOneLive(driver, WaveformSource.Ch1, 1);
+    await readOneLive(driver, WaveformSource.Ch2, 1);
+    await readOneLive(driver, WaveformSource.Math1, 1);
+    await readOneLive(driver, WaveformSource.Ch1, 1);
+
+    expect(transport.commands.filter((entry) => entry.startsWith(":WAVeform:SOURce "))).toEqual([
+      ":WAVeform:SOURce CHANnel1",
+      ":WAVeform:SOURce CHANnel2",
+      ":WAVeform:SOURce MATH1",
+      ":WAVeform:SOURce CHANnel1",
+    ]);
   });
 
   it("updates cached vertical scale metadata without another preamble query", async () => {

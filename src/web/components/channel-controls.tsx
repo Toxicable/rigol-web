@@ -3,11 +3,13 @@ import type { ChangeEvent } from "react";
 import {
   ChannelBandwidthLimit,
   ChannelCoupling,
+  waveformSourceForChannel,
   type ChannelState,
 } from "../../shared/scope-types.js";
 import { channelUnitSymbol, formatAmplitude } from "../format-value.js";
 import type { ScopeActions } from "../scope-actions.js";
 import { EditableNumberInput } from "./editable-number.js";
+import { TraceVisibilityControls } from "./trace-visibility-controls.js";
 
 const COUPLING_LABELS: Record<ChannelCoupling, string> = {
   [ChannelCoupling.Ac]: "AC",
@@ -54,16 +56,22 @@ export function ChannelControls({ channels, actions }: ChannelControlsProps) {
           const knownProbeRatio = PROBE_RATIOS.some((ratio) => ratio === channel.probeRatio);
           return (
             <div className={`channel-card ch${channel.channel}${channel.enabled ? "" : " channel-card-disabled"}`} key={channel.channel}>
-              <label className="channel-heading">
-                <input
-                  type="checkbox"
-                  checked={channel.enabled}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                    void actions.setChannelEnabled(channel.channel, event.target.checked);
-                  }}
+              <div className="channel-heading channel-heading-row">
+                <label className="channel-enable-control">
+                  <input
+                    type="checkbox"
+                    checked={channel.enabled}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                      void actions.setChannelEnabled(channel.channel, event.target.checked);
+                    }}
+                  />
+                  CH{channel.channel}
+                </label>
+                <TraceVisibilityControls
+                  source={waveformSourceForChannel(channel.channel)}
+                  enabled={channel.enabled}
                 />
-                CH{channel.channel}
-              </label>
+              </div>
               <label>
                 Scale
                 <span className="scale-step-control">

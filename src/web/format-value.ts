@@ -99,3 +99,24 @@ export function formatAmplitude(value: number, unit: ChannelUnit): string {
 export function formatStableAmplitude(value: number, unit: ChannelUnit): string {
   return formatSi(value, channelUnitSymbol(unit), true);
 }
+
+function formatUnscaled(value: number, unit: string, stable: boolean): string {
+  const formatted = !Number.isFinite(value)
+    ? String(value)
+    : stable
+      ? value.toFixed(STABLE_DECIMAL_PLACES)
+      : String(Number(value.toPrecision(Math.abs(value) >= 100 ? 3 : 4)));
+  return `${formatted} ${unit}`.trim();
+}
+
+export function formatAmplitudeWithUnit(value: number, unit: string): string {
+  return unit === "dBV" || unit === "unit"
+    ? formatUnscaled(value, unit, false)
+    : formatSi(value, unit);
+}
+
+export function formatStableAmplitudeWithUnit(value: number, unit: string): string {
+  return unit === "dBV" || unit === "unit"
+    ? formatUnscaled(value, unit, true)
+    : formatSi(value, unit, true);
+}

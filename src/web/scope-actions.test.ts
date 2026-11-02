@@ -135,6 +135,7 @@ beforeEach(() => {
     measurementSpecs: [],
     measurementValues: [],
     deepCapture: { kind: DeepCaptureKind.None },
+    pendingHorizontalScale: null,
     sleepPending: false,
     lastError: null,
   });
@@ -180,6 +181,53 @@ describe("ScopeActions", () => {
     await actions.setTriggerLevel(1.25);
 
     expect(useScopeStore.getState().lastError).toBe("scope write failed");
+  });
+
+  it("holds a pending timebase value until the server confirms it", async () => {
+    const operation = deferred();
+    const binding = fakeBinding({ setControl: vi.fn(() => operation.promise) });
+    const actions = new ScopeActions(binding);
+
+    const change = actions.setHorizontalScale(0.002);
+    expect(useScopeStore.getState().pendingHorizontalScale).not.toBeNull();
+
+    const staleState = scope();
+    useScopeStore.getState().replaceScope(staleState);
+    let connection = useScopeStore.getState().connection;
+    if (connection.kind !== BrowserConnectionKind.ScopeConnected) {
+      throw new Error("expected connected scope");
+    }
+    expect(connection.scope.horizontal.scale).toBe(0.002);
+
+    const confirmedState = scope();
+    confirmedState.horizontal.scale = 0.002;
+    useScopeStore.getState().replaceScope(confirmedState);
+    operation.resolve();
+    await change;
+
+    connection = useScopeStore.getState().connection;
+    if (connection.kind !== BrowserConnectionKind.ScopeConnected) {
+      throw new Error("expected connected scope");
+    }
+    expect(connection.scope.horizontal.scale).toBe(0.002);
+    expect(useScopeStore.getState().pendingHorizontalScale).toBeNull();
+  });
+
+  it("restores the confirmed timebase when the server rejects a change", async () => {
+    const binding = fakeBinding({
+      setControl: vi.fn(async () => { throw new Error("timebase rejected"); }),
+    });
+    const actions = new ScopeActions(binding);
+
+    await actions.setHorizontalScale(0.002);
+
+    const connection = useScopeStore.getState().connection;
+    if (connection.kind !== BrowserConnectionKind.ScopeConnected) {
+      throw new Error("expected connected scope");
+    }
+    expect(connection.scope.horizontal.scale).toBe(0.001);
+    expect(useScopeStore.getState().pendingHorizontalScale).toBeNull();
+    expect(useScopeStore.getState().lastError).toBe("timebase rejected");
   });
 
   it("resets an unused math slot to deterministic disabled defaults", async () => {

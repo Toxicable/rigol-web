@@ -9,22 +9,26 @@ import {
 } from "react";
 
 import {
+  MathOperator,
   WaveformSource,
   channelForWaveformSource,
   mathForWaveformSource,
   waveformSourceUnit,
+  waveformSourceUnitLabel,
   type ScopeState,
 } from "../../shared/scope-types.js";
 import {
-  formatStableAmplitude,
+  channelUnitSymbol,
+  formatStableAmplitudeWithUnit,
   formatStableHertz,
   formatStableSeconds,
 } from "../format-value.js";
 import { DeepCaptureKind, useScopeStore } from "../scope-store.js";
+import { useWaveformFocusStore } from "../waveform-focus-store.js";
 import { waveformSourceAccent, waveformSourceLabel } from "../waveform-source-style.js";
 import { WaveformDisplayMode, type WaveformController } from "./waveform-controller.js";
 import {
-  nearestWaveformTracePoint,
+  nearestWaveformSeriesPoint,
   type WaveformCursorAction,
   type WaveformCursorMarker,
   type WaveformCursorSlot,
@@ -57,18 +61,9 @@ interface CursorCandidate extends CursorPosition {
 interface DraggedCursor {
   slot: WaveformCursorSlot;
   pointerId: number;
+  source: WaveformSource;
 }
 
-const ALL_SOURCES = [
-  WaveformSource.Ch1,
-  WaveformSource.Ch2,
-  WaveformSource.Ch3,
-  WaveformSource.Ch4,
-  WaveformSource.Math1,
-  WaveformSource.Math2,
-  WaveformSource.Math3,
-  WaveformSource.Math4,
-] as const;
 const SNAP_RADIUS_PX = 96;
 
 function sourceDomain(scope: ScopeState, source: WaveformSource): { min: number; max: number } | null {
@@ -93,6 +88,26 @@ function sourceDomain(scope: ScopeState, source: WaveformSource): { min: number;
     min: -state.offset - 4 * state.scale,
     max: -state.offset + 4 * state.scale,
   };
+}
+
+function isFrequencyDomainSource(scope: ScopeState, source: WaveformSource): boolean {
+  const math = mathForWaveformSource(source);
+  return math !== null && scope.math[math - 1]?.operator === MathOperator.Fft;
+}
+
+function sourceXRange(
+  scope: ScopeState,
+  source: WaveformSource,
+  timeRange: { min: number; max: number },
+): { min: number; max: number } {
+  const math = mathForWaveformSource(source);
+  if (math !== null && isFrequencyDomainSource(scope, source)) {
+    const range = scope.math[math - 1]?.frequencyRangeHz;
+    if (range !== null && range !== undefined && range.end > range.start) {
+      return { min: range.start, max: range.end };
+    }
+  }
+  return timeRange;
 }
 
 function readPlotRect(overlay: HTMLDivElement): PlotRect | null {
@@ -127,6 +142,7 @@ export function WaveformCursorOverlay({
   const [plotRect, setPlotRect] = useState<PlotRect | null>(null);
   const [hover, setHover] = useState<CursorCandidate | null>(null);
   const deepCapture = useScopeStore((state) => state.deepCapture);
+  const focusedSource = useWaveformFocusStore((state) => state.focusedSource);
   const isDeep = deepCapture.kind === DeepCaptureKind.Ready &&
     controller.getDisplayMode() === WaveformDisplayMode.Deep;
   const xMin = isDeep && deepCapture.kind === DeepCaptureKind.Ready
@@ -158,59 +174,62 @@ export function WaveformCursorOverlay({
   }, [cursorState.armed]);
 
   const positionForMarker = (marker: WaveformCursorMarker): CursorPosition | null => {
-    if (plotRect === null || !(xMax > xMin)) return null;
+    if (plotRect === null) return null;
+    const xRange = sourceXRange(scope, marker.source, { min: xMin, max: xMax });
+    if (!(xRange.max > xRange.min)) return null;
     const domain = sourceDomain(scope, marker.source);
     if (domain === null || !(domain.max > domain.min)) return null;
     const position = {
-      left: plotRect.left + ((marker.x - xMin) / (xMax - xMin)) * plotRect.width,
+      left: plotRect.left + ((marker.x - xRange.min) / (xRange.max - xRange.min)) * plotRect.width,
       top: plotRect.top + ((domain.max - marker.y) / (domain.max - domain.min)) * plotRect.height,
     };
     return inPlot(position, plotRect) ? position : null;
   };
 
-  const candidateForPointer = (clientX: number, clientY: number): CursorCandidate | null => {
+  const candidateForPointer = (
+    clientX: number,
+    clientY: number,
+    sourceOverride?: WaveformSource,
+  ): CursorCandidate | null => {
     const overlay = overlayRef.current;
-    if (overlay === null || plotRect === null || !(xMax > xMin)) return null;
+    const source = sourceOverride ?? focusedSource;
+    if (overlay === null || plotRect === null || source === null) return null;
+    const xRange = sourceXRange(scope, source, { min: xMin, max: xMax });
+    if (!(xRange.max > xRange.min)) return null;
     const bounds = overlay.getBoundingClientRect();
     const pointer = { left: clientX - bounds.left, top: clientY - bounds.top };
     if (!inPlot(pointer, plotRect)) return null;
-    const targetX = xMin + ((pointer.left - plotRect.left) / plotRect.width) * (xMax - xMin);
-
-    let selected: CursorCandidate | null = null;
-    let selectedDistance = Number.POSITIVE_INFINITY;
-    for (const source of ALL_SOURCES) {
-      const frame = controller.getFrame(source);
-      const domain = sourceDomain(scope, source);
-      if (frame === undefined || domain === null || !(domain.max > domain.min)) continue;
-      const targetY = domain.max - ((pointer.top - plotRect.top) / plotRect.height) * (domain.max - domain.min);
-      const point = nearestWaveformTracePoint(
-        frame,
-        targetX,
-        targetY,
-        plotRect.width / (xMax - xMin),
-        plotRect.height / (domain.max - domain.min),
-      );
-      if (point === null) continue;
-      const position = {
-        left: plotRect.left + ((point.x - xMin) / (xMax - xMin)) * plotRect.width,
-        top: plotRect.top + ((domain.max - point.y) / (domain.max - domain.min)) * plotRect.height,
-      };
-      if (!inPlot(position, plotRect)) continue;
-      const distance = point.distance;
-      if (distance < selectedDistance) {
-        selectedDistance = distance;
-        selected = {
-          ...position,
-          marker: {
-            source,
-            unit: waveformSourceUnit(scope, source),
-            x: point.x,
-            y: point.y,
-          },
-        };
-      }
-    }
-    return selectedDistance <= SNAP_RADIUS_PX ? selected : null;
+    const frame = controller.getFrame(source);
+    const domain = sourceDomain(scope, source);
+    const [xValues, yValues] = controller.getPlotData()[source] ?? [new Float64Array(0), new Float32Array(0)];
+    if (frame === undefined || domain === null || !(domain.max > domain.min)) return null;
+    const targetX = xRange.min + ((pointer.left - plotRect.left) / plotRect.width) * (xRange.max - xRange.min);
+    const targetY = domain.max - ((pointer.top - plotRect.top) / plotRect.height) * (domain.max - domain.min);
+    const point = nearestWaveformSeriesPoint(
+      xValues,
+      yValues,
+      targetX,
+      targetY,
+      plotRect.width / (xRange.max - xRange.min),
+      plotRect.height / (domain.max - domain.min),
+    );
+    if (point === null) return null;
+    const position = {
+      left: plotRect.left + ((point.x - xRange.min) / (xRange.max - xRange.min)) * plotRect.width,
+      top: plotRect.top + ((domain.max - point.y) / (domain.max - domain.min)) * plotRect.height,
+    };
+    if (!inPlot(position, plotRect) || point.distance > SNAP_RADIUS_PX) return null;
+    return {
+      ...position,
+      marker: {
+        source,
+        unit: waveformSourceUnit(scope, source),
+        unitLabel: waveformSourceUnitLabel(scope, source),
+        xUnit: isFrequencyDomainSource(scope, source) ? "Hz" : "s",
+        x: point.x,
+        y: point.y,
+      },
+    };
   };
 
   const handleCaptureMove = (event: PointerEvent<HTMLDivElement>) => {
@@ -233,14 +252,17 @@ export function WaveformCursorOverlay({
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
-    dragRef.current = { slot, pointerId: event.pointerId };
+    const marker = slot === "A" ? cursorState.markerA : cursorState.markerB;
+    const source = marker?.source ?? focusedSource;
+    if (source === null) return;
+    dragRef.current = { slot, pointerId: event.pointerId, source };
     setHover(null);
   };
 
   const moveMarker = (event: PointerEvent<HTMLButtonElement>) => {
     const drag = dragRef.current;
     if (drag === null || drag.pointerId !== event.pointerId) return;
-    const candidate = candidateForPointer(event.clientX, event.clientY);
+    const candidate = candidateForPointer(event.clientX, event.clientY, drag.source);
     if (candidate === null) return;
     dispatchCursor({ type: "move", slot: drag.slot, marker: candidate.marker });
   };
@@ -356,8 +378,11 @@ function CursorReadout({
 }) {
   const a = state.markerA;
   const b = state.markerB;
-  const deltaTime = a !== null && b !== null ? b.x - a.x : null;
-  const deltaAmplitude = a !== null && b !== null && a.unit === b.unit ? b.y - a.y : null;
+  const deltaX = a !== null && b !== null && a.xUnit === b.xUnit ? b.x - a.x : null;
+  const xUnit = a?.xUnit ?? b?.xUnit ?? "s";
+  const unitA = a === null ? null : a.unitLabel ?? channelUnitSymbol(a.unit);
+  const unitB = b === null ? null : b.unitLabel ?? channelUnitSymbol(b.unit);
+  const deltaAmplitude = a !== null && b !== null && unitA === unitB ? b.y - a.y : null;
   return (
     <div className="waveform-cursor-readout">
       <div className="waveform-cursor-readout-heading">
@@ -366,18 +391,22 @@ function CursorReadout({
       </div>
       {a !== null ? <CursorReadoutRow slot="A" marker={a} /> : null}
       {b !== null ? <CursorReadoutRow slot="B" marker={b} /> : null}
-      {deltaTime !== null ? (
+      {deltaX !== null ? (
         <div className="waveform-cursor-delta">
-          <span>Δt {formatStableSeconds(deltaTime)}</span>
-          {deltaTime !== 0 ? <span>1/Δt {formatStableHertz(1 / Math.abs(deltaTime))}</span> : null}
+          <span>{xUnit === "Hz" ? "Δf" : "Δt"} {xUnit === "Hz" ? formatStableHertz(deltaX) : formatStableSeconds(deltaX)}</span>
+          {deltaX !== 0 ? (
+            <span>
+              {xUnit === "Hz" ? "1/Δf" : "1/Δt"} {xUnit === "Hz" ? formatStableSeconds(1 / Math.abs(deltaX)) : formatStableHertz(1 / Math.abs(deltaX))}
+            </span>
+          ) : null}
           {deltaAmplitude !== null && a !== null ? (
-            <span>Δy {formatStableAmplitude(deltaAmplitude, a.unit)}</span>
+            <span>Δy {formatStableAmplitudeWithUnit(deltaAmplitude, unitA ?? "unit")}</span>
           ) : null}
         </div>
       ) : null}
       {state.armed && hover !== null ? (
         <div className="waveform-cursor-hover">
-          {waveformSourceLabel(hover.source)} {formatStableSeconds(hover.x)} {formatStableAmplitude(hover.y, hover.unit)}
+          {waveformSourceLabel(hover.source)} {hover.xUnit === "Hz" ? formatStableHertz(hover.x) : formatStableSeconds(hover.x)} {formatStableAmplitudeWithUnit(hover.y, hover.unitLabel ?? channelUnitSymbol(hover.unit))}
         </div>
       ) : null}
       {state.armed && a === null && b === null && hover === null ? (
@@ -399,8 +428,8 @@ function CursorReadoutRow({
     <div className="waveform-cursor-readout-row" style={style}>
       <strong>{slot}</strong>
       <span className="waveform-cursor-source">{waveformSourceLabel(marker.source)}</span>
-      <span>{formatStableSeconds(marker.x)}</span>
-      <span>{formatStableAmplitude(marker.y, marker.unit)}</span>
+      <span>{marker.xUnit === "Hz" ? formatStableHertz(marker.x) : formatStableSeconds(marker.x)}</span>
+      <span>{formatStableAmplitudeWithUnit(marker.y, marker.unitLabel ?? channelUnitSymbol(marker.unit))}</span>
     </div>
   );
 }

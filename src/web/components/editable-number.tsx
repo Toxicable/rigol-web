@@ -43,6 +43,7 @@ interface EditableNumberInputProps {
   validate?: (value: number) => boolean;
   ariaLabel?: string;
   formatValue?: (value: number) => string;
+  disabled?: boolean;
 }
 
 export function EditableNumberInput({
@@ -51,6 +52,7 @@ export function EditableNumberInput({
   validate,
   ariaLabel,
   formatValue = formatEditableNumber,
+  disabled = false,
 }: EditableNumberInputProps) {
   const [draft, setDraft] = useState(formatEditableNumber(value));
   const [editing, setEditing] = useState(false);
@@ -102,6 +104,7 @@ export function EditableNumberInput({
       inputMode="decimal"
       value={draft}
       aria-label={ariaLabel}
+      disabled={disabled}
       onFocus={() => setEditing(true)}
       onChange={(event) => setDraft(event.currentTarget.value)}
       onBlur={commit}

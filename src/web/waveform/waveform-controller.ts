@@ -1,5 +1,6 @@
 import {
   Channel,
+  MathOperator,
   WaveformSource,
   channelForWaveformSource,
   waveformSourceForChannel,
@@ -60,12 +61,23 @@ function isNewerSequence(next: number, current: number): boolean {
   return difference !== 0 && difference < 0x80000000;
 }
 
-function xValues(frame: DecodedWaveformFrame): Float64Array {
+function xValues(
+  frame: DecodedWaveformFrame,
+  frequencyRangeHz?: { start: number; end: number },
+): Float64Array {
   const result = new Float64Array(frame.sampleIndices.length);
+  const firstSampleIndex = frame.sampleIndices[0] ?? 0;
+  const lastSampleIndex = frame.sampleIndices[frame.sampleIndices.length - 1] ?? firstSampleIndex;
   for (let index = 0; index < frame.sampleIndices.length; index += 1) {
     const sampleIndex = frame.sampleIndices[index];
     if (sampleIndex === undefined) throw new Error("Missing waveform sample index");
-    result[index] = frame.xOrigin + (sampleIndex - frame.xReference) * frame.xIncrement;
+    if (frequencyRangeHz !== undefined) {
+      const sampleSpan = lastSampleIndex - firstSampleIndex;
+      const fraction = sampleSpan > 0 ? (sampleIndex - firstSampleIndex) / sampleSpan : 0;
+      result[index] = frequencyRangeHz.start + fraction * (frequencyRangeHz.end - frequencyRangeHz.start);
+    } else {
+      result[index] = frame.xOrigin + (sampleIndex - frame.xReference) * frame.xIncrement;
+    }
   }
   return result;
 }
@@ -93,6 +105,7 @@ export function timeRangeToSampleRange(
 
 export class WaveformController {
   private readonly liveFrames = new Map<WaveformSource, DecodedWaveformFrame>();
+  private readonly liveFrequencyRangesHz = new Map<WaveformSource, { start: number; end: number }>();
   private readonly enabledLiveSources = new Set<WaveformSource>(ALL_SOURCES);
   private readonly deepFrames = new Map<Channel, DecodedWaveformFrame>();
   private readonly desiredViewports = new Map<Channel, DesiredViewport>();
@@ -125,6 +138,19 @@ export class WaveformController {
     }
     for (const mathState of math) {
       if (mathState.enabled) nextEnabled.add(waveformSourceForMath(mathState.math));
+    }
+
+    this.liveFrequencyRangesHz.clear();
+    for (const mathState of math) {
+      if (
+        mathState.operator === MathOperator.Fft &&
+        mathState.frequencyRangeHz !== null
+      ) {
+        this.liveFrequencyRangesHz.set(
+          waveformSourceForMath(mathState.math),
+          mathState.frequencyRangeHz,
+        );
+      }
     }
 
     let dataChanged = false;
@@ -253,7 +279,10 @@ export class WaveformController {
   public getPlotData(): WaveformPlotData {
     const liveSeries = (source: WaveformSource): PlotSeriesData => {
       const frame = this.liveFrames.get(source);
-      return frame === undefined ? emptySeries() : [xValues(frame), frame.values];
+      const frequencyRangeHz = this.liveFrequencyRangesHz.get(source);
+      return frame === undefined
+        ? emptySeries()
+        : [xValues(frame, frequencyRangeHz), frame.values];
     };
     const deepSeries = (channel: Channel): PlotSeriesData => {
       const frame = this.deepFrames.get(channel);

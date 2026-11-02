@@ -60,6 +60,12 @@ export interface ScopeStoreState {
   measurementSpecs: MeasurementSpec[];
   measurementValues: MeasurementValue[];
   deepCapture: DeepCaptureState;
+  pendingHorizontalScale: {
+    token: number;
+    value: number;
+    previousScale: number;
+    reportedScale: number;
+  } | null;
   sleepPending: boolean;
   lastError: string | null;
   setAwaitingInstrument(): void;
@@ -67,6 +73,8 @@ export interface ScopeStoreState {
   setScopeConnected(info: ScopeInfo, scope: ScopeState): void;
   replaceScope(scope: ScopeState): void;
   applyOptimisticControl(control: ControlChange): void;
+  beginHorizontalScale(value: number): number;
+  finishHorizontalScale(token: number, accepted: boolean): void;
   setMeasurementSource(source: MeasurementSource): void;
   setMeasurementSpecs(specs: MeasurementSpec[]): void;
   setMeasurementValues(values: MeasurementValue[]): void;
@@ -165,6 +173,7 @@ export function applyControlToScope(scope: ScopeState, control: ControlChange): 
 }
 
 const noDeepCapture = (): DeepCaptureState => ({ kind: DeepCaptureKind.None });
+let nextHorizontalScaleToken = 1;
 
 export const useScopeStore = create<ScopeStoreState>((set) => ({
   connection: { kind: BrowserConnectionKind.AwaitingInstrument },
@@ -172,13 +181,61 @@ export const useScopeStore = create<ScopeStoreState>((set) => ({
   measurementSpecs: [],
   measurementValues: [],
   deepCapture: noDeepCapture(),
+  pendingHorizontalScale: null,
   sleepPending: false,
   lastError: null,
-  setAwaitingInstrument: () => set({ connection: { kind: BrowserConnectionKind.AwaitingInstrument }, deepCapture: noDeepCapture(), measurementValues: [], sleepPending: false }),
-  setScopeDisconnected: (reason) => set({ connection: { kind: BrowserConnectionKind.ScopeDisconnected, reason }, deepCapture: noDeepCapture(), measurementValues: [], sleepPending: false }),
-  setScopeConnected: (info, scope) => set({ connection: { kind: BrowserConnectionKind.ScopeConnected, info, scope }, deepCapture: noDeepCapture(), measurementValues: [], sleepPending: false, lastError: null }),
-  replaceScope: (scope) => set((state) => state.connection.kind === BrowserConnectionKind.ScopeConnected ? { connection: { ...state.connection, scope } } : state),
+  setAwaitingInstrument: () => set({ connection: { kind: BrowserConnectionKind.AwaitingInstrument }, deepCapture: noDeepCapture(), pendingHorizontalScale: null, measurementValues: [], sleepPending: false }),
+  setScopeDisconnected: (reason) => set({ connection: { kind: BrowserConnectionKind.ScopeDisconnected, reason }, deepCapture: noDeepCapture(), pendingHorizontalScale: null, measurementValues: [], sleepPending: false }),
+  setScopeConnected: (info, scope) => set({ connection: { kind: BrowserConnectionKind.ScopeConnected, info, scope }, deepCapture: noDeepCapture(), pendingHorizontalScale: null, measurementValues: [], sleepPending: false, lastError: null }),
+  replaceScope: (scope) => set((state) => {
+    if (state.connection.kind !== BrowserConnectionKind.ScopeConnected) return state;
+    const pending = state.pendingHorizontalScale;
+    if (pending === null) return { connection: { ...state.connection, scope } };
+    return {
+      connection: {
+        ...state.connection,
+        scope: { ...scope, horizontal: { ...scope.horizontal, scale: pending.value } },
+      },
+      pendingHorizontalScale: { ...pending, reportedScale: scope.horizontal.scale },
+    };
+  }),
   applyOptimisticControl: (control) => set((state) => state.connection.kind === BrowserConnectionKind.ScopeConnected ? { connection: { ...state.connection, scope: applyControlToScope(state.connection.scope, control) } } : state),
+  beginHorizontalScale: (value) => {
+    const token = nextHorizontalScaleToken++;
+    set((state) => {
+      if (state.connection.kind !== BrowserConnectionKind.ScopeConnected) return state;
+      const previousScale = state.pendingHorizontalScale?.previousScale ?? state.connection.scope.horizontal.scale;
+      const reportedScale = state.pendingHorizontalScale?.reportedScale ?? previousScale;
+      return {
+        pendingHorizontalScale: { token, value, previousScale, reportedScale },
+        connection: {
+          ...state.connection,
+          scope: { ...state.connection.scope, horizontal: { ...state.connection.scope.horizontal, scale: value } },
+        },
+      };
+    });
+    return token;
+  },
+  finishHorizontalScale: (token, accepted) => set((state) => {
+    const pending = state.pendingHorizontalScale;
+    if (pending === null || pending.token !== token) return state;
+    if (state.connection.kind !== BrowserConnectionKind.ScopeConnected) {
+      return { pendingHorizontalScale: null };
+    }
+    return {
+      pendingHorizontalScale: null,
+      connection: {
+        ...state.connection,
+        scope: {
+          ...state.connection.scope,
+          horizontal: {
+            ...state.connection.scope.horizontal,
+            scale: accepted ? pending.reportedScale : pending.previousScale,
+          },
+        },
+      },
+    };
+  }),
   setMeasurementSource: (measurementSource) => set({ measurementSource, measurementValues: [] }),
   setMeasurementSpecs: (measurementSpecs) => set({ measurementSpecs }),
   setMeasurementValues: (measurementValues) => set((state) => state.measurementSource === MeasurementSource.Scope ? { measurementValues } : state),

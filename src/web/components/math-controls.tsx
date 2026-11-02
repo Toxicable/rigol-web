@@ -4,10 +4,12 @@ import {
   MathOperator,
   MathSource,
   isArithmeticMathOperator,
+  waveformSourceForMath,
   type MathState,
 } from "../../shared/scope-types.js";
 import { mathDependents, type ScopeActions } from "../scope-actions.js";
 import { mathAccent } from "../waveform-source-style.js";
+import { TraceVisibilityControls } from "./trace-visibility-controls.js";
 
 interface MathControlsProps {
   math: readonly MathState[];
@@ -86,14 +88,20 @@ export function MathControls({ math, actions }: MathControlsProps) {
             <div className={`channel-card${state.enabled ? "" : " math-card-disabled"}`} style={style} key={state.math}>
               <div className="channel-heading">
                 <strong>MATH{state.math}</strong>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={state.enabled}
-                    onChange={(event) => void actions.setMathEnabled(state.math, event.target.checked)}
+                <div className="math-heading-actions">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={state.enabled}
+                      onChange={(event) => void actions.setMathEnabled(state.math, event.target.checked)}
+                    />
+                    On
+                  </label>
+                  <TraceVisibilityControls
+                    source={waveformSourceForMath(state.math)}
+                    enabled={state.enabled}
                   />
-                  On
-                </label>
+                </div>
               </div>
               <label>
                 Operation

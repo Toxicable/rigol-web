@@ -2,12 +2,12 @@ import type { CSSProperties } from "react";
 
 import {
   MeasurementKind,
-  waveformSourceUnit,
+  waveformSourceUnitLabel,
   type ScopeState,
   type WaveformSource,
 } from "../../shared/scope-types.js";
 import {
-  formatStableAmplitude,
+  formatStableAmplitudeWithUnit,
   formatStableHertz,
   formatStablePercent,
   formatStableSeconds,
@@ -73,7 +73,7 @@ function formatMeasurement(
   if (kind === MeasurementKind.Frequency) return formatStableHertz(value);
   if (isTimeMeasurement(kind)) return formatStableSeconds(value);
   if (isPercentMeasurement(kind)) return formatStablePercent(value);
-  return formatStableAmplitude(value, waveformSourceUnit(scope, source));
+  return formatStableAmplitudeWithUnit(value, waveformSourceUnitLabel(scope, source));
 }
 
 export function MeasurementOverlay({ scope, actions }: MeasurementOverlayProps) {

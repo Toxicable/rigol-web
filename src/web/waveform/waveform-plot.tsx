@@ -5,15 +5,19 @@ import "uplot/dist/uPlot.min.css";
 import {
   Channel,
   MathChannel,
+  MathOperator,
   TimebaseMode,
   TriggerType,
+  WaveformSource,
+  waveformSourceForChannel,
   waveformSourceForMath,
   waveformSourceUnit,
+  waveformSourceUnitLabel,
   type ChannelState,
   type MathState,
   type ScopeState,
 } from "../../shared/scope-types.js";
-import { formatAmplitude } from "../format-value.js";
+import { formatAmplitude, formatAmplitudeWithUnit } from "../format-value.js";
 import {
   channelOffsetFromMarkerDrag,
   horizontalPositionFromDrag,
@@ -23,10 +27,20 @@ import type { ScopeActions } from "../scope-actions.js";
 import { DeepCaptureKind, useScopeStore } from "../scope-store.js";
 import { mathAccent } from "../waveform-source-style.js";
 import {
+  isWaveformSourceVisible,
+  useWaveformVisibilityStore,
+} from "../waveform-visibility-store.js";
+import {
   divisionSplits,
   formatTimeAxisValues,
   timeAxisUnit,
 } from "./waveform-axis.js";
+import {
+  formatFrequencyAxisValues,
+  mathFrequencyScaleOptions,
+  mathFrequencyScaleName,
+  mathWaveformXScale,
+} from "./waveform-x-axis.js";
 import { WaveformDisplayMode, type WaveformController } from "./waveform-controller.js";
 import { drawScopeGraticule } from "./waveform-graticule.js";
 import {
@@ -131,6 +145,22 @@ function mathScaleName(math: MathChannel): string {
   return `math${math}`;
 }
 
+function mathFrequencyAxis(math: MathState): uPlot.Axis {
+  const stroke = mathAccent(math.math);
+  return {
+    scale: mathFrequencyScaleName(math.math),
+    side: 0,
+    stroke,
+    font: AXIS_FONT,
+    gap: 4,
+    size: 28,
+    space: 70,
+    grid: { show: false },
+    ticks: { show: true, stroke, size: 5 },
+    values: (_plot, ticks) => formatFrequencyAxisValues(ticks),
+  };
+}
+
 function channelAxis(channel: ChannelState): uPlot.Axis {
   const stroke = CHANNEL_STROKES[channel.channel];
   return {
@@ -159,7 +189,7 @@ function mathAxis(scope: ScopeState, math: MathState): uPlot.Axis | null {
     return null;
   }
   const stroke = mathAccent(math.math);
-  const unit = waveformSourceUnit(scope, waveformSourceForMath(math.math));
+  const unit = waveformSourceUnitLabel(scope, waveformSourceForMath(math.math));
   return {
     scale: mathScaleName(math.math),
     side: 1,
@@ -177,7 +207,7 @@ function mathAxis(scope: ScopeState, math: MathState): uPlot.Axis | null {
       stroke,
       size: 5,
     },
-    values: (_plot, ticks) => ticks.map((value) => formatAmplitude(value, unit)),
+    values: (_plot, ticks) => ticks.map((value) => formatAmplitudeWithUnit(value, unit)),
   };
 }
 
@@ -326,6 +356,8 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
   const [draggingTrigger, setDraggingTrigger] = useState(false);
   const interactionLayerRef = useRef<HTMLDivElement>(null);
   const deepCapture = useScopeStore((state) => state.deepCapture);
+  const hiddenSources = useWaveformVisibilityStore((state) => state.hiddenSources);
+  const soloSource = useWaveformVisibilityStore((state) => state.soloSource);
   const isDeep =
     deepCapture.kind === DeepCaptureKind.Ready &&
     controller.getDisplayMode() === WaveformDisplayMode.Deep;
@@ -334,14 +366,33 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
       ? deepCapture.scale
       : scope.horizontal.scale;
   const horizontalUnit = timeAxisUnit(horizontalScale);
+  const isTraceVisible = (source: WaveformSource) =>
+    isWaveformSourceVisible(source, hiddenSources, soloSource);
   const axisConfigSignature = [
     horizontalUnit.symbol,
     ...scope.channels.map(
-      (channel) => `${channel.channel}:${channel.enabled ? 1 : 0}:${channel.scale}:${channel.unit}`,
+      (channel) => [
+        channel.channel,
+        channel.enabled ? 1 : 0,
+        isTraceVisible(waveformSourceForChannel(channel.channel)) ? 1 : 0,
+        channel.scale,
+        channel.unit,
+      ].join(":"),
     ),
     ...scope.math.map((math) => {
       const unit = waveformSourceUnit(scope, waveformSourceForMath(math.math));
-      return `m${math.math}:${math.enabled ? 1 : 0}:${math.scale ?? "none"}:${math.offset ?? "none"}:${unit}`;
+      const range = math.frequencyRangeHz;
+      return [
+        `m${math.math}`,
+        math.enabled ? 1 : 0,
+        isTraceVisible(waveformSourceForMath(math.math)) ? 1 : 0,
+        math.operator,
+        math.scale ?? "none",
+        math.offset ?? "none",
+        range?.start ?? "none",
+        range?.end ?? "none",
+        unit,
+      ].join(":");
     }),
   ].join("|");
 
@@ -353,11 +404,28 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
 
     const width = Math.max(1, host.clientWidth);
     const height = Math.max(1, host.clientHeight);
-    const enabledChannels = scope.channels.filter((channel) => channel.enabled);
+    const enabledChannels = scope.channels.filter(
+      (channel) => channel.enabled && isTraceVisible(waveformSourceForChannel(channel.channel)),
+    );
     const enabledMathAxes = scope.math
-      .filter((math) => math.enabled)
+      .filter((math) => math.enabled && isTraceVisible(waveformSourceForMath(math.math)))
       .map((math) => mathAxis(scope, math))
       .filter((axis): axis is uPlot.Axis => axis !== null);
+    const enabledMathFrequencyAxes = scope.math
+      .filter((math) =>
+        math.enabled &&
+        math.operator === MathOperator.Fft &&
+        isTraceVisible(waveformSourceForMath(math.math)),
+      )
+      .map((math) => mathFrequencyAxis(math));
+    const mathFrequencyScales = Object.fromEntries(
+      scope.math
+        .filter((math) => math.operator === MathOperator.Fft)
+        .map((math) => [
+          mathFrequencyScaleName(math.math),
+          mathFrequencyScaleOptions(math),
+        ]),
+    );
     const options = {
       width,
       height,
@@ -377,9 +445,13 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
         math2: fixedScale(mathScaleBounds(scope.math[1]!)),
         math3: fixedScale(mathScaleBounds(scope.math[2]!)),
         math4: fixedScale(mathScaleBounds(scope.math[3]!)),
+        ...mathFrequencyScales,
       },
       axes: [
+        ...enabledMathFrequencyAxes,
         {
+          scale: "x",
+          side: 2,
           stroke: "#d5e0ea",
           font: "12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
           grid: { show: false },
@@ -397,6 +469,7 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
         {},
         {
           label: "CH1",
+          show: isTraceVisible(WaveformSource.Ch1),
           stroke: CHANNEL_STROKES[Channel.Ch1],
           width: 1.4,
           points: { show: false },
@@ -404,6 +477,7 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
         },
         {
           label: "CH2",
+          show: isTraceVisible(WaveformSource.Ch2),
           stroke: CHANNEL_STROKES[Channel.Ch2],
           width: 1.4,
           points: { show: false },
@@ -411,6 +485,7 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
         },
         {
           label: "CH3",
+          show: isTraceVisible(WaveformSource.Ch3),
           stroke: CHANNEL_STROKES[Channel.Ch3],
           width: 1.4,
           points: { show: false },
@@ -418,6 +493,7 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
         },
         {
           label: "CH4",
+          show: isTraceVisible(WaveformSource.Ch4),
           stroke: CHANNEL_STROKES[Channel.Ch4],
           width: 1.4,
           points: { show: false },
@@ -425,10 +501,14 @@ export function WaveformPlot({ scope, controller, actions }: WaveformPlotProps) 
         },
         ...MATH_CHANNELS.map((math) => ({
           label: `MATH${math}`,
+          show: isTraceVisible(waveformSourceForMath(math)),
           stroke: mathAccent(math),
           width: 1.4,
           points: { show: false },
-          facets: [{ scale: "x" }, { scale: mathScaleName(math) }],
+          facets: [
+            { scale: mathWaveformXScale(scope.math[math - 1]!) },
+            { scale: mathScaleName(math) },
+          ],
         })),
       ],
     } as unknown as uPlot.Options;

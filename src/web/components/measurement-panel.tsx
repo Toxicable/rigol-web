@@ -8,6 +8,7 @@ import { LocalMeasurementAccumulator } from "../local-measurements.js";
 import type { ScopeActions } from "../scope-actions.js";
 import { MeasurementSource, useScopeStore } from "../scope-store.js";
 import { waveformSourceLabel } from "../waveform-source-style.js";
+import { useWaveformFocusStore } from "../waveform-focus-store.js";
 import type { WaveformController } from "../waveform/waveform-controller.js";
 import { Flyout } from "./flyout.js";
 
@@ -61,10 +62,15 @@ interface MeasurementPanelProps {
 export function MeasurementPanel({ actions, controller }: MeasurementPanelProps) {
   const source = useScopeStore((state) => state.measurementSource);
   const specs = useScopeStore((state) => state.measurementSpecs);
-  const [waveformSource, setWaveformSource] = useState(WaveformSource.Ch1);
+  const focusedSource = useWaveformFocusStore((state) => state.focusedSource);
+  const [waveformSource, setWaveformSource] = useState(focusedSource ?? WaveformSource.Ch1);
   const [kind, setKind] = useState(MeasurementKind.Vpp);
   const [open, setOpen] = useState(false);
   const [localMeasurements] = useState(() => new LocalMeasurementAccumulator());
+
+  useEffect(() => {
+    if (focusedSource !== null) setWaveformSource(focusedSource);
+  }, [focusedSource]);
 
   useEffect(() => {
     if (source !== MeasurementSource.Scope) return;
