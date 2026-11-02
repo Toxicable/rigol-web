@@ -599,25 +599,36 @@ export class ScpiTransport {
       const payloadBytes = this.receiveBuffer.length - currentHeader.payloadStart;
       if (payloadBytes <= 0 || payloadBytes >= currentHeader.payloadLength) return;
 
-      const payload = Uint8Array.from(this.receiveBuffer.subarray(currentHeader.payloadStart));
+      const receivedPayload = this.receiveBuffer.subarray(currentHeader.payloadStart);
+      let terminatorBytes = 0;
+      if (receivedPayload.at(-1) === 0x0a) {
+        terminatorBytes = receivedPayload.at(-2) === 0x0d ? 2 : 1;
+      }
+      const payload = Uint8Array.from(
+        receivedPayload.subarray(0, receivedPayload.length - terminatorBytes),
+      );
       this.pending = null;
       clearTimeout(pending.timer);
       scpiError("query:partial-binary-recovered", {
         command: pending.command,
         expectedBytes: currentHeader.payloadLength,
-        receivedPayloadBytes: payload.byteLength,
+        receivedPayloadBytes: receivedPayload.byteLength,
+        receivedDataBytes: payload.byteLength,
+        terminatorBytes,
         bufferedBytes: this.receiveBuffer.length,
         idleMs: LIVE_WAVEFORM_IDLE_RECOVERY_MS,
       });
-      // A short live waveform is expected in ROLL mode. Callers explicitly
-      // opt into accepting it; Main-mode callers discard it and retry the
-      // next acquisition without plotting fabricated geometry.
+      // The TMC response has an end identifier even when this Roll response
+      // contains fewer data points than its declared block length. Exclude
+      // that identifier from the waveform samples.
       this.receiveBuffer = Buffer.alloc(0);
       const accepted = pending.acceptPartialBinary;
       scpiError(accepted ? "query:partial-binary-accepted" : "query:partial-binary-discarded", {
         command: pending.command,
         expectedBytes: currentHeader.payloadLength,
-        receivedPayloadBytes: payload.byteLength,
+        receivedPayloadBytes: receivedPayload.byteLength,
+        receivedDataBytes: payload.byteLength,
+        terminatorBytes,
         bufferedBytes: this.receiveBuffer.length,
         idleMs: LIVE_WAVEFORM_IDLE_RECOVERY_MS,
       });

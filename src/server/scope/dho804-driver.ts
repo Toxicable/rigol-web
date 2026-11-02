@@ -627,10 +627,10 @@ export class Dho804Driver {
         });
         this.waveformSetup.source = source;
         recorder.addBinaryBytes(payload.byteLength);
-        // The DHO804 can return fewer NORMAL/BYTE samples than requested
-        // immediately after a horizontal-scale change (for example 800 for a
-        // request of 999). Keep the frame so one transient short read does
-        // not stop the live acquisition loop.
+        // In Roll mode the transport can recover an IEEE block after its idle
+        // timeout with fewer payload bytes than the block header declared.
+        // Preserve the received samples here; the live service decides whether
+        // that frame is complete enough to publish.
         if (payload.byteLength < 1 || payload.byteLength > 1_000) {
           throw new Error(
             `Invalid live waveform sample count for ${sourceToken}: ${payload.byteLength}`,
@@ -642,7 +642,6 @@ export class Dho804Driver {
           payload,
           preamble,
           mode !== TimebaseMode.Roll,
-          mode === TimebaseMode.Roll,
         );
       },
     );
@@ -1133,25 +1132,13 @@ function createWaveform(
   native: Uint8Array | Uint16Array,
   preamble: WaveformPreamble,
   stretchShortWindow = true,
-  reverseSamples = false,
 ): Dho804Waveform {
-  // A truncated Roll transfer can end with a zero byte that is not a real
-  // sample. Decoding that byte produces a full-scale downward spike. Keep the
-  // rest of the partial frame, but omit that suspicious endpoint.
-  const shortRoll = !stretchShortWindow && native.length < preamble.points;
-  const hasSuspiciousRollTail = shortRoll && native[native.length - 1] === 0;
-  const sampleCount = hasSuspiciousRollTail
-    ? Math.max(1, native.length - 1)
-    : native.length;
-  const samples = new Float32Array(sampleCount);
-  for (let index = 0; index < sampleCount; index += 1) {
-    const nativeIndex = reverseSamples ? sampleCount - index - 1 : index;
-    const code = native[nativeIndex];
+  const samples = new Float32Array(native.length);
+  for (let index = 0; index < native.length; index += 1) {
+    const code = native[index];
     if (code === undefined) throw new Error("Missing native waveform sample");
     samples[index] = (code - preamble.yOrigin - preamble.yReference) * preamble.yIncrement;
   }
-  // Roll data is returned newest-first by the DHO804; reverse it so the
-  // newest samples enter from the right and move toward the left.
   // A short Main-mode response still represents the preamble's full display
   // window. Roll responses are a moving partial window, so preserve their
   // native spacing instead of inventing time between samples.

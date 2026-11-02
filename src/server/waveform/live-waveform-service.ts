@@ -22,9 +22,7 @@ export interface LiveWaveformServiceOptions {
   reportError?: (error: unknown) => void;
 }
 
-// 999 samples is the full-width display waveform. The scope can transiently
-// return fewer samples after a timebase change, so the driver preserves the
-// 999-point time geometry for those frames instead of reducing this request.
+// The DHO804 is configured for 999 BYTE samples per live waveform read.
 const LIVE_POINT_COUNT = 999;
 // Keep a small floor so a very short timebase does not turn into a busy loop.
 const LIVE_POLL_MIN_INTERVAL_MS = 100;
@@ -142,13 +140,17 @@ export class LiveWaveformService {
             LIVE_POLL_MIN_INTERVAL_MS,
             waveform.xIncrement * waveform.samples.length * 1_000 + LIVE_POLL_MARGIN_MS,
           );
-      this.publishWaveform(waveform, waveformSourceUnit(state, source));
+      this.publishWaveform(waveform, waveformSourceUnit(state, source), state.horizontal.mode);
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
     return true;
   }
 
-  private publishWaveform(waveform: Dho804Waveform, unit: Dho804Waveform["unit"]): void {
+  private publishWaveform(
+    waveform: Dho804Waveform,
+    unit: Dho804Waveform["unit"],
+    mode: TimebaseMode,
+  ): void {
     const sampleIndices = new Uint32Array(waveform.samples.length);
     for (let index = 0; index < sampleIndices.length; index += 1) sampleIndices[index] = index;
     const sequence = nextUint32(this.sequences[waveform.source]!);
@@ -161,7 +163,12 @@ export class LiveWaveformService {
       sourceStartSample: 0,
       sourceEndSample: waveform.samples.length,
       xIncrement: waveform.xIncrement,
-      xOrigin: waveform.xOrigin,
+      // In Roll, a short response is the newest section of the moving window.
+      // Keep its last sample at the right edge so the trace grows and moves
+      // left as later samples arrive.
+      xOrigin: mode === TimebaseMode.Roll && waveform.samples.length < LIVE_POINT_COUNT
+        ? waveform.xOrigin + (LIVE_POINT_COUNT - waveform.samples.length) * waveform.xIncrement
+        : waveform.xOrigin,
       xReference: waveform.xReference,
       sampleIndices,
       values: waveform.samples,

@@ -474,7 +474,7 @@ describe("Dho804Driver", () => {
     expect(waveform.xIncrement).toBe(2e-5);
   });
 
-  it("drops a zero endpoint from a short Roll waveform", async () => {
+  it("preserves a zero byte at the end of a short Roll waveform", async () => {
     const transport = new ScriptedTransport();
     const driver = scriptedDriver(transport);
     respond(transport, ":CHANnel1:UNITs?", "VOLT");
@@ -484,11 +484,11 @@ describe("Dho804Driver", () => {
 
     const waveform = await driver.readLiveWaveform(WaveformSource.Ch1, 999, TimebaseMode.Roll);
 
-    expect(waveform.samples).toHaveLength(2);
-    expect([...waveform.samples]).toEqual([1, 0]);
+    expect(waveform.samples).toHaveLength(3);
+    expect([...waveform.samples]).toEqual([0, 1, -128]);
   });
 
-  it("plots Roll samples newest-to-oldest from right to left", async () => {
+  it("preserves the DHO804 Roll sample order", async () => {
     const transport = new ScriptedTransport();
     const driver = scriptedDriver(transport);
     respond(transport, ":CHANnel1:UNITs?", "VOLT");
@@ -498,7 +498,7 @@ describe("Dho804Driver", () => {
 
     const waveform = await driver.readLiveWaveform(WaveformSource.Ch1, 999, TimebaseMode.Roll);
 
-    expect([...waveform.samples]).toEqual([2, 1, 0]);
+    expect([...waveform.samples]).toEqual([0, 1, 2]);
     expect(waveform.xIncrement).toBe(2e-5);
   });
 
